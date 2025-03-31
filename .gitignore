@@ -1,0 +1,8 @@
+# IDE settings
+.idea/
+.vscode/
+.vs/
+
+# Compiled files
+build/
+cmake-build-*/
