@@ -70,6 +70,10 @@ add_library(
         "${ProjectName}" STATIC
         src/information.cpp
         include/information.h
+        include/FluidProperties.hpp
+        include/LbmBase.hpp
+        include/LbmD3Q19.hpp
+        include/LbmTube.hpp
 )
 
 target_include_directories("${ProjectName}" PUBLIC "${CMAKE_SOURCE_DIR}/include")
