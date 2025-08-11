@@ -5,12 +5,11 @@
 
 namespace lbmini {
 
-using namespace Eigen;
-
 // Base LBM class: abstract interface for a DnQm lattice.
-template <typename Scalar_, Index Dim_, Index Speeds_>
+template<typename Scalar_, Eigen::Index Dim_, Eigen::Index Speeds_>
 class LbmClassBase {
 public:
+  using Index = Eigen::Index;
   virtual ~LbmClassBase() = default;
 
   static constexpr Index Dim() { return Dim_; }

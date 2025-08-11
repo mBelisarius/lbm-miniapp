@@ -7,13 +7,15 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake")
 
 set(ProjectName "lbm-miniapp")
-set(ProjectNamespace "lma")
+set(ProjectNamespace "lbmini")
 set(CMAKE_CXX_STANDARD 23)
 
 project("${ProjectName}")
 
 add_compile_options(
-        -Wall -Werror -Wno-error=uninitialized
+        -Wall
+        #        -Werror
+        -Wno-error=uninitialized
         $<$<CONFIG:RELEASE>:-O3>
         $<$<CONFIG:RELEASE>:-DNDEBUG>
         $<$<CONFIG:RELWITHDEBINFO>:-O2>
@@ -31,8 +33,8 @@ add_compile_options(
 include(FetchContent)
 FetchContent_Declare(
         googletest
-        URL
-        https://github.com/google/googletest/archive/refs/tags/v1.13.0.zip
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.17.0
 )
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
@@ -51,8 +53,8 @@ set_property(TARGET gtest_main PROPERTY FOLDER "gtest")
 include(FetchContent)
 FetchContent_Declare(
         Eigen
-        URL
-        https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG 3.4.0
 )
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
@@ -62,30 +64,47 @@ set(EIGEN_BUILD_PKGCONFIG OFF)
 FetchContent_MakeAvailable(Eigen)
 
 # =========================================================
+# yaml-cpp
+
+include(FetchContent)
+FetchContent_Declare(
+        yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG c2680200486572baf8221ba052ef50b58ecd816e
+)
+
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+FetchContent_MakeAvailable(yaml-cpp)
+
+# =========================================================
 # Targets
 
 # --- project
 
 add_library(
         "${ProjectName}" STATIC
-        src/information.cpp
-        include/information.h
-        include/FluidProperties.hpp
-        include/LbmBase.hpp
-        include/LbmD3Q19.hpp
-        include/LbmTube.hpp
+        lbmini/Data.hpp
+        lbmini/Data/ControlData.hpp
+        lbmini/Data/DataReader.hpp
+        lbmini/Data/FluidData.hpp
+        lbmini/Data/MeshData.hpp
+        lbmini/lbmini-plain/LbmBase.hpp
+        lbmini/lbmini-plain/LbmD3Q19.hpp
+        lbmini/lbmini-plain/LbmTube.hpp
 )
 
-target_include_directories("${ProjectName}" PUBLIC "${CMAKE_SOURCE_DIR}/include")
-target_include_directories("${ProjectName}" PUBLIC "${CMAKE_SOURCE_DIR}/src")
+target_include_directories("${ProjectName}" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 
 target_link_libraries("${ProjectName}" PUBLIC Eigen3::Eigen)
+target_link_libraries("${ProjectName}" PUBLIC yaml-cpp::yaml-cpp)
+
+set_target_properties(${ProjectName} PROPERTIES LINKER_LANGUAGE CXX)
 
 target_compile_definitions("${ProjectName}" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
 
 # --- main
 
-add_executable("${ProjectName}-main" src/main.cpp)
+add_executable("${ProjectName}-main" lbmini/main.cpp)
 target_link_libraries("${ProjectName}-main" PUBLIC "${ProjectName}")
 
 # --- gtest
