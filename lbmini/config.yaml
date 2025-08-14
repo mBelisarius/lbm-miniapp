@@ -1,0 +1,24 @@
+Fluid:
+    densityL:     1.0     # Left state density
+    pressureL:    1.0     # Left state pressure
+    densityR:     0.125   # Right state density
+    pressureR:    0.1     # Right state pressure
+    viscosity:    1.0e-2  # Dynamic viscosity (mu)
+    prandtl:      0.71    # Prandtl number
+    gamma:        1.4     # Adiabatic heat capacity ratio (γ)
+
+Mesh:
+    lx: 1.0
+    ly: 1.0e-1
+    lz: 1.0e-1
+    nx: 1000
+    ny: 10
+    nz: 10
+
+Control:
+    tmax: 0.2
+    Ux: 0.3  # The same value as the average velocity of the flow
+    Uy: 0.0
+    Uz: 0.0
+    idw: 1.14  # Higher IDW provides better shock capturing accuracy, but with higher latency (the shock is delayed in time)
+    printStep: 500

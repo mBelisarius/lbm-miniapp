@@ -3,6 +3,9 @@
 .vscode/
 .vs/
 
+# Simulations
+simulations/out*
+
 # Compiled files
 build/
 cmake-build-*/

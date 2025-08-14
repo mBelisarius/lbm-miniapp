@@ -16,7 +16,7 @@ public:
 
   static constexpr Index Speeds() { return Speeds_; }
 
-  virtual Scalar_ Velocities(Index index, Index dir) const = 0;
+  virtual Index Velocities(Index index, Index dir) const = 0;
 
   virtual Scalar_ Weights(Index index) const = 0;
 

@@ -14,7 +14,7 @@ project("${ProjectName}")
 
 add_compile_options(
         -Wall
-        #        -Werror
+        -Werror
         -Wno-error=uninitialized
         $<$<CONFIG:RELEASE>:-O3>
         $<$<CONFIG:RELEASE>:-DNDEBUG>
@@ -89,8 +89,11 @@ add_library(
         lbmini/Data/FluidData.hpp
         lbmini/Data/MeshData.hpp
         lbmini/lbmini-plain/LbmBase.hpp
+        lbmini/lbmini-plain/LbmD2Q9.hpp
         lbmini/lbmini-plain/LbmD3Q19.hpp
-        lbmini/lbmini-plain/LbmTube.hpp
+#        lbmini/lbmini-plain/LbmTubeGuo.hpp
+        lbmini/lbmini-plain/LbmTubeTran.hpp
+        lbmini/Utils.hpp
 )
 
 target_include_directories("${ProjectName}" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")

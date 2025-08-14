@@ -9,20 +9,40 @@ template <typename Scalar_, Eigen::Index dim_>
 struct MeshData {
   using Index = Eigen::Index;
 
-  Eigen::Vector<Scalar_, dim_> lenght;
-  Eigen::Vector<Index, dim_> size;
+  Eigen::Array<Scalar_, dim_, 1> lenght;
+  Eigen::Array<Index, dim_, 1> size;
 
-  Scalar_ lx() { return lenght[0]; }
+  Scalar_ lx() const { return lenght[0]; }
 
-  Scalar_ ly() { return lenght[1]; }
+  Scalar_ ly() const {
+    if constexpr (dim_ >= 2)
+      return lenght[1];
 
-  Scalar_ lz() { return lenght[2]; }
+    return 0;
+  }
 
-  Index nx() { return size[0]; }
+  Scalar_ lz() const {
+    if constexpr (dim_ >= 3)
+      return lenght[2];
 
-  Index ny() { return size[1]; }
+    return 0;
+  }
 
-  Index nz() { return size[2]; }
+  Index nx() const { return size[0]; }
+
+  Index ny() const {
+    if constexpr (dim_ >= 2)
+      return size[1];
+
+    return 0;
+  }
+
+  Index nz() const {
+    if constexpr (dim_ >= 3)
+      return size[2];
+
+    return 0;
+  }
 };
 
 }  // namespace lbmini
