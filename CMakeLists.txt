@@ -88,11 +88,9 @@ add_library(
         lbmini/Data/DataReader.hpp
         lbmini/Data/FluidData.hpp
         lbmini/Data/MeshData.hpp
-        lbmini/lbmini-plain/LbmBase.hpp
-        lbmini/lbmini-plain/LbmD2Q9.hpp
-        lbmini/lbmini-plain/LbmD3Q19.hpp
-#        lbmini/lbmini-plain/LbmTubeGuo.hpp
-        lbmini/lbmini-plain/LbmTubeTran.hpp
+        lbmini/Lbm/LbmBase.hpp
+        lbmini/Lbm/Plain/LbmD2Q9.hpp
+        lbmini/Lbm/Plain/LbmTube.hpp
         lbmini/Utils.hpp
 )
 
@@ -105,10 +103,10 @@ set_target_properties(${ProjectName} PROPERTIES LINKER_LANGUAGE CXX)
 
 target_compile_definitions("${ProjectName}" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
 
-# --- main
+# --- plain
 
-add_executable("${ProjectName}-main" lbmini/main.cpp)
-target_link_libraries("${ProjectName}-main" PUBLIC "${ProjectName}")
+add_executable("${ProjectName}-plain" lbmini/plain.cpp)
+target_link_libraries("${ProjectName}-plain" PUBLIC "${ProjectName}")
 
 # --- gtest
 

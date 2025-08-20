@@ -8,9 +8,8 @@
 #include <vector>
 
 #include "Data/DataReader.hpp"
-#include "lbmini-plain/LbmD2Q9.hpp"
-#include "lbmini-plain/LbmD3Q19.hpp"
-#include "lbmini-plain/LbmTubeTran.hpp"
+#include "Lbm/Plain/LbmD2Q9.hpp"
+#include "Lbm/Plain/LbmTube.hpp"
 
 using namespace Eigen;
 

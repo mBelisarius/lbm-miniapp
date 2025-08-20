@@ -8,7 +8,7 @@
 
 #include "Data/ControlData.hpp"
 #include "Data/FluidData.hpp"
-#include "LbmBase.hpp"
+#include "Lbm/LbmBase.hpp"
 
 namespace lbmini {
 template<typename Scalar_>
