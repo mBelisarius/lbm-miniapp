@@ -1,5 +1,5 @@
-#ifndef LBMINI_MESH_DATA_HPP_
-#define LBMINI_MESH_DATA_HPP_
+#ifndef LBMINI_DATA_MESH_DATA_HPP_
+#define LBMINI_DATA_MESH_DATA_HPP_
 
 #include <Eigen/Dense>
 
@@ -47,4 +47,4 @@ struct MeshData {
 
 }  // namespace lbmini
 
-#endif  // LBMINI_MESH_DATA_HPP_
+#endif  // LBMINI_DATA_MESH_DATA_HPP_

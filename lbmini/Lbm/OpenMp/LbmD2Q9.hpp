@@ -1,5 +1,5 @@
-#ifndef LBMINI_PLAIN_LBMD2Q9_HPP_
-#define LBMINI_PLAIN_LBMD2Q9_HPP_
+#ifndef LBMINI_OPENMP_LBMD2Q9_HPP_
+#define LBMINI_OPENMP_LBMD2Q9_HPP_
 
 #include <Eigen/Dense>
 #include <algorithm>
@@ -10,7 +10,7 @@
 #include "Data/FluidData.hpp"
 #include "Lbm/LbmBase.hpp"
 
-namespace lbmini::plain {
+namespace lbmini::openmp {
 template<typename Scalar_>
 class LbmD2Q9 : public LbmClassBase<Scalar_, 2, 9> {
 public:
@@ -654,6 +654,6 @@ auto LbmD2Q9<Scalar_>::Collision() -> void {
     g_(idc) += omegaLoc * (geq_(idc) - g_(idc)) + (omegaLoc - omegaThermalLoc) * gDiff;
   }
 }
-} // namespace lbmini::plain
+} // namespace lbmini::openmp
 
-#endif // LBMINI_PLAIN_LBMD2Q9_HPP_
+#endif // LBMINI_OPENMP_LBMD2Q9_HPP_

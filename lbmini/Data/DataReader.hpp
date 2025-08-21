@@ -1,5 +1,5 @@
-#ifndef LBMINI_DATA_READER_HPP_
-#define LBMINI_DATA_READER_HPP_
+#ifndef LBMINI_DATA_DATA_READER_HPP_
+#define LBMINI_DATA_DATA_READER_HPP_
 
 #include <yaml-cpp/yaml.h>
 
@@ -8,11 +8,11 @@
 #include "Data/ControlData.hpp"
 #include "Data/FluidData.hpp"
 #include "Data/MeshData.hpp"
+#include "Data/PerformanceData.hpp"
 
 namespace lbmini {
-
-template <typename Scalar_, Eigen::Index dim_>
-std::tuple<FluidData<Scalar_>, MeshData<Scalar_, dim_>, ControlData<Scalar_>>
+template<typename Scalar_, Eigen::Index dim_>
+std::tuple<FluidData<Scalar_>, MeshData<Scalar_, dim_>, ControlData<Scalar_>, PerformanceData>
 ReadYaml(const std::string& filename) {
   using Index = Eigen::Index;
 
@@ -41,6 +41,10 @@ ReadYaml(const std::string& filename) {
   control.idw = config["Control"]["idw"].as<Scalar_>();
   control.printStep = config["Control"]["printStep"].as<Index>();
 
+  PerformanceData performance;
+  performance.cores = config["Performance"]["cores"].as<Index>();
+  performance.tileSize = config["Performance"]["tileSize"].as<Index>();
+
   if (dim_ >= 2) {
     mesh.lenght[1] = config["Mesh"]["ly"].as<Scalar_>();
     mesh.size[1] = config["Mesh"]["ny"].as<Index>();
@@ -55,9 +59,8 @@ ReadYaml(const std::string& filename) {
     control.Uz = config["Control"]["Uz"].as<Scalar_>();
   }
 
-  return {fluid, mesh, control};
+  return { fluid, mesh, control, performance };
 }
+} // namespace lbmini
 
-}  // namespace lbmini
-
-#endif  // LBMINI_DATA_READER_HPP_
+#endif  // LBMINI_DATA_DATA_READER_HPP_

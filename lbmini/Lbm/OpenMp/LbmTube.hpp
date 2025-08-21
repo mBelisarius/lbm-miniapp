@@ -1,14 +1,15 @@
-#ifndef LBMINI_PLAIN_LBMTUBE_HPP_
-#define LBMINI_PLAIN_LBMTUBE_HPP_
+#ifndef LBMINI_OPENMP_LBMTUBE_HPP_
+#define LBMINI_OPENMP_LBMTUBE_HPP_
 
 #include <Eigen/Dense>
 #include <array>
 #include <functional>
+#include <omp.h>
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
 
-namespace lbmini::plain {
+namespace lbmini::openmp {
 template<typename Scalar_, typename LbmClassType_>
 class LbmTube {
 public:
@@ -24,7 +25,7 @@ public:
   using Matrix = Eigen::Matrix<Type, Rows, Cols>;
 
   template<typename Type, Index NumIndices>
-  using Tensor = Eigen::Tensor<Type, NumIndices>;
+  using Tensor = Eigen::Tensor<Type, NumIndices, Eigen::RowMajor>;
 
   LbmTube(
     const FluidData<Scalar_>& fluid,
@@ -35,6 +36,7 @@ public:
 
   Tensor<Scalar_, LbmClassType_::Dim()> P() const {
     Tensor<Scalar_, LbmClassType_::Dim()> p(kSizes_[0], kSizes_[1]);
+#pragma omp parallel for collapse(2)
     for (Index idx = 0; idx < kSizes_[0]; ++idx)
       for (Index idy = 0; idy < kSizes_[1]; ++idy)
         p(idx, idy) = lattices_(idx, idy).P();
@@ -44,6 +46,7 @@ public:
 
   Tensor<Scalar_, LbmClassType_::Dim()> Rho() const {
     Tensor<Scalar_, LbmClassType_::Dim()> rho(kSizes_[0], kSizes_[1]);
+#pragma omp parallel for collapse(2)
     for (Index idx = 0; idx < kSizes_[0]; ++idx)
       for (Index idy = 0; idy < kSizes_[1]; ++idy)
         rho(idx, idy) = lattices_(idx, idy).Rho();
@@ -53,6 +56,7 @@ public:
 
   Tensor<Scalar_, LbmClassType_::Dim()> T() const {
     Tensor<Scalar_, LbmClassType_::Dim()> tem(kSizes_[0], kSizes_[1]);
+#pragma omp parallel for collapse(2)
     for (Index idx = 0; idx < kSizes_[0]; ++idx)
       for (Index idy = 0; idy < kSizes_[1]; ++idy)
         tem(idx, idy) = lattices_(idx, idy).Tem();
@@ -62,6 +66,7 @@ public:
 
   Tensor<Scalar_, LbmClassType_::Dim() + 1> U() const {
     Tensor<Scalar_, LbmClassType_::Dim() + 1> u(kSizes_[0], kSizes_[1], LbmClassType_::Dim());
+#pragma omp parallel for collapse(2)
     for (Index idx = 0; idx < kSizes_[0]; ++idx)
       for (Index idy = 0; idy < kSizes_[1]; ++idy)
         for (Index idd = 0; idd < LbmClassType_::Dim(); ++idd)
@@ -89,6 +94,7 @@ private:
   // Members
   const FluidData<Scalar_> kFluid_;
   const ControlData<Scalar_> kControl_;
+  const PerformanceData kPerformance_;
   const Array<Index, LbmClassType_::Dim()> kSizes_;
   Tensor<LbmClassType_, LbmClassType_::Dim()> lattices_;
 
@@ -104,7 +110,10 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
   const ControlData<Scalar_>& control,
   const PerformanceData& performance
 )
-  : kFluid_(fluid), kControl_(control), kSizes_(mesh.size) {
+  : kFluid_(fluid), kControl_(control), kPerformance_(performance), kSizes_(mesh.size) {
+  if (kPerformance_.cores > 0)
+    omp_set_num_threads(kPerformance_.cores);
+
   std::array<Index, LbmClassType_::Dim()> dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     dims[i] = kSizes_[i];
@@ -178,22 +187,24 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
 
 template<typename Scalar_, typename LbmClassType_>
 void LbmTube<Scalar_, LbmClassType_>::iterateDim(const std::function<void(const Array<Index, LbmClassType_::Dim()>&)>& func) {
-  Array<Index, LbmClassType_::Dim()> indices = Array<Index, LbmClassType_::Dim()>::Zero();
+  const Index kTileSize = kPerformance_.tileSize;
+  const Index size0 = kSizes_[0];
+  const Index size1 = kSizes_[1];
 
-  while (true) {
-    func(indices);
-
-    Index dim = LbmClassType_::Dim() - 1;
-    ++indices[dim];
-
-    while (dim >= 0 && indices[dim] >= kSizes_[dim]) {
-      indices[dim] = 0;
-      --dim;
-      if (dim >= 0)
-        ++indices[dim];
+#pragma omp parallel for collapse(2) schedule(dynamic)
+  for (Index iBlock = 0; iBlock < size0; iBlock += kTileSize) {
+    for (Index jBlock = 0; jBlock < size1; jBlock += kTileSize) {
+      Array<Index, LbmClassType_::Dim()> indices;
+      const Index iBlockEnd = std::min(iBlock + kTileSize, size0);
+      for (Index i = iBlock; i < iBlockEnd; ++i) {
+        const Index jBlockEnd = std::min(jBlock + kTileSize, size1);
+        for (Index j = jBlock; j < jBlockEnd; ++j) {
+          indices[0] = i;
+          indices[1] = j;
+          func(indices);
+        }
+      }
     }
-    if (dim < 0)
-      break;
   }
 }
 
@@ -292,8 +303,9 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
       Index sxClamped = sx;
       if (sxClamped < 0)
         sxClamped = 0;
-      else if (sxClamped >= kSizes_[0])
-        sxClamped = kSizes_[0] - 1;
+      else
+        if (sxClamped >= kSizes_[0])
+          sxClamped = kSizes_[0] - 1;
 
       // y boundary: periodic wrap
       Index syWrapped = sy;
@@ -395,6 +407,6 @@ void LbmTube<Scalar_, LbmClassType_>::swapDistributionsOp(const Array<Index, Lbm
     lattice.G(idc) = gAux_(idx[0], idx[1], idc);
   }
 }
-} // namespace lbmini::plain
+} // namespace lbmini::openmp
 
-#endif  // LBMINI_PLAIN_LBMTUBE_HPP_
+#endif  // LBMINI_OPENMP_LBMTUBE_HPP_

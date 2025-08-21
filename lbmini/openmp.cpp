@@ -8,14 +8,14 @@
 #include <vector>
 
 #include "Data.hpp"
-#include "Lbm/Plain/LbmD2Q9.hpp"
-#include "Lbm/Plain/LbmTube.hpp"
+#include "Lbm/OpenMp/LbmD2Q9.hpp"
+#include "Lbm/OpenMp/LbmTube.hpp"
 
 using namespace Eigen;
 
 // output data along x slice (y=z=middle)
 template <typename Scalar_, typename LbmClassType>
-void output_data(const lbmini::plain::LbmTube<Scalar_, LbmClassType>& lbmTube,
+void output_data(const lbmini::openmp::LbmTube<Scalar_, LbmClassType>& lbmTube,
                  const lbmini::MeshData<Scalar_, 2>& mesh,
                  Index step,
                  const std::string& outDir) {
@@ -78,7 +78,7 @@ int main(int argc, char* argv[]) {
   const Index kSteps = static_cast<Index>(control.tmax / dt);
 
   // LBM simulation
-  lbmini::plain::LbmTube<Scalar, lbmini::plain::LbmD2Q9<Scalar>> lbmTube(fluid, mesh, control, performance);
+  lbmini::openmp::LbmTube<Scalar, lbmini::openmp::LbmD2Q9<Scalar>> lbmTube(fluid, mesh, control, performance);
   lbmTube.Init();
   output_data(lbmTube, mesh, 0, output_path);
 

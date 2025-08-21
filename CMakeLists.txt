@@ -64,6 +64,11 @@ set(EIGEN_BUILD_PKGCONFIG OFF)
 FetchContent_MakeAvailable(Eigen)
 
 # =========================================================
+# OpenMP
+
+find_package(OpenMP REQUIRED)
+
+# =========================================================
 # yaml-cpp
 
 include(FetchContent)
@@ -103,12 +108,20 @@ set_target_properties(${ProjectName} PROPERTIES LINKER_LANGUAGE CXX)
 
 target_compile_definitions("${ProjectName}" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
 
-# --- plain
+# --- Plain
 
 add_executable("${ProjectName}-plain" lbmini/plain.cpp)
 target_link_libraries("${ProjectName}-plain" PUBLIC "${ProjectName}")
 
-# --- gtest
+# --- OpenMP
+
+add_executable("${ProjectName}-openmp" lbmini/openmp.cpp)
+target_link_libraries("${ProjectName}-openmp" PUBLIC
+        "${ProjectName}"
+        OpenMP::OpenMP_CXX
+)
+
+# --- GTest
 
 enable_testing()
 

@@ -1,5 +1,5 @@
-#ifndef LBMINI_FLUID_DATA_HPP_
-#define LBMINI_FLUID_DATA_HPP_
+#ifndef LBMINI_DATA_FLUID_DATA_HPP_
+#define LBMINI_DATA_FLUID_DATA_HPP_
 
 namespace lbmini {
 
@@ -20,4 +20,4 @@ struct FluidData {
 
 }  // namespace lbmini
 
-#endif  // LBMINI_FLUID_DATA_HPP_
+#endif  // LBMINI_DATA_FLUID_DATA_HPP_
