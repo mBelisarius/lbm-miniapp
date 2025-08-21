@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
+import matplotlib
+matplotlib.use('Agg')
+
 import argparse
+import multiprocessing
 import matplotlib.pyplot as plt
 import numpy as np
 import re
@@ -75,73 +79,82 @@ def calculate_errors(sim, anl):
     return rmse, max_err
 
 
+def process_out_dir(out_dir):
+    """Processes a single simulation output directory."""
+    try:
+        config_path = out_dir / 'config.yaml'
+        if not config_path.exists():
+            print(f"Skipping {out_dir}: config.yaml not found")
+            return None
+
+        params = load_config(config_path)
+        sim_data_all_steps = load_simulation_data(out_dir)
+
+        sim_rho_all, anl_rho_all = [], []
+        sim_p_all, anl_p_all = [], []
+        sim_u_all, anl_u_all = [], []
+
+        for sim_data in sim_data_all_steps:
+            sim_time = sim_data['step'] * params['sim_dt']
+
+            # Get analytical solution on a fine grid
+            left_state = (params['P_L'], params['rho_L'], params['u_L'])
+            right_state = (params['P_R'], params['rho_R'], params['u_R'])
+            geo = (params['xl'], params['xr'], params['x0'])
+            _, _, an_vals = solve(left_state, right_state, geo, sim_time, gamma=params['gamma'], npts=100000)
+
+            # Interpolate analytical solution to simulation grid points
+            x_sim = sim_data['x']
+            rho_an_interp = np.interp(x_sim, an_vals['x'], an_vals['rho'])
+            p_an_interp = np.interp(x_sim, an_vals['x'], an_vals['p'])
+            u_an_interp = np.interp(x_sim, an_vals['x'], an_vals['u'])
+
+            # Append data for error calculation
+            sim_rho_all.append(sim_data['rho'])
+            anl_rho_all.append(rho_an_interp)
+            sim_p_all.append(sim_data['p'])
+            anl_p_all.append(p_an_interp)
+            sim_u_all.append(sim_data['ux'])
+            anl_u_all.append(u_an_interp)
+
+        # Concatenate all data
+        sim_rho_all = np.concatenate(sim_rho_all)
+        anl_rho_all = np.concatenate(anl_rho_all)
+        sim_p_all = np.concatenate(sim_p_all)
+        anl_p_all = np.concatenate(anl_p_all)
+        sim_u_all = np.concatenate(sim_u_all)
+        anl_u_all = np.concatenate(anl_u_all)
+
+        # Calculate errors
+        rmse_rho, max_err_rho = calculate_errors(sim_rho_all, anl_rho_all)
+        rmse_p, max_err_p = calculate_errors(sim_p_all, anl_p_all)
+        rmse_u, max_err_u = calculate_errors(sim_u_all, anl_u_all)
+
+        pressure_ratio = params['P_L'] / params['P_R']
+
+        result = {
+            'nx': params['nx'],
+            'pressure_ratio': pressure_ratio,
+            'rmse_rho': rmse_rho, 'max_err_rho': max_err_rho,
+            'rmse_p': rmse_p, 'max_err_p': max_err_p,
+            'rmse_u': rmse_u, 'max_err_u': max_err_u
+        }
+        print(f"Processed {out_dir}: nx={params['nx']}, p_ratio={pressure_ratio:.1f}, RMSE_rho={rmse_rho:.2e}")
+        return result
+
+    except Exception as e:
+        print(f"Error processing {out_dir}: {e}")
+        return None
+
+
 def main(base_dir):
-    results = []
     out_dirs = sorted([p for p in Path(base_dir).glob("out*") if p.is_dir()])
 
-    for out_dir in out_dirs:
-        try:
-            config_path = out_dir / 'config.yaml'
-            if not config_path.exists():
-                print(f"Skipping {out_dir}: config.yaml not found")
-                continue
+    with multiprocessing.Pool() as pool:
+        results = pool.map(process_out_dir, out_dirs)
 
-            params = load_config(config_path)
-            sim_data_all_steps = load_simulation_data(out_dir)
-
-            sim_rho_all, anl_rho_all = [], []
-            sim_p_all, anl_p_all = [], []
-            sim_u_all, anl_u_all = [], []
-
-            for sim_data in sim_data_all_steps:
-                sim_time = sim_data['step'] * params['sim_dt']
-
-                # Get analytical solution on a fine grid
-                left_state = (params['P_L'], params['rho_L'], params['u_L'])
-                right_state = (params['P_R'], params['rho_R'], params['u_R'])
-                geo = (params['xl'], params['xr'], params['x0'])
-                _, _, an_vals = solve(left_state, right_state, geo, sim_time, gamma=params['gamma'], npts=10000)
-
-                # Interpolate analytical solution to simulation grid points
-                x_sim = sim_data['x']
-                rho_an_interp = np.interp(x_sim, an_vals['x'], an_vals['rho'])
-                p_an_interp = np.interp(x_sim, an_vals['x'], an_vals['p'])
-                u_an_interp = np.interp(x_sim, an_vals['x'], an_vals['u'])
-
-                # Append data for error calculation
-                sim_rho_all.append(sim_data['rho'])
-                anl_rho_all.append(rho_an_interp)
-                sim_p_all.append(sim_data['p'])
-                anl_p_all.append(p_an_interp)
-                sim_u_all.append(sim_data['ux'])
-                anl_u_all.append(u_an_interp)
-
-            # Concatenate all data
-            sim_rho_all = np.concatenate(sim_rho_all)
-            anl_rho_all = np.concatenate(anl_rho_all)
-            sim_p_all = np.concatenate(sim_p_all)
-            anl_p_all = np.concatenate(anl_p_all)
-            sim_u_all = np.concatenate(sim_u_all)
-            anl_u_all = np.concatenate(anl_u_all)
-
-            # Calculate errors
-            rmse_rho, max_err_rho = calculate_errors(sim_rho_all, anl_rho_all)
-            rmse_p, max_err_p = calculate_errors(sim_p_all, anl_p_all)
-            rmse_u, max_err_u = calculate_errors(sim_u_all, anl_u_all)
-
-            pressure_ratio = params['P_L'] / params['P_R']
-
-            results.append({
-                'nx': params['nx'],
-                'pressure_ratio': pressure_ratio,
-                'rmse_rho': rmse_rho, 'max_err_rho': max_err_rho,
-                'rmse_p': rmse_p, 'max_err_p': max_err_p,
-                'rmse_u': rmse_u, 'max_err_u': max_err_u
-            })
-            print(f"Processed {out_dir}: nx={params['nx']}, p_ratio={pressure_ratio:.1f}, RMSE_rho={rmse_rho:.2e}")
-
-        except Exception as e:
-            print(f"Error processing {out_dir}: {e}")
+    # Filter out None results from failed directories
+    results = [r for r in results if r]
 
     # Plotting
     plot_data = {}
