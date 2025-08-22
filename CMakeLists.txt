@@ -117,13 +117,8 @@ target_compile_definitions("${ProjectName}"
 
 # --- Plain
 
-add_executable("${ProjectName}-plain" lbmini/plain.cpp)
-target_link_libraries("${ProjectName}-plain" PUBLIC "${ProjectName}")
-
-# --- OpenMP
-
-add_executable("${ProjectName}-openmp" lbmini/openmp.cpp)
-target_link_libraries("${ProjectName}-openmp"
+add_executable("${ProjectName}-main" lbmini/main.cpp)
+target_link_libraries("${ProjectName}-main"
         PUBLIC "${ProjectName}"
         PUBLIC OpenMP::OpenMP_CXX
 )

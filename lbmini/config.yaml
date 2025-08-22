@@ -24,5 +24,6 @@ Control:
     printStep: 100
 
 Performance:
+    backend: 0     # Backend to use (0: plain; 1: OpenMP)
     cores: 0       # Number of cores (0 for auto)
     tileSize: 128  # Tile size for cache blocking

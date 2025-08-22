@@ -42,6 +42,7 @@ ReadYaml(const std::string& filename) {
   control.printStep = config["Control"]["printStep"].as<Index>();
 
   PerformanceData performance;
+  performance.backend = config["Performance"]["backend"].as<Index>();
   performance.cores = config["Performance"]["cores"].as<Index>();
   performance.tileSize = config["Performance"]["tileSize"].as<Index>();
 

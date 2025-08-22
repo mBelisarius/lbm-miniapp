@@ -58,11 +58,16 @@ def load_simulation_data(out_dir_path):
         step = int(match.group(1))
 
         data = np.genfromtxt(f, delimiter=',', skip_header=1)
-        num_cols = data.shape[1]
-        all_index = {'x': 0, 'ux': 1, 'rho': num_cols - 2, 'p': num_cols - 1}
+
+        first_data = np.genfromtxt(files[0], delimiter=',', skip_header=1)
+        num_cols = first_data.shape[1]
+        all_index = {'runtime': 0, 'x': 1, 'ux': 2, 'rho': num_cols - 2, 'p': num_cols - 1}
+        if num_cols >= 6: all_index['uy'] = 3
+        if num_cols >= 7: all_index['uz'] = 4
 
         sim_data_all_steps.append({
             'step': step,
+            'runtime': data[:, all_index['runtime']],
             'x': data[:, all_index['x']],
             'ux': data[:, all_index['ux']],
             'rho': data[:, all_index['rho']],
