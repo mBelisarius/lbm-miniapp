@@ -3,7 +3,6 @@
 
 #include <Eigen/Dense>
 #include <array>
-#include <functional>
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
@@ -20,11 +19,14 @@ public:
   template<typename Type, Index Size>
   using Vector = Eigen::Vector<Type, Size>;
 
-  template<typename Type, Index Rows, Index Cols>
-  using Matrix = Eigen::Matrix<Type, Rows, Cols>;
+  template<typename Type, Index Size>
+  using VectorMap = Eigen::Map<Vector<Type, Size>>;
 
   template<typename Type, Index NumIndices>
-  using Tensor = Eigen::Tensor<Type, NumIndices>;
+  using Tensor = Eigen::Tensor<Type, NumIndices, Eigen::RowMajor>;
+
+  template<typename Type, Index NumIndices>
+  using TensorMap = Eigen::Map<Tensor<Type, NumIndices>>;
 
   LbmTube(
     const FluidData<Scalar_>& fluid,
@@ -33,49 +35,21 @@ public:
     const PerformanceData& performance
   );
 
-  Tensor<Scalar_, LbmClassType_::Dim()> P() const {
-    Tensor<Scalar_, LbmClassType_::Dim()> p(kSizes_[0], kSizes_[1]);
-    for (Index idx = 0; idx < kSizes_[0]; ++idx)
-      for (Index idy = 0; idy < kSizes_[1]; ++idy)
-        p(idx, idy) = lattices_(idx, idy).P();
+  Tensor<Scalar_, LbmClassType_::Dim()> P() const { return p_; }
 
-    return p;
-  }
+  Tensor<Scalar_, LbmClassType_::Dim()> Rho() const { return rho_; }
 
-  Tensor<Scalar_, LbmClassType_::Dim()> Rho() const {
-    Tensor<Scalar_, LbmClassType_::Dim()> rho(kSizes_[0], kSizes_[1]);
-    for (Index idx = 0; idx < kSizes_[0]; ++idx)
-      for (Index idy = 0; idy < kSizes_[1]; ++idy)
-        rho(idx, idy) = lattices_(idx, idy).Rho();
+  Tensor<Scalar_, LbmClassType_::Dim()> T() const { return tem_; }
 
-    return rho;
-  }
-
-  Tensor<Scalar_, LbmClassType_::Dim()> T() const {
-    Tensor<Scalar_, LbmClassType_::Dim()> tem(kSizes_[0], kSizes_[1]);
-    for (Index idx = 0; idx < kSizes_[0]; ++idx)
-      for (Index idy = 0; idy < kSizes_[1]; ++idy)
-        tem(idx, idy) = lattices_(idx, idy).Tem();
-
-    return tem;
-  }
-
-  Tensor<Scalar_, LbmClassType_::Dim() + 1> U() const {
-    Tensor<Scalar_, LbmClassType_::Dim() + 1> u(kSizes_[0], kSizes_[1], LbmClassType_::Dim());
-    for (Index idx = 0; idx < kSizes_[0]; ++idx)
-      for (Index idy = 0; idy < kSizes_[1]; ++idy)
-        for (Index idd = 0; idd < LbmClassType_::Dim(); ++idd)
-          u(idx, idy, idd) = lattices_(idx, idy).U(idd);
-
-    return u;
-  }
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> U() const { return u_; }
 
   void Init();
 
   void Step();
 
 protected:
-  void iterateDim(const std::function<void(const Array<Index, LbmClassType_::Dim()>&)>& func);
+  template<typename Func>
+  void iterateDim(Func func);
 
   void streamingOp(const Array<Index, LbmClassType_::Dim()>& idx);
 
@@ -92,9 +66,18 @@ private:
   const Array<Index, LbmClassType_::Dim()> kSizes_;
   Tensor<LbmClassType_, LbmClassType_::Dim()> lattices_;
 
-  // Distributions
-  Tensor<Scalar_, LbmClassType_::Dim() + 1> fAux_;
-  Tensor<Scalar_, LbmClassType_::Dim() + 1> gAux_;
+  // SoA data storage
+  Tensor<Scalar_, LbmClassType_::Dim()> rho_;
+  Tensor<Scalar_, LbmClassType_::Dim()> p_;
+  Tensor<Scalar_, LbmClassType_::Dim()> tem_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> u_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> f_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> feq_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> faux_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> g_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> geq_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> gaux_;
+  Tensor<Scalar_, LbmClassType_::Dim() + 1> lastGx_;
 };
 
 template<typename Scalar_, typename LbmClassType_>
@@ -109,17 +92,50 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     dims[i] = kSizes_[i];
   lattices_.resize(dims);
+  rho_.resize(dims);
+  p_.resize(dims);
+  tem_.resize(dims);
 
-  std::array<Index, LbmClassType_::Dim() + 1> dimsP1;
+  std::array<Index, LbmClassType_::Dim() + 1> u_dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
-    dimsP1[i] = kSizes_[i];
-  dimsP1[LbmClassType_::Dim()] = LbmClassType_::Speeds();
-  fAux_.resize(dimsP1);
-  gAux_.resize(dimsP1);
+    u_dims[i] = kSizes_[i];
+  u_dims[LbmClassType_::Dim()] = LbmClassType_::Dim();
+  u_.resize(u_dims);
+
+  std::array<Index, LbmClassType_::Dim() + 1> dist_dims;
+  for (Index i = 0; i < LbmClassType_::Dim(); ++i)
+    dist_dims[i] = kSizes_[i];
+  dist_dims[LbmClassType_::Dim()] = LbmClassType_::Speeds();
+  f_.resize(dist_dims);
+  feq_.resize(dist_dims);
+  faux_.resize(dist_dims);
+  g_.resize(dist_dims);
+  geq_.resize(dist_dims);
+  gaux_.resize(dist_dims);
+
+  std::array<Index, LbmClassType_::Dim() + 1> lastGx_dims;
+  for (Index i = 0; i < LbmClassType_::Dim(); ++i)
+    lastGx_dims[i] = kSizes_[i];
+  lastGx_dims[LbmClassType_::Dim()] = 3;
+  lastGx_.resize(lastGx_dims);
 
   iterateDim(
     [&](const Array<Index, LbmClassType_::Dim()>& idx) {
-      lattices_(idx) = LbmClassType_(&kFluid_, &kControl_);
+      auto i = idx[0];
+      auto j = idx[1];
+      lattices_(idx) = LbmClassType_(
+        &kFluid_,
+        &kControl_,
+        &rho_(i, j),
+        &p_(i, j),
+        &tem_(i, j),
+        &u_(i, j, 0),
+        &f_(i, j, 0),
+        &feq_(i, j, 0),
+        &g_(i, j, 0),
+        &geq_(i, j, 0),
+        &lastGx_(i, j, 0)
+      );
     }
   );
 }
@@ -127,25 +143,21 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
 template<typename Scalar_, typename LbmClassType_>
 void LbmTube<Scalar_, LbmClassType_>::Init() {
   auto initOp = [&](const Array<Index, LbmClassType_::Dim()>& idx) {
-    Vector<Scalar_, LbmClassType_::Dim()> u0;
-    Scalar_ rho0;
-    Scalar_ p0;
-
     // Apply shock tube condition along x-axis
     if (idx[0] < kSizes_[0] / 2) {
-      rho0 = kFluid_.densityL;
-      p0 = kFluid_.pressureL;
+      rho_(idx) = kFluid_.densityL;
+      p_(idx) = kFluid_.pressureL;
     } else {
-      rho0 = kFluid_.densityR;
-      p0 = kFluid_.pressureR;
+      rho_(idx) = kFluid_.densityR;
+      p_(idx) = kFluid_.pressureR;
     }
 
     // Zero initial velocity
-    for (Index idd = 0; idd < LbmClassType_::Dim(); ++idd)
-      u0(idd) = Scalar_(0.0);
+    Vector<Scalar_, LbmClassType_::Dim()> u0;
+    u0.setZero();
 
     // Initialize lattice
-    lattices_(idx[0], idx[1]).Init(u0, rho0, p0);
+    lattices_(idx[0], idx[1]).Init(u0, &rho_(idx), &p_(idx));
   };
 
   iterateDim(initOp);
@@ -177,7 +189,8 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
 }
 
 template<typename Scalar_, typename LbmClassType_>
-void LbmTube<Scalar_, LbmClassType_>::iterateDim(const std::function<void(const Array<Index, LbmClassType_::Dim()>&)>& func) {
+template<typename Func>
+void LbmTube<Scalar_, LbmClassType_>::iterateDim(Func func) {
   Array<Index, LbmClassType_::Dim()> indices = Array<Index, LbmClassType_::Dim()>::Zero();
 
   while (true) {
@@ -224,14 +237,15 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
           xClamp = 0;
         if (xClamp >= kSizes_[0])
           xClamp = kSizes_[0] - 1;
+
         Index yWrap = static_cast<Index>(std::floor(ySrcF));
         if (yWrap < 0)
           yWrap += kSizes_[1];
         if (yWrap >= kSizes_[1])
           yWrap -= kSizes_[1];
-        auto& srcLat = lattices_(xClamp, yWrap);
-        fAux_(idx[0], idx[1], idc) = srcLat.F(idc);
-        gAux_(idx[0], idx[1], idc) = srcLat.G(idc);
+
+        faux_(idx[0], idx[1], idc) = f_(xClamp, yWrap, idc);
+        gaux_(idx[0], idx[1], idc) = g_(xClamp, yWrap, idc);
         continue;
       }
 
@@ -250,8 +264,8 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
           yWrap += kSizes_[1];
         if (yWrap >= kSizes_[1])
           yWrap -= kSizes_[1];
-        auto& src0 = lattices_(xClamp, yWrap);
-        s0 = { src0.F(idc), src0.G(idc) };
+
+        s0 = { f_(xClamp, yWrap, idc), g_(xClamp, yWrap, idc) };
       }
 
       // Sample at x1 (clamp to [0, nx-1] if out-of-bounds)
@@ -266,16 +280,16 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
           yWrap += kSizes_[1];
         if (yWrap >= kSizes_[1])
           yWrap -= kSizes_[1];
-        auto& src1 = lattices_(xClamp, yWrap);
-        s1 = { src1.F(idc), src1.G(idc) };
+
+        s1 = { f_(xClamp, yWrap, idc), g_(xClamp, yWrap, idc) };
       }
 
       // Linear interpolation (Rathnayake Eq. 4.13)
       const Scalar_ fval = (Scalar_(1.0) - xFrac) * s0.first + xFrac * s1.first;
       const Scalar_ gval = (Scalar_(1.0) - xFrac) * s0.second + xFrac * s1.second;
 
-      fAux_(idx[0], idx[1], idc) = fval;
-      gAux_(idx[0], idx[1], idc) = gval;
+      faux_(idx[0], idx[1], idc) = fval;
+      gaux_(idx[0], idx[1], idc) = gval;
       continue;
     }
 
@@ -302,8 +316,7 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
       else if (syWrapped >= kSizes_[1])
         syWrapped -= kSizes_[1];
 
-      auto& srcLat = lattices_(sxClamped, syWrapped);
-      return { srcLat.F(idc), srcLat.G(idc) };
+      return { f_(sxClamped, syWrapped, idc), g_(sxClamped, syWrapped, idc) };
     };
 
     // gather the four neighbor samples (may include bounce-back samples)
@@ -331,23 +344,23 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
 
     // Direct hit checks (distance ~0) -> return that node's value to avoid div-by-zero
     if (d00 < kTiny_) {
-      fAux_(idx[0], idx[1], idc) = s00.first;
-      gAux_(idx[0], idx[1], idc) = s00.second;
+      faux_(idx[0], idx[1], idc) = s00.first;
+      gaux_(idx[0], idx[1], idc) = s00.second;
       continue;
     }
     if (d10 < kTiny_) {
-      fAux_(idx[0], idx[1], idc) = s10.first;
-      gAux_(idx[0], idx[1], idc) = s10.second;
+      faux_(idx[0], idx[1], idc) = s10.first;
+      gaux_(idx[0], idx[1], idc) = s10.second;
       continue;
     }
     if (d01 < kTiny_) {
-      fAux_(idx[0], idx[1], idc) = s01.first;
-      gAux_(idx[0], idx[1], idc) = s01.second;
+      faux_(idx[0], idx[1], idc) = s01.first;
+      gaux_(idx[0], idx[1], idc) = s01.second;
       continue;
     }
     if (d11 < kTiny_) {
-      fAux_(idx[0], idx[1], idc) = s11.first;
-      gAux_(idx[0], idx[1], idc) = s11.second;
+      faux_(idx[0], idx[1], idc) = s11.first;
+      gaux_(idx[0], idx[1], idc) = s11.second;
       continue;
     }
 
@@ -364,16 +377,16 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
       Index xNearest = static_cast<Index>(std::round(xSrcF));
       Index yNearest = static_cast<Index>(std::round(ySrcF));
       if (xNearest < 0 || xNearest >= kSizes_[0]) {
-        fAux_(idx[0], idx[1], idc) = latticeIdx.F(latticeIdx.Opposite(idc));
-        gAux_(idx[0], idx[1], idc) = latticeIdx.G(latticeIdx.Opposite(idc));
+        faux_(idx[0], idx[1], idc) = f_(idx[0], idx[1], latticeIdx.Opposite(idc));
+        gaux_(idx[0], idx[1], idc) = g_(idx[0], idx[1], latticeIdx.Opposite(idc));
       } else {
         if (yNearest < 0)
           yNearest += kSizes_[1];
         if (yNearest >= kSizes_[1])
           yNearest -= kSizes_[1];
-        auto& srcLat = lattices_(xNearest, yNearest);
-        fAux_(idx[0], idx[1], idc) = srcLat.F(idc);
-        gAux_(idx[0], idx[1], idc) = srcLat.G(idc);
+
+        faux_(idx[0], idx[1], idc) = f_(xNearest, yNearest, idc);
+        gaux_(idx[0], idx[1], idc) = g_(xNearest, yNearest, idc);
       }
       continue;
     }
@@ -382,17 +395,16 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
     const Scalar_ fval = (w00 * s00.first + w10 * s10.first + w01 * s01.first + w11 * s11.first) / wsum;
     const Scalar_ gval = (w00 * s00.second + w10 * s10.second + w01 * s01.second + w11 * s11.second) / wsum;
 
-    fAux_(idx[0], idx[1], idc) = fval;
-    gAux_(idx[0], idx[1], idc) = gval;
+    faux_(idx[0], idx[1], idc) = fval;
+    gaux_(idx[0], idx[1], idc) = gval;
   }
 }
 
 template<typename Scalar_, typename LbmClassType_>
 void LbmTube<Scalar_, LbmClassType_>::swapDistributionsOp(const Array<Index, LbmClassType_::Dim()>& idx) {
-  auto& lattice = lattices_(idx);
   for (Index idc = 0; idc < LbmClassType_::Speeds(); ++idc) {
-    lattice.F(idc) = fAux_(idx[0], idx[1], idc);
-    lattice.G(idc) = gAux_(idx[0], idx[1], idc);
+    f_(idx[0], idx[1], idc) = faux_(idx[0], idx[1], idc);
+    g_(idx[0], idx[1], idc) = gaux_(idx[0], idx[1], idc);
   }
 }
 } // namespace lbmini::plain

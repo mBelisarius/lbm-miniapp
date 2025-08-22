@@ -18,11 +18,14 @@ add_compile_options(
         -Wno-error=uninitialized
         $<$<CONFIG:RELEASE>:-O3>
         $<$<CONFIG:RELEASE>:-DNDEBUG>
+        $<$<CONFIG:RELEASE>:-march=native>
         $<$<CONFIG:RELWITHDEBINFO>:-O2>
         $<$<CONFIG:RELWITHDEBINFO>:-DNDEBUG>
         $<$<CONFIG:RELWITHDEBINFO>:-g>
+        $<$<CONFIG:RELWITHDEBINFO>:-march=native>
         $<$<CONFIG:MINSIZEREL>:-Oz>
         $<$<CONFIG:MINSIZEREL>:-DNDEBUG>
+        $<$<CONFIG:MINSIZEREL>:-march=native>
         $<$<CONFIG:DEBUG>:-Og>
         $<$<CONFIG:DEBUG>:-g>
 )
@@ -101,12 +104,16 @@ add_library(
 
 target_include_directories("${ProjectName}" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 
-target_link_libraries("${ProjectName}" PUBLIC Eigen3::Eigen)
-target_link_libraries("${ProjectName}" PUBLIC yaml-cpp::yaml-cpp)
-
 set_target_properties(${ProjectName} PROPERTIES LINKER_LANGUAGE CXX)
 
-target_compile_definitions("${ProjectName}" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+target_link_libraries("${ProjectName}"
+        PUBLIC Eigen3::Eigen
+        PUBLIC yaml-cpp::yaml-cpp
+)
+
+target_compile_definitions("${ProjectName}"
+        PRIVATE PROJECT_NAMESPACE=${ProjectNamespace}
+)
 
 # --- Plain
 
@@ -116,9 +123,9 @@ target_link_libraries("${ProjectName}-plain" PUBLIC "${ProjectName}")
 # --- OpenMP
 
 add_executable("${ProjectName}-openmp" lbmini/openmp.cpp)
-target_link_libraries("${ProjectName}-openmp" PUBLIC
-        "${ProjectName}"
-        OpenMP::OpenMP_CXX
+target_link_libraries("${ProjectName}-openmp"
+        PUBLIC "${ProjectName}"
+        PUBLIC OpenMP::OpenMP_CXX
 )
 
 # --- GTest
