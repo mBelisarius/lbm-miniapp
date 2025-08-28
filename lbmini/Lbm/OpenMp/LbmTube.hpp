@@ -2,7 +2,6 @@
 #define LBMINI_OPENMP_LBMTUBE_HPP_
 
 #include <Eigen/Dense>
-#include <array>
 #include <omp.h>
 #include <unsupported/Eigen/CXX11/Tensor>
 
@@ -52,9 +51,9 @@ protected:
   template<typename Func>
   void iterateDim(Func func);
 
-  void streamingOp(const Array<Index, LbmClassType_::Dim()>& idx);
+  void streamingOp(const Vector<Index, LbmClassType_::Dim()>& idx);
 
-  void swapDistributionsOp(const Array<Index, LbmClassType_::Dim()>& idx);
+  void swapDistributionsOp(const Vector<Index, LbmClassType_::Dim()>& idx);
 
 private:
   // Constants
@@ -65,7 +64,7 @@ private:
   const FluidData<Scalar_> kFluid_;
   const ControlData<Scalar_> kControl_;
   const PerformanceData kPerformance_;
-  const Array<Index, LbmClassType_::Dim()> kSizes_;
+  const Vector<Index, LbmClassType_::Dim()> kSizes_;
   Tensor<LbmClassType_, LbmClassType_::Dim()> lattices_;
 
   // SoA data storage
@@ -74,12 +73,9 @@ private:
   Tensor<Scalar_, LbmClassType_::Dim()> tem_;
   Tensor<Scalar_, LbmClassType_::Dim() + 1> u_;
   Tensor<Scalar_, LbmClassType_::Dim() + 1> f_;
-  Tensor<Scalar_, LbmClassType_::Dim() + 1> feq_;
   Tensor<Scalar_, LbmClassType_::Dim() + 1> faux_;
   Tensor<Scalar_, LbmClassType_::Dim() + 1> g_;
-  Tensor<Scalar_, LbmClassType_::Dim() + 1> geq_;
   Tensor<Scalar_, LbmClassType_::Dim() + 1> gaux_;
-  Tensor<Scalar_, LbmClassType_::Dim() + 1> lastGx_;
 };
 
 template<typename Scalar_, typename LbmClassType_>
@@ -93,7 +89,7 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
   if (kPerformance_.cores > 0)
     omp_set_num_threads(kPerformance_.cores);
 
-  std::array<Index, LbmClassType_::Dim()> dims;
+  Eigen::array<Index, LbmClassType_::Dim()> dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     dims[i] = kSizes_[i];
   lattices_.resize(dims);
@@ -101,34 +97,27 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
   p_.resize(dims);
   tem_.resize(dims);
 
-  std::array<Index, LbmClassType_::Dim() + 1> u_dims;
+  Eigen::array<Index, LbmClassType_::Dim() + 1> u_dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     u_dims[i] = kSizes_[i];
   u_dims[LbmClassType_::Dim()] = LbmClassType_::Dim();
   u_.resize(u_dims);
 
-  std::array<Index, LbmClassType_::Dim() + 1> dist_dims;
+  Eigen::array<Index, LbmClassType_::Dim() + 1> dist_dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     dist_dims[i] = kSizes_[i];
   dist_dims[LbmClassType_::Dim()] = LbmClassType_::Speeds();
   f_.resize(dist_dims);
-  feq_.resize(dist_dims);
   faux_.resize(dist_dims);
   g_.resize(dist_dims);
-  geq_.resize(dist_dims);
   gaux_.resize(dist_dims);
 
-  std::array<Index, LbmClassType_::Dim() + 1> lastGx_dims;
-  for (Index i = 0; i < LbmClassType_::Dim(); ++i)
-    lastGx_dims[i] = kSizes_[i];
-  lastGx_dims[LbmClassType_::Dim()] = 3;
-  lastGx_.resize(lastGx_dims);
-
+#pragma omp parallel
   iterateDim(
-    [&](const Array<Index, LbmClassType_::Dim()>& idx) {
+    [&](const Vector<Index, LbmClassType_::Dim()>& idx) {
       auto i = idx[0];
       auto j = idx[1];
-      lattices_(idx) = LbmClassType_(
+      lattices_(i, j) = LbmClassType_(
         &kFluid_,
         &kControl_,
         &rho_(i, j),
@@ -136,10 +125,7 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
         &tem_(i, j),
         &u_(i, j, 0),
         &f_(i, j, 0),
-        &feq_(i, j, 0),
-        &g_(i, j, 0),
-        &geq_(i, j, 0),
-        &lastGx_(i, j, 0)
+        &g_(i, j, 0)
       );
     }
   );
@@ -147,14 +133,14 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
 
 template<typename Scalar_, typename LbmClassType_>
 void LbmTube<Scalar_, LbmClassType_>::Init() {
-  auto initOp = [&](const Array<Index, LbmClassType_::Dim()>& idx) {
+  auto initOp = [&](const Vector<Index, LbmClassType_::Dim()>& idx) {
     // Apply shock tube condition along x-axis
     if (idx[0] < kSizes_[0] / 2) {
-      rho_(idx) = kFluid_.densityL;
-      p_(idx) = kFluid_.pressureL;
+      rho_(idx[0], idx[1]) = kFluid_.densityL;
+      p_(idx[0], idx[1]) = kFluid_.pressureL;
     } else {
-      rho_(idx) = kFluid_.densityR;
-      p_(idx) = kFluid_.pressureR;
+      rho_(idx[0], idx[1]) = kFluid_.densityR;
+      p_(idx[0], idx[1]) = kFluid_.pressureR;
     }
 
     // Zero initial velocity
@@ -162,9 +148,10 @@ void LbmTube<Scalar_, LbmClassType_>::Init() {
     u0.setZero();
 
     // Initialize lattice
-    lattices_(idx[0], idx[1]).Init(u0, &rho_(idx), &p_(idx));
+    lattices_(idx[0], idx[1]).Init(u0, &rho_(idx[0], idx[1]), &p_(idx[0], idx[1]));
   };
 
+#pragma omp parallel
   iterateDim(initOp);
 }
 
@@ -174,8 +161,8 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
   {
     // Collision
     iterateDim(
-      [&](const Array<Index, LbmClassType_::Dim()>& idx) {
-        lattices_(idx).Collision();
+      [&](const Vector<Index, LbmClassType_::Dim()>& idx) {
+        lattices_(idx[0], idx[1]).Collision();
       }
     );
 
@@ -184,8 +171,18 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
 
     // Streaming
     iterateDim(
-      [&](const Array<Index, LbmClassType_::Dim()>& idx) {
+      [&](const Vector<Index, LbmClassType_::Dim()>& idx) {
         streamingOp(idx);
+      }
+    );
+
+    // <-- An implicit barrier exists here. All threads must finish
+    //     the collision loop before any thread can proceed.
+
+    // Streaming
+    iterateDim(
+      [&](const Vector<Index, LbmClassType_::Dim()>& idx) {
+        swapDistributionsOp(idx);
       }
     );
 
@@ -194,9 +191,8 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
 
     // Swap distributions and update macroscopic fields
     iterateDim(
-      [&](const Array<Index, LbmClassType_::Dim()>& idx) {
-        swapDistributionsOp(idx);
-        lattices_(idx).ComputeMacroscopic();
+      [&](const Vector<Index, LbmClassType_::Dim()>& idx) {
+        lattices_(idx[0], idx[1]).ComputeMacroscopic();
       }
 
       // <-- Final implicit barrier before the parallel region ends.
@@ -207,36 +203,28 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
 template<typename Scalar_, typename LbmClassType_>
 template<typename Func>
 void LbmTube<Scalar_, LbmClassType_>::iterateDim(Func func) {
-  const Index kTileSize = kPerformance_.tileSize;
   const Index size0 = kSizes_[0];
   const Index size1 = kSizes_[1];
 
-#pragma omp for collapse(2) schedule(dynamic)
-  for (Index iBlock = 0; iBlock < size0; iBlock += kTileSize) {
-    for (Index jBlock = 0; jBlock < size1; jBlock += kTileSize) {
-      Array<Index, LbmClassType_::Dim()> indices;
-      const Index iBlockEnd = std::min(iBlock + kTileSize, size0);
-      for (Index i = iBlock; i < iBlockEnd; ++i) {
-        const Index jBlockEnd = std::min(jBlock + kTileSize, size1);
-        for (Index j = jBlock; j < jBlockEnd; ++j) {
-          indices[0] = i;
-          indices[1] = j;
-          func(indices);
-        }
-      }
+#pragma omp for collapse(2) schedule(guided)
+  for (Index i = 0; i < size0; ++i) {
+    for (Index j = 0; j < size1; ++j) {
+      Vector<Index, LbmClassType_::Dim()> indices;
+      indices[0] = i;
+      indices[1] = j;
+      func(indices);
     }
   }
 }
 
 template<typename Scalar_, typename LbmClassType_>
-void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassType_::Dim()>& idx) {
-  auto& latticeIdx = lattices_(idx);
+void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Vector<Index, LbmClassType_::Dim()>& idx) {
+  auto& latticeIdx = lattices_(idx[0], idx[1]);
 
-#pragma omp simd
   for (Index idc = 0; idc < LbmClassType_::Speeds(); ++idc) {
     // Continuous source position: s = x - (c + U)
-    const Scalar_ cix = static_cast<Scalar_>(latticeIdx.Velocities(idc, 0)) + kControl_.U(0);
-    const Scalar_ ciy = static_cast<Scalar_>(latticeIdx.Velocities(idc, 1)) + kControl_.U(1);
+    const Scalar_ cix = static_cast<Scalar_>(latticeIdx.Velocity(idc, 0)) + kControl_.U(0);
+    const Scalar_ ciy = static_cast<Scalar_>(latticeIdx.Velocity(idc, 1)) + kControl_.U(1);
 
     const Scalar_ xSrcF = static_cast<Scalar_>(idx[0]) - cix;
     const Scalar_ ySrcF = static_cast<Scalar_>(idx[1]) - ciy;
@@ -420,7 +408,7 @@ void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassTyp
 }
 
 template<typename Scalar_, typename LbmClassType_>
-void LbmTube<Scalar_, LbmClassType_>::swapDistributionsOp(const Array<Index, LbmClassType_::Dim()>& idx) {
+void LbmTube<Scalar_, LbmClassType_>::swapDistributionsOp(const Vector<Index, LbmClassType_::Dim()>& idx) {
 #pragma omp simd
   for (Index idc = 0; idc < LbmClassType_::Speeds(); ++idc) {
     f_(idx[0], idx[1], idc) = faux_(idx[0], idx[1], idc);

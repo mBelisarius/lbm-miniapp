@@ -5,7 +5,6 @@
 #include <iostream>
 #include <string>
 #include <unsupported/Eigen/CXX11/Tensor>
-#include <vector>
 #include <chrono>
 
 #include "Data.hpp"
@@ -45,7 +44,7 @@ void OutputData(
   file.close();
 }
 
-template<typename Scalar_, typename LbmTubeType, typename LbmClassType>
+template<typename Scalar_, typename LbmClassType, typename LbmTubeType>
 void run(
   const lbmini::FluidData<Scalar_>& fluid,
   const lbmini::MeshData<Scalar_, LbmClassType::Dim()>& mesh,
@@ -60,14 +59,16 @@ void run(
   lbmTube.Init();
   OutputData(lbmTube, mesh, 0, outpath, 0.0);
 
-  for (Index i = 1; i <= kSteps; ++i) {
-    lbmTube.Step();
-    if ((i % std::max(kSteps / control.printStep, Index(1)) == 0) || i == kSteps) {
-      std::cout << "Time step: " << i << std::endl;
-      const auto current_time = std::chrono::high_resolution_clock::now();
-      const std::chrono::duration<double> elapsed_seconds = current_time - startRunTime;
-      OutputData(lbmTube, mesh, i, outpath, elapsed_seconds.count());
-    }
+  const Index stepsPerOutput = std::max(kSteps / control.printStep, Index(1));
+  for (Index i = 0; i < kSteps; ) {
+    const Index stepsPerChunk = std::min(stepsPerOutput, kSteps - i);
+    lbmTube.Run(stepsPerChunk);
+    i += stepsPerChunk;
+
+    std::cout << "Time step: " << i << std::endl;
+    const auto current_time = std::chrono::high_resolution_clock::now();
+    const std::chrono::duration<double> elapsed_seconds = current_time - startRunTime;
+    OutputData(lbmTube, mesh, i, outpath, elapsed_seconds.count());
   }
 }
 
@@ -116,7 +117,9 @@ int main(int argc, char* argv[]) {
   // LBM simulation
   if (performance.backend == 0) {
     std::cout << "Using plain backend." << std::endl;
-    run<Scalar, lbmini::plain::LbmTube<Scalar, lbmini::plain::LbmD2Q9<Scalar>>, lbmini::plain::LbmD2Q9<Scalar>>(
+    using LbmLattice = lbmini::plain::LbmD2Q9<Scalar>;
+    using LbmTube = lbmini::plain::LbmTube<Scalar, LbmLattice>;
+    run<Scalar, LbmLattice, LbmTube>(
       fluid,
       mesh,
       control,
@@ -127,7 +130,9 @@ int main(int argc, char* argv[]) {
     );
   } else if (performance.backend == 1) {
     std::cout << "Using OpenMP backend." << std::endl;
-    run<Scalar, lbmini::openmp::LbmTube<Scalar, lbmini::openmp::LbmD2Q9<Scalar>>, lbmini::openmp::LbmD2Q9<Scalar>>(
+    using LbmLattice = lbmini::openmp::LbmD2Q9<Scalar>;
+    using LbmTube = lbmini::openmp::LbmTube<Scalar, LbmLattice>;
+    run<Scalar, LbmLattice, LbmTube>(
       fluid,
       mesh,
       control,

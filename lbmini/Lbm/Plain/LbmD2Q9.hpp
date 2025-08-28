@@ -12,7 +12,7 @@
 
 namespace lbmini::plain {
 template<typename Scalar_>
-class LbmD2Q9 : public LbmClassBase<Scalar_, 2, 9> {
+class LbmD2Q9 {
 public:
   using Index = Eigen::Index;
 
@@ -25,8 +25,10 @@ public:
   template<typename Type, Index Rows, Index Cols>
   using Matrix = Eigen::Matrix<Type, Rows, Cols>;
 
-  using Base = LbmClassBase<Scalar_, 2, 9>;
-  using Base::Dim, Base::Speeds;
+  // using Base = LbmClassBase<Scalar_, 2, 9>;
+  // using Base::Dim, Base::Speeds;
+  static constexpr Index Dim() { return 2; }
+  static constexpr Index Speeds() { return 9; }
 
   LbmD2Q9();
 
@@ -48,55 +50,15 @@ public:
 
   LbmD2Q9(LbmD2Q9&&) = default;
 
-  ~LbmD2Q9() override = default;
+  ~LbmD2Q9() = default;
 
   LbmD2Q9& operator=(const LbmD2Q9&);
 
-  Scalar_& U(const Index id) { return u_(id); }
+  static constexpr Index Velocity(Index index, Index dir) { return kVelocities_(index, dir); }
 
-  const Scalar_& U(const Index id) const { return u_(id); }
+  static constexpr Index Opposite(Index index) { return kOpposite_(index); }
 
-  Scalar_& P() { return *p_; }
-
-  const Scalar_& P() const { return *p_; }
-
-  Scalar_& Rho() { return *rho_; }
-
-  const Scalar_& Rho() const { return *rho_; }
-
-  Scalar_& Tem() { return *tem_; }
-
-  const Scalar_& Tem() const { return *tem_; }
-
-  Scalar_& F(const Index ic) { return f_(ic); }
-
-  const Scalar_& F(const Index ic) const { return f_(ic); }
-
-  Scalar_& G(const Index ic) { return g_(ic); }
-
-  const Scalar_& G(const Index ic) const { return g_(ic); }
-
-  Scalar_& Feq(const Index ic) { return feq_(ic); }
-
-  const Scalar_& Feq(const Index ic) const { return feq_(ic); }
-
-  Scalar_& Geq(const Index ic) { return geq_(ic); }
-
-  const Scalar_& Geq(const Index ic) const { return geq_(ic); }
-
-  Index Velocities(Index index, Index dir) const override { return kVelocities_(index, dir); }
-
-  Scalar_ Weights(Index index) const override {
-    Scalar_ weight;
-    if (index == Index(0))
-      weight = Scalar_(1.0) - (*tem_);
-    else
-      weight = Scalar_(0.5) * (*tem_);
-
-    return weight;
-  }
-
-  Index Opposite(Index index) const override { return kOpposite_(index); }
+  Scalar_ Weights(Index index) const;
 
   void Init(const Vector<Scalar_, Dim()>& u0, Scalar_* rho0, Scalar_* p0);
 
@@ -178,19 +140,6 @@ LbmD2Q9<Scalar_>::LbmD2Q9(
   Scalar_* lastGx_data
 )
   : pFluid_(pFluid), pControl_(pControl), rho_(rho_data), p_(p_data), tem_(tem_data), u_(u_data), f_(f_data), feq_(feq_data), g_(g_data), geq_(geq_data), lastGx_(lastGx_data) {
-  // Macroscopic
-  u_.setZero();
-  *rho_ = Scalar_(0.0);
-  *p_ = Scalar_(0.0);
-  *tem_ = Scalar_(0.0);
-
-  // Distributions
-  f_.setZero();
-  feq_.setZero();
-  g_.setZero();
-  geq_.setZero();
-
-  // Newton multipliers cache
   lastGx_.setZero();
   lastGxValid_ = false;
 }
@@ -216,6 +165,23 @@ auto LbmD2Q9<Scalar_>::operator=(const LbmD2Q9& other) -> LbmD2Q9& {
   }
 
   return *this;
+}
+
+template<typename Scalar_>
+auto LbmD2Q9<Scalar_>::Weights(const Index index) const -> Scalar_ {
+  const Scalar_ weightZero = Scalar_(1.0) - (*tem_);
+  const Scalar_ weightNonZero = Scalar_(0.5) * (*tem_);
+  Scalar_ weight = Scalar_(1.0);
+
+  for (Index idd = 0; idd < Dim(); ++idd) {
+    Index vid = Velocity(index, idd);
+    if (vid == Index(0))
+      weight *= weightZero;
+    else
+      weight *= weightNonZero;
+  }
+
+  return weight;
 }
 
 template<typename Scalar_>
@@ -260,7 +226,7 @@ auto LbmD2Q9<Scalar_>::ComputeMacroscopic() -> void {
     *rho_ += f_(idc);
     nrg += g_(idc);
     for (Index idd = 0; idd < Dim(); ++idd) {
-      Scalar_ ci = static_cast<Scalar_>(Velocities(idc, idd)) + pControl_->U(idd);
+      Scalar_ ci = static_cast<Scalar_>(Velocity(idc, idd)) + pControl_->U(idd);
       mom(idd) += ci * f_(idc);
     }
   }
@@ -298,7 +264,7 @@ auto LbmD2Q9<Scalar_>::ComputeFeq() -> void {
     feq_(idc) = *rho_;
     for (Index idd = 0; idd < Dim(); ++idd) {
       Scalar_ ue = u_(idd) - pControl_->U(idd);
-      feq_(idc) *= phiAxis(Velocities(idc, idd), ue, *tem_);
+      feq_(idc) *= phiAxis(Velocity(idc, idd), ue, *tem_);
     }
   }
 }
@@ -314,14 +280,11 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
   // Precompute Wi (axis product) and shifted velocities cshift = c + U
   Vector<Scalar_, Speeds()> Wi;
   Wi.setZero();
-  std::vector<Vector<Scalar_, Dim()>> cshift(static_cast<size_t>(Speeds()));
+  Matrix<Scalar_, Speeds(), Dim()> cshift;
   for (Index idc = 0; idc < Speeds(); ++idc) {
-    const Index vix = Velocities(idc, 0), viy = Velocities(idc, 1);
-    const Scalar_ Wix = Weights(vix);
-    const Scalar_ Wiy = Weights(viy);
-    Wi(idc) = Wix * Wiy;
+    Wi(idc) = Weights(idc);
     for (Index d = 0; d < Dim(); ++d)
-      cshift[static_cast<size_t>(idc)](d) = static_cast<Scalar_>(Velocities(idc, d)) + pControl_->U(d);
+      cshift(idc, d) = static_cast<Scalar_>(Velocity(idc, d)) + pControl_->U(d);
   }
 
   // Targets of the root-finding method
@@ -368,7 +331,7 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
     for (Index idc = 0; idc < Speeds(); ++idc) {
       Scalar_ dot = Scalar_(0);
       for (Index d = 0; d < Dim(); ++d)
-        dot += xi(d) * cshift[static_cast<size_t>(idc)](d);
+        dot += xi(d) * cshift(idc, d);
       si(idc) = dot;
       if (si(idc) > smax)
         smax = si(idc);
@@ -401,9 +364,9 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
       e(idc) = Wi(idc) * ev;
       Z += e(idc);
       for (Index a = 0; a < Dim(); ++a) {
-        S1n(a) += cshift[static_cast<size_t>(idc)](a) * e(idc);
+        S1n(a) += cshift(idc, a) * e(idc);
         for (Index b = 0; b < Dim(); ++b)
-          S2n(a, b) += cshift[static_cast<size_t>(idc)](a) * cshift[static_cast<size_t>(idc)](b) * e(idc);
+          S2n(a, b) += cshift(idc, a) * cshift(idc, b) * e(idc);
       }
     }
     if (bad || Z <= tiny)
@@ -460,7 +423,7 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
       for (Index idc = 0; idc < Speeds(); ++idc) {
         Scalar_ dot = Scalar_(0);
         for (Index d = 0; d < Dim(); ++d)
-          dot += xicand(d) * cshift[static_cast<size_t>(idc)](d);
+          dot += xicand(d) * cshift(idc, d);
         if (dot > candSmax)
           candSmax = dot;
       }
@@ -475,7 +438,7 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
       for (Index idc = 0; idc < Speeds(); ++idc) {
         Scalar_ dot = Scalar_(0);
         for (Index d = 0; d < Dim(); ++d)
-          dot += xicand(d) * cshift[static_cast<size_t>(idc)](d);
+          dot += xicand(d) * cshift(idc, d);
         Scalar_ expo = dot - candSmax;
         if (expo > kMaxExp_)
           expo = kMaxExp_;
@@ -489,7 +452,7 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
         Scalar_ ei = Wi(idc) * ev;
         Zc += ei;
         for (Index a = 0; a < Dim(); ++a)
-          S1n_c(a) += cshift[static_cast<size_t>(idc)](a) * ei;
+          S1n_c(a) += cshift(idc, a) * ei;
       }
       if (badc || Zc <= tiny) {
         alpha *= Scalar_(0.5);
@@ -536,7 +499,7 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
     for (Index idc = 0; idc < Speeds(); ++idc) {
       Scalar_ dot = Scalar_(0);
       for (Index d = 0; d < Dim(); ++d)
-        dot += xi(d) * cshift[static_cast<size_t>(idc)](d);
+        dot += xi(d) * cshift(idc, d);
       si(idc) = dot;
       if (si(idc) > smax)
         smax = si(idc);
@@ -581,7 +544,7 @@ auto LbmD2Q9<Scalar_>::ComputeGeq() -> void {
       for (Index idc = 0; idc < Speeds(); ++idc) {
         S0final += geq_(idc);
         for (Index d = 0; d < Dim(); ++d)
-          S1final(d) += cshift[static_cast<size_t>(idc)](d) * geq_(idc);
+          S1final(d) += cshift(idc, d) * geq_(idc);
       }
 
       // Small numerical tolerance check
@@ -677,14 +640,17 @@ auto LbmD2Q9<Scalar_>::Collision() -> void {
   L.setZero();
   for (Index a = 0; a < Dim(); ++a) {
     for (Index b = 0; b < Dim(); ++b) {
+      Scalar_ p_ab = 0, peq_ab = 0;
       for (Index idc = 0; idc < Speeds(); ++idc) {
-        Scalar_ cia = static_cast<Scalar_>(Velocities(idc, a));
-        Scalar_ cib = static_cast<Scalar_>(Velocities(idc, b));
-        P(a, b) += (cia * cib) * f_(idc);
-        Peq(a, b) += (cia * cib) * feq_(idc);
+        Scalar_ cia = static_cast<Scalar_>(Velocity(idc, a));
+        Scalar_ cib = static_cast<Scalar_>(Velocity(idc, b));
+        p_ab += (cia * cib) * f_(idc);
+        peq_ab += (cia * cib) * feq_(idc);
       }
+      P(a, b) = p_ab;
+      Peq(a, b) = peq_ab;
 
-      L(a) += Scalar_(2.0) * u_(b) * (P(a, b) - Peq(a, b));
+      L(a) += Scalar_(2.0) * u_(b) * (p_ab - peq_ab);
     }
   }
 
@@ -694,19 +660,15 @@ auto LbmD2Q9<Scalar_>::Collision() -> void {
     f_(idc) += omegaLoc * (feq_(idc) - f_(idc));
 
     // Compute (g* - geq) per (Eq. 13): delta = Wi * ( ci · ( (P - Peq) * u ) ) / T
-    Index vix = Velocities(idc, 0);
-    Index viy = Velocities(idc, 1);
-    Scalar_ Wix = Weights(vix);
-    Scalar_ Wiy = Weights(viy);
-    Scalar_ Wi = Wix * Wiy;
+    Scalar_ Wi = Weights(idc);
 
     // ci for projection uses shifted velocities (moments)
     Vector<Scalar_, Dim()> ci;
-    ci(0) = static_cast<Scalar_>(Velocities(idc, 0)) + pControl_->U(0);
-    ci(1) = static_cast<Scalar_>(Velocities(idc, 1)) + pControl_->U(1);
+    ci(0) = static_cast<Scalar_>(Velocity(idc, 0)) + pControl_->U(0);
+    ci(1) = static_cast<Scalar_>(Velocity(idc, 1)) + pControl_->U(1);
 
-    Scalar_ cidotL = ci(0) * L(0) + ci(1) * L(1);
-    Scalar_ gDiff = Wi * (cidotL / (*tem_));
+    const Scalar_ cidotL = ci(0) * L(0) + ci(1) * L(1);
+    const Scalar_ gDiff = Wi * (cidotL / (*tem_));
 
     // Energy distribution
     g_(idc) += omegaLoc * (geq_(idc) - g_(idc)) + (omegaLoc - omegaThermalLoc) * gDiff;
