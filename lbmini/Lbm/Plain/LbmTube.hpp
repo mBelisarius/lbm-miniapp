@@ -2,7 +2,6 @@
 #define LBMINI_PLAIN_LBMTUBE_HPP_
 
 #include <Eigen/Dense>
-#include <array>
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
@@ -88,7 +87,7 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
   const PerformanceData& performance
 )
   : kFluid_(fluid), kControl_(control), kSizes_(mesh.size) {
-  std::array<Index, LbmClassType_::Dim()> dims;
+  Eigen::array<Index, LbmClassType_::Dim()> dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     dims[i] = kSizes_[i];
   lattices_.resize(dims);
@@ -96,13 +95,13 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
   p_.resize(dims);
   tem_.resize(dims);
 
-  std::array<Index, LbmClassType_::Dim() + 1> u_dims;
+  Eigen::array<Index, LbmClassType_::Dim() + 1> u_dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     u_dims[i] = kSizes_[i];
   u_dims[LbmClassType_::Dim()] = LbmClassType_::Dim();
   u_.resize(u_dims);
 
-  std::array<Index, LbmClassType_::Dim() + 1> dist_dims;
+  Eigen::array<Index, LbmClassType_::Dim() + 1> dist_dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     dist_dims[i] = kSizes_[i];
   dist_dims[LbmClassType_::Dim()] = LbmClassType_::Speeds();
@@ -113,7 +112,7 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
   geq_.resize(dist_dims);
   gaux_.resize(dist_dims);
 
-  std::array<Index, LbmClassType_::Dim() + 1> lastGx_dims;
+  Eigen::array<Index, LbmClassType_::Dim() + 1> lastGx_dims;
   for (Index i = 0; i < LbmClassType_::Dim(); ++i)
     lastGx_dims[i] = kSizes_[i];
   lastGx_dims[LbmClassType_::Dim()] = 3;
@@ -123,7 +122,7 @@ LbmTube<Scalar_, LbmClassType_>::LbmTube(
     [&](const Array<Index, LbmClassType_::Dim()>& idx) {
       auto i = idx[0];
       auto j = idx[1];
-      lattices_(idx) = LbmClassType_(
+      lattices_(i, j) = LbmClassType_(
         &kFluid_,
         &kControl_,
         &rho_(i, j),
@@ -145,11 +144,11 @@ void LbmTube<Scalar_, LbmClassType_>::Init() {
   auto initOp = [&](const Array<Index, LbmClassType_::Dim()>& idx) {
     // Apply shock tube condition along x-axis
     if (idx[0] < kSizes_[0] / 2) {
-      rho_(idx) = kFluid_.densityL;
-      p_(idx) = kFluid_.pressureL;
+      rho_(idx[0], idx[1]) = kFluid_.densityL;
+      p_(idx[0], idx[1]) = kFluid_.pressureL;
     } else {
-      rho_(idx) = kFluid_.densityR;
-      p_(idx) = kFluid_.pressureR;
+      rho_(idx[0], idx[1]) = kFluid_.densityR;
+      p_(idx[0], idx[1]) = kFluid_.pressureR;
     }
 
     // Zero initial velocity
@@ -157,7 +156,7 @@ void LbmTube<Scalar_, LbmClassType_>::Init() {
     u0.setZero();
 
     // Initialize lattice
-    lattices_(idx[0], idx[1]).Init(u0, &rho_(idx), &p_(idx));
+    lattices_(idx[0], idx[1]).Init(u0, &rho_(idx[0], idx[1]), &p_(idx[0], idx[1]));
   };
 
   iterateDim(initOp);
@@ -168,7 +167,7 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
   // Collision
   iterateDim(
     [&](const Array<Index, LbmClassType_::Dim()>& idx) {
-      lattices_(idx).Collision();
+      lattices_(idx[0], idx[1]).Collision();
     }
   );
 
@@ -183,7 +182,7 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
   iterateDim(
     [&](const Array<Index, LbmClassType_::Dim()>& idx) {
       swapDistributionsOp(idx);
-      lattices_(idx).ComputeMacroscopic();
+      lattices_(idx[0], idx[1]).ComputeMacroscopic();
     }
   );
 }
@@ -191,7 +190,7 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
 template<typename Scalar_, typename LbmClassType_>
 template<typename Func>
 void LbmTube<Scalar_, LbmClassType_>::iterateDim(Func func) {
-  Array<Index, LbmClassType_::Dim()> indices = Array<Index, LbmClassType_::Dim()>::Zero();
+  Eigen::Array<Index, LbmClassType_::Dim(), 1> indices = Eigen::Array<Index, LbmClassType_::Dim(), 1>::Zero();
 
   while (true) {
     func(indices);
@@ -212,12 +211,12 @@ void LbmTube<Scalar_, LbmClassType_>::iterateDim(Func func) {
 
 template<typename Scalar_, typename LbmClassType_>
 void LbmTube<Scalar_, LbmClassType_>::streamingOp(const Array<Index, LbmClassType_::Dim()>& idx) {
-  auto& latticeIdx = lattices_(idx);
+  auto& latticeIdx = lattices_(idx[0], idx[1]);
 
   for (Index idc = 0; idc < LbmClassType_::Speeds(); ++idc) {
     // Continuous source position: s = x - (c + U)
-    const Scalar_ cix = static_cast<Scalar_>(latticeIdx.Velocities(idc, 0)) + kControl_.U(0);
-    const Scalar_ ciy = static_cast<Scalar_>(latticeIdx.Velocities(idc, 1)) + kControl_.U(1);
+    const Scalar_ cix = static_cast<Scalar_>(latticeIdx.Velocity(idc, 0)) + kControl_.U(0);
+    const Scalar_ ciy = static_cast<Scalar_>(latticeIdx.Velocity(idc, 1)) + kControl_.U(1);
 
     const Scalar_ xSrcF = static_cast<Scalar_>(idx[0]) - cix;
     const Scalar_ ySrcF = static_cast<Scalar_>(idx[1]) - ciy;

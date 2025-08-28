@@ -7,8 +7,11 @@
 #include <unsupported/Eigen/CXX11/Tensor>
 #include <vector>
 #include <chrono>
+#include <openacc.h>
 
 #include "Data.hpp"
+// #include "Lbm/OpenAcc/LbmD2Q9.hpp"
+// #include "Lbm/OpenAcc/LbmTube.hpp"
 #include "Lbm/OpenMp/LbmD2Q9.hpp"
 #include "Lbm/OpenMp/LbmTube.hpp"
 #include "Lbm/Plain/LbmD2Q9.hpp"
@@ -45,7 +48,7 @@ void OutputData(
   file.close();
 }
 
-template<typename Scalar_, typename LbmTubeType, typename LbmClassType>
+template<typename Scalar_, typename LbmClassType, typename LbmTubeType>
 void run(
   const lbmini::FluidData<Scalar_>& fluid,
   const lbmini::MeshData<Scalar_, LbmClassType::Dim()>& mesh,
@@ -101,7 +104,40 @@ int main(int argc, char* argv[]) {
   std::filesystem::copy(config_path, std::filesystem::path(output_path) / "config.yaml");
 
   // Read simulation settings from YAML file
-  auto [fluid, mesh, control, performance] = lbmini::ReadYaml<Scalar, 2>(config_path);
+  // auto [fluid, mesh, control, performance] = lbmini::ReadYaml<Scalar, 2>(config_path);
+  auto fluid = lbmini::FluidData<Scalar>();
+  fluid.densityL = 1.0;
+  fluid.pressureL = 1.0;
+  fluid.densityR = 0.125;
+  fluid.pressureR = 0.1;
+  fluid.viscosity = 1.0e-2;
+  fluid.prandtl = 0.71;
+  fluid.gamma = 1.4;
+  fluid.specificHeatCv = Scalar(1.0) / (fluid.gamma - Scalar(1.0));
+  fluid.specificHeatCp = fluid.specificHeatCv + Scalar(1.0);
+  fluid.constant = fluid.specificHeatCp - fluid.specificHeatCv;
+  fluid.conductivity = fluid.specificHeatCp * fluid.viscosity / fluid.prandtl;
+
+  auto mesh = lbmini::MeshData<Scalar, 2>();
+  mesh.lenght[0] = 1.0;
+  mesh.lenght[1] = 1.0e-1;
+  mesh.lenght[2] = 1.0e-1;
+  mesh.size[0] = 1000;
+  mesh.size[1] = 10;
+  mesh.size[2] = 10;
+
+  auto control = lbmini::ControlData<Scalar>();
+  control.tmax =  0.2;
+  control.Ux =  0.33;
+  control.Uy =  0.0;
+  control.Uz =  0.0;
+  control.idw =  1.14;
+  control.printStep = 100;
+
+  auto performance = lbmini::PerformanceData();
+  performance.backend = 1;
+  performance.cores = 0;
+  performance.tileSize = 64;
 
   // Calculate the physical time step
   const Scalar cs2 = Scalar(1.0) / Scalar(3.0);
@@ -116,7 +152,9 @@ int main(int argc, char* argv[]) {
   // LBM simulation
   if (performance.backend == 0) {
     std::cout << "Using plain backend." << std::endl;
-    run<Scalar, lbmini::plain::LbmTube<Scalar, lbmini::plain::LbmD2Q9<Scalar>>, lbmini::plain::LbmD2Q9<Scalar>>(
+    using LbmLattice = lbmini::plain::LbmD2Q9<Scalar>;
+    using LbmTube = lbmini::plain::LbmTube<Scalar, LbmLattice>;
+    run<Scalar, LbmLattice, LbmTube>(
       fluid,
       mesh,
       control,
@@ -127,7 +165,9 @@ int main(int argc, char* argv[]) {
     );
   } else if (performance.backend == 1) {
     std::cout << "Using OpenMP backend." << std::endl;
-    run<Scalar, lbmini::openmp::LbmTube<Scalar, lbmini::openmp::LbmD2Q9<Scalar>>, lbmini::openmp::LbmD2Q9<Scalar>>(
+    using LbmLattice = lbmini::openmp::LbmD2Q9<Scalar>;
+    using LbmTube = lbmini::openmp::LbmTube<Scalar, LbmLattice>;
+    run<Scalar, LbmLattice, LbmTube>(
       fluid,
       mesh,
       control,
@@ -136,6 +176,21 @@ int main(int argc, char* argv[]) {
       kSteps,
       start_time
     );
+  // } else if (performance.backend == 2) {
+  //   std::cout << "Using OpenACC backend." << std::endl;
+  //   // Explicitly initialize the default accelerator device.
+  //   acc_init(acc_device_default);
+  //   using LbmLattice = lbmini::openacc::LbmD2Q9<Scalar>;
+  //   using LbmTube = lbmini::openacc::LbmTube<Scalar, LbmLattice>;
+  //   run<Scalar, LbmLattice, LbmTube>(
+  //     fluid,
+  //     mesh,
+  //     control,
+  //     performance,
+  //     output_path,
+  //     kSteps,
+  //     start_time
+  //   );
   } else {
     std::cerr << "Invalid backend selected" << std::endl;
     return 1;
