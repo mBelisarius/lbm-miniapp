@@ -1,82 +1,144 @@
 #ifndef LBMINI_OPENMP_LBMD2Q9_HPP_
 #define LBMINI_OPENMP_LBMD2Q9_HPP_
 
-#include <Eigen/Dense>
-#include <algorithm>
 #include <cmath>
-#include <vector>
+#include <cfloat>
 
 #include "Data/ControlData.hpp"
 #include "Data/FluidData.hpp"
 #include "Lbm/LbmBase.hpp"
 
 namespace lbmini::openmp {
-template<typename Scalar_>
+template<typename Scalar>
 class LbmD2Q9 {
 public:
-  using Index = Eigen::Index;
+  using Index = int;
 
-  template<typename Type, Index Size>
-  using Vector = Eigen::Vector<Type, Size>;
-
-  template<typename Type, Index Size>
-  using VectorMap = Eigen::Map<Vector<Type, Size>>;
-
-  template<typename Type, Index Rows, Index Cols>
-  using Matrix = Eigen::Matrix<Type, Rows, Cols>;
-
-  // using Base = LbmClassBase<Scalar_, 2, 9>;
+  // using Base = LbmClassBase<Scalar, 2, 9>;
   // using Base::Dim, Base::Speeds;
   static constexpr Index Dim() { return 2; }
+
   static constexpr Index Speeds() { return 9; }
 
-  LbmD2Q9();
+  static constexpr Index Velocity(Index index, Index dir) { return kVelocity_[index][dir]; }
 
-  LbmD2Q9(
-    const FluidData<Scalar_>* pFluid,
-    const ControlData<Scalar_>* pControl,
-    Scalar_* rho_data,
-    Scalar_* p_data,
-    Scalar_* tem_data,
-    Scalar_* u_data,
-    Scalar_* f_data,
-    Scalar_* g_data
+  static constexpr Index Opposite(Index index) { return kOpposite_[index]; }
+
+  static Scalar Weights(Index idc, Scalar tem);
+
+  static void Init(
+    const Scalar u0[Dim()],
+    Scalar* rho0,
+    Scalar* p0,
+    Scalar* rho,
+    Scalar* p,
+    Scalar* tem,
+    Scalar* u,
+    Scalar* f,
+    Scalar* feq,
+    Scalar* g,
+    Scalar* geq,
+    Scalar* lastGx,
+    const FluidData<Scalar>& pFluid,
+    const ControlData<Scalar>& pControl
   );
 
-  LbmD2Q9(const LbmD2Q9&) = default;
+  static void ComputeMacroscopic(
+    Scalar* rho,
+    Scalar* p,
+    Scalar* tem,
+    Scalar* u,
+    Scalar* f,
+    Scalar* feq,
+    Scalar* g,
+    Scalar* geq,
+    Scalar* lastGx,
+    const FluidData<Scalar>& pFluid,
+    const ControlData<Scalar>& pControl
+  );
 
-  LbmD2Q9(LbmD2Q9&&) = default;
-
-  ~LbmD2Q9() = default;
-
-  LbmD2Q9& operator=(const LbmD2Q9&);
-
-  static constexpr Index Velocity(Index index, Index dir) { return kVelocity_(index, dir); }
-
-  static constexpr Index Opposite(Index index) { return kOpposite_(index); }
-
-  Scalar_ Weights(Index index) const;
-
-  void Init(const Vector<Scalar_, Dim()>& u0, Scalar_* rho0, Scalar_* p0);
-
-  void ComputeMacroscopic();
-
-  void Collision();
+  static void Collision(
+    Scalar* rho,
+    Scalar* p,
+    Scalar* tem,
+    Scalar* u,
+    Scalar* f,
+    Scalar* feq,
+    Scalar* g,
+    Scalar* geq,
+    Scalar* lastGx,
+    const FluidData<Scalar>& pFluid,
+    const ControlData<Scalar>& pControl
+  );
 
 protected:
-  Scalar_ computePhiAxis(Index idd, Scalar_ idc);
+  static Scalar computePhiAxis(Index idc, Index idd, Scalar tem, const Scalar* u, const ControlData<Scalar>& pControl);
 
-  void computeFeq();
+  static void computeFeq(
+    Scalar* rho,
+    Scalar* p,
+    Scalar* tem,
+    Scalar* u,
+    Scalar* f,
+    Scalar* feq,
+    Scalar* g,
+    Scalar* geq,
+    Scalar* lastGx,
+    const FluidData<Scalar>& pFluid,
+    const ControlData<Scalar>& pControl
+  );
 
-  void computeGeq();
+  static void computeGeq(
+    Scalar* rho,
+    Scalar* p,
+    Scalar* tem,
+    Scalar* u,
+    Scalar* f,
+    Scalar* feq,
+    Scalar* g,
+    Scalar* geq,
+    Scalar* lastGx,
+    const FluidData<Scalar>& pFluid,
+    const ControlData<Scalar>& pControl
+  );
 
 private:
-  // Constants
-  inline static const Scalar_ kTiny_ = Scalar_(1.0e-12);
-  inline static const Scalar_ kMaxExp_ = Scalar_(700.0);
-  inline static const Scalar_ kCs2_ = Scalar_(1.0) / Scalar_(3.0);
+  struct Workspace {
+    // from ComputeMacroscopic
+    Scalar mom[Dim()];
 
-  inline static const Matrix<Index, Speeds(), Dim()> kVelocity_{
+    // from Collision
+    Scalar P[Dim()][Dim()];
+    Scalar Peq[Dim()][Dim()];
+    Scalar L[Dim()];
+    Scalar ci_coll[Dim()];
+
+    // from computeGeq
+    Scalar Wi[Speeds()];
+    Scalar cshift[Speeds()][Dim()];
+    Scalar targetQ[Dim()];
+    Scalar m_target[Dim()];
+    Scalar xi[Dim()];
+    Scalar si[Speeds()];
+    Scalar e[Speeds()];
+    Scalar S1n[Dim()];
+    Scalar S2n[Dim()][Dim()];
+    Scalar r[Dim()];
+    Scalar J[Dim()][Dim()];
+    Scalar delta[Dim()];
+    Scalar bestXi[Dim()];
+    Scalar xicand[Dim()];
+    Scalar S1n_c[Dim()];
+    Scalar mcand[Dim()];
+    Scalar S1final[Dim()];
+  };
+
+  // Constants
+  inline static const Scalar kTiny_ = Scalar(1.0e-12);
+  inline static const Scalar kMaxExp_ = Scalar(700.0);
+  inline static const Scalar kCs2_ = Scalar(1.0) / Scalar(3.0);
+
+  inline static const Index kVelocity_[Speeds()][Dim()] = {
     { 0, 0 },
     { 1, 0 },
     { -1, 0 },
@@ -88,7 +150,7 @@ private:
     { -1, 1 },
   };
 
-  inline static const Vector<Index, Speeds()> kOpposite_{
+  inline static const Index kOpposite_[Speeds()] = {
     0,
     2,
     1,
@@ -99,82 +161,18 @@ private:
     8,
     7,
   };
-
-  // Simulation data
-  const FluidData<Scalar_>* pFluid_;
-  const ControlData<Scalar_>* pControl_;
-
-  // Macroscopic
-  Scalar_* rho_;
-  Scalar_* p_;
-  Scalar_* tem_;
-  VectorMap<Scalar_, Dim()> u_;
-
-  // Distributions
-  VectorMap<Scalar_, Speeds()> f_;
-  VectorMap<Scalar_, Speeds()> g_;
-
-  // Equilibrium distribution do not need to be copyout
-  Vector<Scalar_, Speeds()> feq_;
-  Vector<Scalar_, Speeds()> geq_;
-
-  // Newton multipliers cache
-  Vector<Scalar_, Dim() + 1> lastGx_;
-  bool lastGxValid_;
 };
 
-template<typename Scalar_>
-LbmD2Q9<Scalar_>::LbmD2Q9()
-  : pFluid_(nullptr), pControl_(nullptr), rho_(nullptr), p_(nullptr), tem_(nullptr), u_(nullptr), f_(nullptr), g_(nullptr), feq_(), geq_(), lastGx_(), lastGxValid_(false) {}
+#pragma omp declare target
 
-template<typename Scalar_>
-LbmD2Q9<Scalar_>::LbmD2Q9(
-  const FluidData<Scalar_>* pFluid,
-  const ControlData<Scalar_>* pControl,
-  Scalar_* rho_data,
-  Scalar_* p_data,
-  Scalar_* tem_data,
-  Scalar_* u_data,
-  Scalar_* f_data,
-  Scalar_* g_data
-)
-  : pFluid_(pFluid), pControl_(pControl), rho_(rho_data), p_(p_data), tem_(tem_data), u_(u_data), f_(f_data), g_(g_data), feq_(Vector<Scalar_, Speeds()>::Zero()), geq_(Vector<Scalar_, Speeds()>::Zero()), lastGx_(Vector<Scalar_, Dim() + 1>::Zero()) {
-  lastGxValid_ = false;
-}
-
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::operator=(const LbmD2Q9& other) -> LbmD2Q9& {
-  if (this != &other) {
-    pFluid_ = other.pFluid_;
-    pControl_ = other.pControl_;
-    rho_ = other.rho_;
-    p_ = other.p_;
-    tem_ = other.tem_;
-    lastGxValid_ = other.lastGxValid_;
-
-    // Re-seat the maps using placement new. The default assignment operator
-    // for Eigen::Map copies data and would crash if the map is uninitialized.
-    new(&u_) VectorMap<Scalar_, Dim()>(const_cast<Scalar_*>(other.u_.data()));
-    new(&f_) VectorMap<Scalar_, Speeds()>(const_cast<Scalar_*>(other.f_.data()));
-    new(&g_) VectorMap<Scalar_, Speeds()>(const_cast<Scalar_*>(other.g_.data()));
-
-    // Invalidate equilibrium distributions and lastGx
-    feq_.setZero();
-    geq_.setZero();
-    lastGx_.setZero();
-  }
-
-  return *this;
-}
-
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::Weights(const Index index) const -> Scalar_ {
-  const Scalar_ weightZero = Scalar_(1.0) - (*tem_);
-  const Scalar_ weightNonZero = Scalar_(0.5) * (*tem_);
-  Scalar_ weight = Scalar_(1.0);
+template<typename Scalar>
+auto LbmD2Q9<Scalar>::Weights(const Index idc, const Scalar tem) -> Scalar {
+  const Scalar weightZero = Scalar(1.0) - tem;
+  const Scalar weightNonZero = Scalar(0.5) * tem;
+  Scalar weight = Scalar(1.0);
 
   for (Index idd = 0; idd < Dim(); ++idd) {
-    Index vid = Velocity(index, idd);
+    Index vid = Velocity(idc, idd);
     if (vid == Index(0))
       weight *= weightZero;
     else
@@ -184,140 +182,191 @@ auto LbmD2Q9<Scalar_>::Weights(const Index index) const -> Scalar_ {
   return weight;
 }
 
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::Init(const Vector<Scalar_, Dim()>& u0, Scalar_* rho0, Scalar_* p0) -> void {
+template<typename Scalar>
+auto LbmD2Q9<Scalar>::Init(
+  const Scalar u0[Dim()],
+  Scalar* rho0,
+  Scalar* p0,
+  Scalar* rho,
+  Scalar* p,
+  Scalar* tem,
+  Scalar* u,
+  Scalar* f,
+  Scalar* feq,
+  Scalar* g,
+  Scalar* geq,
+  Scalar* lastGx,
+  const FluidData<Scalar>& pFluid,
+  const ControlData<Scalar>& pControl
+) -> void {
   // Initialize velocity
   for (Index idd = 0; idd < Dim(); ++idd)
-    u_(idd) = u0(idd);
+    u[idd] = u0[idd];
 
   // Initialize density and pressure
-  rho_ = rho0;
-  p_ = p0;
+  *rho = *rho0;
+  *p = *p0;
 
   // Initialize temperature
-  *tem_ = kCs2_ * (*p_) / ((*rho_) * pFluid_->constant);
+  *tem = kCs2_ * (*p) / ((*rho) * pFluid.constant);
 
   // Initialize f to feq
-  computeFeq();
+  computeFeq(rho, p, tem, u, f, feq, g, geq, lastGx, pFluid, pControl);
+
+  // Invalidate lastGx at initialization to avoid accidental reuse from previous sim
+  for (Index i = 0; i < Dim() + 1; ++i)
+    lastGx[i] = Scalar(0.0);
 
   // Initialize g to geq
-  // Invalidate lastX_ at initialization to avoid accidental reuse from previous sim
-  lastGxValid_ = false;
-  computeGeq();
+  computeGeq(rho, p, tem, u, f, feq, g, geq, lastGx, pFluid, pControl);
 
 #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
-    f_(idc) = feq_(idc);
-    g_(idc) = geq_(idc);
+    f[idc] = feq[idc];
+    g[idc] = geq[idc];
   }
 
   // Recompute macroscopic so derived fields are consistent after init
-  ComputeMacroscopic();
+  ComputeMacroscopic(rho, p, tem, u, f, feq, g, geq, lastGx, pFluid, pControl);
 }
 
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::ComputeMacroscopic() -> void {
+template<typename Scalar>
+auto LbmD2Q9<Scalar>::ComputeMacroscopic(
+  Scalar* rho,
+  Scalar* p,
+  Scalar* tem,
+  Scalar* u,
+  Scalar* f,
+  Scalar* feq,
+  Scalar* g,
+  Scalar* geq,
+  Scalar* lastGx,
+  const FluidData<Scalar>& pFluid,
+  const ControlData<Scalar>& pControl
+) -> void {
+  Workspace ws_;
+
   // Compute rho (Eq. 7) and momentum (mom, Eq. 8)
-  *rho_ = Scalar_(0.0);
+  *rho = Scalar(0.0);
   // Compute total fluid energy (Eq. 9): S = sum_i g_i = 2 * rho * E
-  Scalar_ nrg = Scalar_(0.0);
+  Scalar nrg = Scalar(0.0);
   // Compute moments
-  Vector<Scalar_, Dim()> mom = Vector<Scalar_, Dim()>::Zero();
+  for (Index i = 0; i < Dim(); ++i) {
+    ws_.mom[i] = Scalar(0.0);
+  }
 
 #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
-    *rho_ += f_(idc);
-    nrg += g_(idc);
+    *rho += f[idc];
+    nrg += g[idc];
     for (Index idd = 0; idd < Dim(); ++idd) {
-      Scalar_ ci = static_cast<Scalar_>(Velocity(idc, idd)) + pControl_->U(idd);
-      mom(idd) += ci * f_(idc);
+      Scalar ci = static_cast<Scalar>(Velocity(idc, idd)) + pControl.U(idd);
+      ws_.mom[idd] += ci * f[idc];
     }
   }
 
-  Scalar_ nrgKinect = Scalar_(0.0);
+  Scalar nrgKinect = Scalar(0.0);
   for (Index idd = 0; idd < Dim(); ++idd) {
-    u_(idd) = mom(idd) / (*rho_);
-    nrgKinect += u_(idd) * u_(idd);
+    u[idd] = ws_.mom[idd] / (*rho);
+    nrgKinect += u[idd] * u[idd];
   }
 
-  nrg /= Scalar_(2.0) * (*rho_);
-  nrgKinect /= Scalar_(2.0);
+  nrg /= Scalar(2.0) * (*rho);
+  nrgKinect /= Scalar(2.0);
 
   // Compute temperature (Eq. 10)
-  *tem_ = (nrg - nrgKinect) / pFluid_->specificHeatCv;
+  *tem = (nrg - nrgKinect) / pFluid.specificHeatCv;
 
   // Compute pressure (ideal gas law)
-  *p_ = pFluid_->constant * (*rho_) * (*tem_);
+  *p = pFluid.constant * (*rho) * (*tem);
 }
 
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::Collision() -> void {
-  Scalar_ u2 = Scalar_(0.0);
+template<typename Scalar>
+auto LbmD2Q9<Scalar>::Collision(
+  Scalar* rho,
+  Scalar* p,
+  Scalar* tem,
+  Scalar* u,
+  Scalar* f,
+  Scalar* feq,
+  Scalar* g,
+  Scalar* geq,
+  Scalar* lastGx,
+  const FluidData<Scalar>& pFluid,
+  const ControlData<Scalar>& pControl
+) -> void {
+  Workspace ws_;
+
+  Scalar u2 = Scalar(0.0);
   for (Index idd = 0; idd < Dim(); ++idd)
-    u2 += u_(idd) * u_(idd);
+    u2 += u[idd] * u[idd];
 
   // Compute distributions
-  computeFeq();
-  computeGeq();
+  computeFeq(rho, p, tem, u, f, feq, g, geq, lastGx, pFluid, pControl);
+  computeGeq(rho, p, tem, u, f, feq, g, geq, lastGx, pFluid, pControl);
 
   // Relaxation factor (Eq. 3)
-  Scalar_ tau = pFluid_->viscosity / ((*rho_) * (*tem_)) + Scalar_(0.5);
-  Scalar_ omega = Scalar_(1.0) / tau;
+  Scalar tau = pFluid.viscosity / ((*rho) * (*tem)) + Scalar(0.5);
+  Scalar omega = Scalar(1.0) / tau;
 
   // Thermal relaxation factor
-  const Scalar_ diffusivity = pFluid_->conductivity / ((*rho_) * pFluid_->specificHeatCp);
-  const Scalar_ tauThermal = diffusivity / (*tem_) + Scalar_(0.5);
-  Scalar_ omegaThermal = Scalar_(1.0) / tauThermal;
+  const Scalar diffusivity = pFluid.conductivity / ((*rho) * pFluid.specificHeatCp);
+  const Scalar tauThermal = diffusivity / (*tem) + Scalar(0.5);
+  Scalar omegaThermal = Scalar(1.0) / tauThermal;
 
   // Knudsen sensor epsilon (Eq. 19)
-  Scalar_ eps = Scalar_(0.0);
+  Scalar eps = Scalar(0.0);
 #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
-    Scalar_ diff = f_(idc) - feq_(idc);
-    eps += std::abs(diff) / std::max(feq_(idc), kTiny_);
+    Scalar diff = f[idc] - feq[idc];
+    eps += fabs(diff) / (((feq[idc]) > (kTiny_)) ? (feq[idc]) : (kTiny_));
   }
-  eps /= Scalar_(Speeds());
+  eps /= Scalar(Speeds());
 
   // sigma(ε) from (Eq. 20)
-  Scalar_ sigma = Scalar_(1.0);
-  if (eps >= Scalar_(1.0))
+  Scalar sigma = Scalar(1.0);
+  if (eps >= Scalar(1.0))
     sigma = omega;
-  else if (eps >= Scalar_(1.0e-1))
-    sigma = Scalar_(1.35);
-  else if (eps >= Scalar_(1.0e-2))
-    sigma = Scalar_(1.05);
+  else if (eps >= Scalar(1.0e-1))
+    sigma = Scalar(1.35);
+  else if (eps >= Scalar(1.0e-2))
+    sigma = Scalar(1.05);
 
-  Scalar_ omegaLoc = omega / sigma;
-  Scalar_ omegaThermalLoc = omegaThermal;
+  Scalar omegaLoc = omega / sigma;
+  Scalar omegaThermalLoc = omegaThermal;
 
   // Clamp omegas to safe bounds
   // TODO: Review the omega clamp
-  omegaLoc = std::min(std::max(omegaLoc, Scalar_(1.0)), Scalar_(2.0) - Scalar_(1.0e-7));
-  omegaThermalLoc = std::min(std::max(omegaThermalLoc, Scalar_(1.0)), Scalar_(2.0) - Scalar_(1.0e-7));
+  omegaLoc = (omegaLoc > Scalar(1.0)) ? omegaLoc : Scalar(1.0);
+  omegaLoc = (omegaLoc < (Scalar(2.0) - Scalar(1.0e-7))) ? omegaLoc : (Scalar(2.0) - Scalar(1.0e-7));
+  omegaThermalLoc = (omegaThermalLoc > Scalar(1.0)) ? omegaThermalLoc : Scalar(1.0);
+  omegaThermalLoc = (omegaThermalLoc < (Scalar(2.0) - Scalar(1.0e-7))) ? omegaThermalLoc : (Scalar(2.0) - Scalar(1.0e-7));
 
   // Compute pressure tensor (Eq. 13a): P_ab = sum_i ci_a ci_b f_i
-  Matrix<Scalar_, Dim(), Dim()> P;
-  P.setZero();
   // Compute equilibrium pressure tensor (Eq. 11): P_ab_eq = rho u_a u_b + rho T delta_ab
-  Matrix<Scalar_, Dim(), Dim()> Peq;
-  Peq.setZero();
   // Compute L = u_b (P_ab - P_ab_eq)
-  Vector<Scalar_, Dim()> L;
-  L.setZero();
+  for (Index i = 0; i < Dim(); ++i) {
+    for (Index j = 0; j < Dim(); ++j) {
+      ws_.P[i][j] = Scalar(0.0);
+      ws_.Peq[i][j] = Scalar(0.0);
+    }
+    ws_.L[i] = Scalar(0.0);
+  }
+
   for (Index a = 0; a < Dim(); ++a) {
     for (Index b = 0; b < Dim(); ++b) {
-      Scalar_ p_ab = 0, peq_ab = 0;
+      Scalar p_ab = 0, peq_ab = 0;
 #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc) {
-        Scalar_ cia = static_cast<Scalar_>(Velocity(idc, a));
-        Scalar_ cib = static_cast<Scalar_>(Velocity(idc, b));
-        p_ab += (cia * cib) * f_(idc);
-        peq_ab += (cia * cib) * feq_(idc);
+        Scalar cia = static_cast<Scalar>(Velocity(idc, a));
+        Scalar cib = static_cast<Scalar>(Velocity(idc, b));
+        p_ab += (cia * cib) * f[idc];
+        peq_ab += (cia * cib) * feq[idc];
       }
-      P(a, b) = p_ab;
-      Peq(a, b) = peq_ab;
+      ws_.P[a][b] = p_ab;
+      ws_.Peq[a][b] = peq_ab;
 
-      L(a) += Scalar_(2.0) * u_(b) * (p_ab - peq_ab);
+      ws_.L[a] += Scalar(2.0) * u[b] * (p_ab - peq_ab);
     }
   }
 
@@ -325,119 +374,147 @@ auto LbmD2Q9<Scalar_>::Collision() -> void {
 #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
     // f distribution
-    f_(idc) += omegaLoc * (feq_(idc) - f_(idc));
+    f[idc] += omegaLoc * (feq[idc] - f[idc]);
 
     // Compute (g* - geq) per (Eq. 13): delta = Wi * ( ci · ( (P - Peq) * u ) ) / T
-    Scalar_ Wi = Weights(idc);
+    Scalar Wi = Weights(idc, *tem);
 
     // ci for projection uses shifted velocities (moments)
-    Vector<Scalar_, Dim()> ci;
-    ci(0) = static_cast<Scalar_>(Velocity(idc, 0)) + pControl_->U(0);
-    ci(1) = static_cast<Scalar_>(Velocity(idc, 1)) + pControl_->U(1);
+    ws_.ci_coll[0] = static_cast<Scalar>(Velocity(idc, 0)) + pControl.U(0);
+    ws_.ci_coll[1] = static_cast<Scalar>(Velocity(idc, 1)) + pControl.U(1);
 
-    const Scalar_ cidotL = ci(0) * L(0) + ci(1) * L(1);
-    const Scalar_ gDiff = Wi * (cidotL / (*tem_));
+    const Scalar cidotL = ws_.ci_coll[0] * ws_.L[0] + ws_.ci_coll[1] * ws_.L[1];
+    const Scalar gDiff = Wi * (cidotL / (*tem));
 
     // Energy distribution
-    g_(idc) += omegaLoc * (geq_(idc) - g_(idc)) + (omegaLoc - omegaThermalLoc) * gDiff;
+    g[idc] += omegaLoc * (geq[idc] - g[idc]) + (omegaLoc - omegaThermalLoc) * gDiff;
   }
 }
 
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::computePhiAxis(Index idd, Scalar_ idc) -> Scalar_ {
+template<typename Scalar>
+auto LbmD2Q9<Scalar>::computePhiAxis(
+  const Index idc,
+  const Index idd,
+  const Scalar tem,
+  const Scalar* u,
+  const ControlData<Scalar>& pControl
+) -> Scalar {
   const Index vi = Velocity(idc, idd);
-  const Scalar_ uia = u_(idd) - pControl_->U(idd);
-  const Scalar_ uia2 = uia * uia;
+  const Scalar uia = u[idd] - pControl.U(idd);
+  const Scalar uia2 = uia * uia;
 
   if (vi == Index(0))
-    return Scalar_(1.0) - (uia2 + (*tem_));
+    return Scalar(1.0) - (uia2 + tem);
   if (vi == Index(1))
-    return Scalar_(0.5) * (uia + uia2 + (*tem_));
+    return Scalar(0.5) * (uia + uia2 + tem);
   if (vi == Index(-1))
-    return Scalar_(0.5) * (-uia + uia2 + (*tem_));
+    return Scalar(0.5) * (-uia + uia2 + tem);
 
-  return Scalar_(0.0);
+  return Scalar(0.0);
 }
 
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::computeFeq() -> void {
+template<typename Scalar>
+auto LbmD2Q9<Scalar>::computeFeq(
+  Scalar* rho,
+  Scalar* p,
+  Scalar* tem,
+  Scalar* u,
+  Scalar* f,
+  Scalar* feq,
+  Scalar* g,
+  Scalar* geq,
+  Scalar* lastGx,
+  const FluidData<Scalar>& pFluid,
+  const ControlData<Scalar>& pControl
+) -> void {
 #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
-    feq_(idc) = *rho_;
+    feq[idc] = *rho;
     for (Index idd = 0; idd < Dim(); ++idd)
-      feq_(idc) *= computePhiAxis(idd, idc);
+      feq[idc] *= computePhiAxis(idc, idd, *tem, u, pControl);
   }
 }
 
-template<typename Scalar_>
-auto LbmD2Q9<Scalar_>::computeGeq() -> void {
+template<typename Scalar>
+auto LbmD2Q9<Scalar>::computeGeq(
+  Scalar* rho,
+  Scalar* p,
+  Scalar* tem,
+  Scalar* u,
+  Scalar* f,
+  Scalar* feq,
+  Scalar* g,
+  Scalar* geq,
+  Scalar* lastGx,
+  const FluidData<Scalar>& pFluid,
+  const ControlData<Scalar>& pControl
+) -> void {
+  Workspace ws_;
+
   // Macroscopic quantities
-  Scalar_ u2 = Scalar_(0.0);
-  for (Index d = 0; d < Dim(); ++d)
-    u2 += u_(d) * u_(d);
-  Scalar_ E = pFluid_->specificHeatCv * (*tem_) + Scalar_(0.5) * u2;
+  Scalar u2 = Scalar(0.0);
+  for (Index idd = 0; idd < Dim(); ++idd)
+    u2 += u[idd] * u[idd];
+  Scalar E = pFluid.specificHeatCv * (*tem) + Scalar(0.5) * u2;
 
   // Precompute Wi (axis product) and shifted velocities cshift = c + U
-  Vector<Scalar_, Speeds()> Wi;
-  Wi.setZero();
-  Matrix<Scalar_, Speeds(), Dim()> cshift;
 #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
-    Wi(idc) = Weights(idc);
+    ws_.Wi[idc] = Weights(idc, *tem);
     for (Index d = 0; d < Dim(); ++d)
-      cshift(idc, d) = static_cast<Scalar_>(Velocity(idc, d)) + pControl_->U(d);
+      ws_.cshift[idc][d] = static_cast<Scalar>(Velocity(idc, d)) + pControl.U(d);
   }
 
   // Targets of the root-finding method
-  const Scalar_ targetE = Scalar_(2.0) * (*rho_) * E; // sum_i geq_i
-  Vector<Scalar_, Dim()> targetQ;
-  for (Index d = 0; d < Dim(); ++d)
-    targetQ(d) = Scalar_(2.0) * (*rho_) * u_(d) * (E + (*tem_));
+  const Scalar targetE = Scalar(2.0) * (*rho) * E; // sum_i geq_i
+  for (Index idd = 0; idd < Dim(); ++idd)
+    ws_.targetQ[idd] = Scalar(2.0) * (*rho) * u[idd] * (E + (*tem));
 
   // Handle degenerate trivial case
-  if (targetE <= Scalar_(0)) {
+  if (targetE <= Scalar(0.0)) {
     // fallback: simple equal distribution
-    const Scalar_ total = Scalar_(2.0) * (*rho_) * E;
+    const Scalar total = Scalar(2.0) * (*rho) * E;
 #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc)
-      geq_(idc) = total / Scalar_(Speeds());
-    lastGxValid_ = false;
+      geq[idc] = total / Scalar(Speeds());
+
+    for (Index iddP1 = 0; iddP1 < Dim() + 1; ++iddP1)
+      lastGx[iddP1] = Scalar(0.0);
+
     return;
   }
 
   // Desired mean (flux per unit energy)
-  const Vector<Scalar_, Dim()> m_target = targetQ / targetE; // 2-vector
+  for (Index i = 0; i < Dim(); ++i) {
+    ws_.m_target[i] = ws_.targetQ[i] / targetE;
+  }
 
   // Solve for xi such that m(xi) = m_target
   // Initial guess for xi: use cached warm start if available, else zero
-  Vector<Scalar_, Dim()> xi = Vector<Scalar_, Dim()>::Zero();
-  if (lastGxValid_) {
-    xi(0) = lastGx_(1);
-    xi(1) = lastGx_(2);
-  }
+  ws_.xi[0] = lastGx[1];
+  ws_.xi[1] = lastGx[2];
 
   // Newton parameters
   const Index maxIter = 100;
-  const Scalar_ tolRel = Scalar_(1e-12); // relative tolerance on mean residual
-  const Scalar_ tiny = kTiny_;
+  const Scalar tolRel = kTiny_; // relative tolerance on mean residual
   bool xiConverged = false;
 
   // Scaling used in relative residual
-  Scalar_ mScale = std::max(Scalar_(1.0), m_target.norm());
+  const Scalar m_target_norm = sqrt(ws_.m_target[0] * ws_.m_target[0] + ws_.m_target[1] * ws_.m_target[1]);
+  Scalar mScale = ((Scalar(1.0)) > (m_target_norm) ? (Scalar(1.0)) : (m_target_norm));
 
   // Newton iterations
   for (Index iter = 0; iter < maxIter; ++iter) {
     // Compute s_i = xi · c_i and smax for numeric stability
-    Vector<Scalar_, Speeds()> si;
-    Scalar_ smax = -std::numeric_limits<Scalar_>::infinity();
+    Scalar smax = -HUGE_VAL;
 #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc) {
-      Scalar_ dot = Scalar_(0);
+      Scalar dot = Scalar(0);
       for (Index d = 0; d < Dim(); ++d)
-        dot += xi(d) * cshift(idc, d);
-      si(idc) = dot;
-      if (si(idc) > smax)
-        smax = si(idc);
+        dot += ws_.xi[d] * ws_.cshift[idc][d];
+      ws_.si[idc] = dot;
+      if (ws_.si[idc] > smax)
+        smax = ws_.si[idc];
     }
 
     if (smax > kMaxExp_)
@@ -446,88 +523,101 @@ auto LbmD2Q9<Scalar_>::computeGeq() -> void {
       smax = -kMaxExp_;
 
     // Build weighted exponentials e_i = Wi * exp(si - smax)
-    Vector<Scalar_, Speeds()> e;
-    e.setZero();
-    Scalar_ Z = Scalar_(0);                                                    // sum e_i
-    Vector<Scalar_, Dim()> S1n = Vector<Scalar_, Dim()>::Zero();               // sum ci * e_i
-    Matrix<Scalar_, Dim(), Dim()> S2n = Matrix<Scalar_, Dim(), Dim()>::Zero(); // sum ci ci^T * e_i
+    for (Index i = 0; i < Speeds(); ++i) { ws_.e[i] = Scalar(0); }
+    Scalar Z = Scalar(0);                                         // sum e_i
+    for (Index i = 0; i < Dim(); ++i) { ws_.S1n[i] = Scalar(0); } // sum ci * e_i
+    for (int i = 0; i < Dim(); ++i) {
+      for (int j = 0; j < Dim(); ++j) {
+        ws_.S2n[i][j] = Scalar(0);
+      }
+    } // sum ci ci^T * e_i
 
     bool bad = false;
     for (Index idc = 0; idc < Speeds(); ++idc) {
-      Scalar_ expo = si(idc) - smax;
+      Scalar expo = ws_.si[idc] - smax;
       if (expo > kMaxExp_)
         expo = kMaxExp_;
       if (expo < -kMaxExp_)
         expo = -kMaxExp_;
-      Scalar_ ev = std::exp(expo);
-      if (!std::isfinite(ev)) {
+      Scalar ev = exp(expo);
+      if (!isfinite(ev)) {
         bad = true;
         break;
       }
-      e(idc) = Wi(idc) * ev;
-      Z += e(idc);
+      ws_.e[idc] = ws_.Wi[idc] * ev;
+      Z += ws_.e[idc];
       for (Index a = 0; a < Dim(); ++a) {
-        S1n(a) += cshift(idc, a) * e(idc);
+        ws_.S1n[a] += ws_.cshift[idc][a] * ws_.e[idc];
         for (Index b = 0; b < Dim(); ++b)
-          S2n(a, b) += cshift(idc, a) * cshift(idc, b) * e(idc);
+          ws_.S2n[a][b] += ws_.cshift[idc][a] * ws_.cshift[idc][b] * ws_.e[idc];
       }
     }
-    if (bad || Z <= tiny)
+    if (bad || Z <= kTiny_)
       break;
 
     // m(xi) = S1n / Z
-    Vector<Scalar_, Dim()> mxi = S1n / Z;
+    ws_.mcand[0] = ws_.S1n[0] / Z;
+    ws_.mcand[1] = ws_.S1n[1] / Z;
 
     // Residual r = mxi - m_target
-    Vector<Scalar_, Dim()> r = mxi - m_target;
-    const Scalar_ rn = r.norm();
+    ws_.r[0] = ws_.mcand[0] - ws_.m_target[0];
+    ws_.r[1] = ws_.mcand[1] - ws_.m_target[1];
+    const Scalar rn = sqrt(ws_.r[0] * ws_.r[0] + ws_.r[1] * ws_.r[1]);
     if (rn / mScale < tolRel) {
       xiConverged = true;
       break;
     }
 
     // Jacobian J = Cov = S2n / Z - mxi * mxi^T  (2x2 SPD)
-    Matrix<Scalar_, Dim(), Dim()> J = (S2n / Z) - (mxi * mxi.transpose());
+    for (int i = 0; i < Dim(); ++i) {
+      for (int j = 0; j < Dim(); ++j) {
+        ws_.J[i][j] = (ws_.S2n[i][j] / Z) - (ws_.mcand[i] * ws_.mcand[j]);
+      }
+    }
 
     // If J is nearly singular, add tiny LM regularizer
-    Scalar_ lm = Scalar_(0.0);
-    Eigen::LDLT<Matrix<Scalar_, Dim(), Dim()>> ldlt;
-    ldlt.compute(J);
-    if (ldlt.info() != Eigen::Success || std::abs(ldlt.rcond()) < Scalar_(1e-16)) {
+    Scalar lm = Scalar(0.0);
+    Scalar J_00 = ws_.J[0][0], J_01 = ws_.J[0][1], J_11 = ws_.J[1][1];
+    Scalar detJ = J_00 * J_11 - J_01 * J_01;
+
+    if (J_00 <= 0 || detJ <= (sizeof(Scalar) == sizeof(float) ? FLT_EPSILON : DBL_EPSILON)) {
       // Add small diagonal (Levenberg-Marquardt) and retry
-      lm = std::max(Scalar_(1.0e-12), Scalar_(1.0e-6) * J.trace());
-      Matrix<Scalar_, Dim(), Dim()> Jreg = J;
-      Jreg(0, 0) += lm;
-      Jreg(1, 1) += lm;
-      ldlt.compute(Jreg);
-      if (ldlt.info() != Eigen::Success) {
+      lm = ((Scalar(1.0e-12)) > (Scalar(1.0e-6) * (J_00 + J_11)) ? (Scalar(1.0e-12)) : (Scalar(1.0e-6) * (J_00 + J_11)));
+      J_00 += lm;
+      J_11 += lm;
+      detJ = J_00 * J_11 - J_01 * J_01;
+      if (fabs(detJ) < (sizeof(Scalar) == sizeof(float) ? FLT_EPSILON : DBL_EPSILON)) {
         // Cannot solve, break to fallback
         break;
       }
     }
 
     // Newton step: delta = -J^{-1} r
-    Vector<Scalar_, Dim()> delta = ldlt.solve(-r);
-    if (!delta.allFinite())
+    const Scalar invDetJ = Scalar(1.0) / detJ;
+    ws_.delta[0] = invDetJ * (J_11 * (-ws_.r[0]) - J_01 * (-ws_.r[1]));
+    ws_.delta[1] = invDetJ * (-J_01 * (-ws_.r[0]) + J_00 * (-ws_.r[1]));
+    if (!isfinite(ws_.delta[0]) || !isfinite(ws_.delta[1]))
       break;
 
     // Damped line-search on xi: try full step then backtrack if residual norm not improved
-    Scalar_ alpha = Scalar_(1.0);
-    const Scalar_ alphaMin = Scalar_(1.0e-12);
-    Scalar_ bestRn = rn;
-    Vector<Scalar_, Dim()> bestXi = xi;
+    Scalar alpha = Scalar(1.0);
+    const Scalar alphaMin = Scalar(1.0e-12);
+    Scalar bestRn = rn;
+    ws_.bestXi[0] = ws_.xi[0];
+    ws_.bestXi[1] = ws_.xi[1];
     bool accepted = false;
     for (int ls = 0; ls < 20; ++ls) {
-      Vector<Scalar_, Dim()> xicand = xi + alpha * delta;
+      ws_.xicand[0] = ws_.xi[0] + alpha * ws_.delta[0];
+      ws_.xicand[1] = ws_.xi[1] + alpha * ws_.delta[1];
 
       // Quick evaluation of residual at xicand (repeat same routine)
       // Compute s_i, smax, e_i, Z, S1n
-      Scalar_ candSmax = -std::numeric_limits<Scalar_>::infinity();
+      Scalar candSmax = -HUGE_VAL;
 #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc) {
-        Scalar_ dot = Scalar_(0);
+        Scalar dot = Scalar(0);
         for (Index d = 0; d < Dim(); ++d)
-          dot += xicand(d) * cshift(idc, d);
+          dot += ws_.xicand[d] * ws_.cshift[idc][d];
         if (dot > candSmax)
           candSmax = dot;
       }
@@ -536,58 +626,66 @@ auto LbmD2Q9<Scalar_>::computeGeq() -> void {
       if (candSmax < -kMaxExp_)
         candSmax = -kMaxExp_;
 
-      Scalar_ Zc = Scalar_(0);
-      Vector<Scalar_, Dim()> S1n_c = Vector<Scalar_, Dim()>::Zero();
+      Scalar Zc = Scalar(0);
+      for (Index i = 0; i < Dim(); ++i) { ws_.S1n_c[i] = Scalar(0); }
       bool badc = false;
       for (Index idc = 0; idc < Speeds(); ++idc) {
-        Scalar_ dot = Scalar_(0);
+        Scalar dot = Scalar(0);
         for (Index d = 0; d < Dim(); ++d)
-          dot += xicand(d) * cshift(idc, d);
-        Scalar_ expo = dot - candSmax;
+          dot += ws_.xicand[d] * ws_.cshift[idc][d];
+        Scalar expo = dot - candSmax;
         if (expo > kMaxExp_)
           expo = kMaxExp_;
         if (expo < -kMaxExp_)
           expo = -kMaxExp_;
-        Scalar_ ev = std::exp(expo);
-        if (!std::isfinite(ev)) {
+        Scalar ev = exp(expo);
+        if (!isfinite(ev)) {
           badc = true;
           break;
         }
-        Scalar_ ei = Wi(idc) * ev;
+        Scalar ei = ws_.Wi[idc] * ev;
         Zc += ei;
         for (Index a = 0; a < Dim(); ++a)
-          S1n_c(a) += cshift(idc, a) * ei;
+          ws_.S1n_c[a] += ws_.cshift[idc][a] * ei;
       }
-      if (badc || Zc <= tiny) {
-        alpha *= Scalar_(0.5);
+      if (badc || Zc <= kTiny_) {
+        alpha *= Scalar(0.5);
         if (alpha < alphaMin)
           break;
         continue;
       }
 
-      Vector<Scalar_, Dim()> mcand = S1n_c / Zc;
-      const Scalar_ rn_cand = (mcand - m_target).norm();
+      ws_.mcand[0] = ws_.S1n_c[0] / Zc;
+      ws_.mcand[1] = ws_.S1n_c[1] / Zc;
+      const Scalar r0_cand = ws_.mcand[0] - ws_.m_target[0];
+      const Scalar r1_cand = ws_.mcand[1] - ws_.m_target[1];
+      const Scalar rn_cand = sqrt(r0_cand * r0_cand + r1_cand * r1_cand);
 
       if (rn_cand < bestRn) {
         bestRn = rn_cand;
-        bestXi = xicand;
+        ws_.bestXi[0] = ws_.xicand[0];
+        ws_.bestXi[1] = ws_.xicand[1];
         accepted = true;
         break;
       }
-      alpha *= Scalar_(0.5);
+      alpha *= Scalar(0.5);
       if (alpha < alphaMin)
         break;
     }
 
     // Fallback to tiny step
     if (!accepted) {
-      xi += Scalar_(1e-6) * delta;
+      ws_.xi[0] += Scalar(1e-6) * ws_.delta[0];
+      ws_.xi[1] += Scalar(1e-6) * ws_.delta[1];
     } else {
-      xi = bestXi;
+      ws_.xi[0] = ws_.bestXi[0];
+      ws_.xi[1] = ws_.bestXi[1];
     }
 
     // Check small delta
-    if (delta.cwiseAbs().maxCoeff() < tiny) {
+    const Scalar abs_d0 = fabs(ws_.delta[0]);
+    const Scalar abs_d1 = fabs(ws_.delta[1]);
+    if ((((abs_d0) > (abs_d1)) ? (abs_d0) : (abs_d1)) < kTiny_) {
       xiConverged = true;
       break;
     }
@@ -597,17 +695,15 @@ auto LbmD2Q9<Scalar_>::computeGeq() -> void {
   bool success = false;
   if (xiConverged) {
     // Final compute of e_i and Z using xi (with smax factoring)
-    Vector<Scalar_, Speeds()> si;
-    si.setZero();
-    Scalar_ smax = -std::numeric_limits<Scalar_>::infinity();
+    Scalar smax = -HUGE_VAL;
 #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc) {
-      Scalar_ dot = Scalar_(0);
+      Scalar dot = Scalar(0);
       for (Index d = 0; d < Dim(); ++d)
-        dot += xi(d) * cshift(idc, d);
-      si(idc) = dot;
-      if (si(idc) > smax)
-        smax = si(idc);
+        dot += ws_.xi[d] * ws_.cshift[idc][d];
+      ws_.si[idc] = dot;
+      if (ws_.si[idc] > smax)
+        smax = ws_.si[idc];
     }
 
     if (smax > kMaxExp_)
@@ -615,57 +711,60 @@ auto LbmD2Q9<Scalar_>::computeGeq() -> void {
     if (smax < -kMaxExp_)
       smax = -kMaxExp_;
 
-    Vector<Scalar_, Speeds()> e;
-    e.setZero();
-    Scalar_ Z = Scalar_(0);
+    for (Index i = 0; i < Speeds(); ++i) { ws_.e[i] = Scalar(0); }
+    Scalar Z = Scalar(0);
 #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc) {
-      Scalar_ expo = si(idc) - smax;
+      Scalar expo = ws_.si[idc] - smax;
 
       if (expo > kMaxExp_)
         expo = kMaxExp_;
       if (expo < -kMaxExp_)
         expo = -kMaxExp_;
 
-      Scalar_ ev = std::exp(expo);
-      if (!std::isfinite(ev)) {
-        Z = Scalar_(0);
+      Scalar ev = exp(expo);
+      if (!isfinite(ev)) {
+        Z = Scalar(0);
         break;
       }
 
-      e(idc) = Wi(idc) * ev;
-      Z += e(idc);
+      ws_.e[idc] = ws_.Wi[idc] * ev;
+      Z += ws_.e[idc];
     }
 
-    if (Z > tiny) {
+    if (Z > kTiny_) {
       // Scale factor so that sum geq = targetE: geq_i = (targetE / Z) * e_i
-      const Scalar_ scaleFactor = targetE / Z;
+      const Scalar scaleFactor = targetE / Z;
 #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc)
-        geq_(idc) = scaleFactor * e(idc);
+        geq[idc] = scaleFactor * ws_.e[idc];
 
       // Final sanity test: recompute S1 and check it matches targetQ (within FP)
-      Vector<Scalar_, Dim()> S1final = Vector<Scalar_, Dim()>::Zero();
-      Scalar_ S0final = Scalar_(0);
+      for (Index i = 0; i < Dim(); ++i) { ws_.S1final[i] = Scalar(0); }
+      Scalar S0final = Scalar(0);
 #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc) {
-        S0final += geq_(idc);
+        S0final += geq[idc];
         for (Index d = 0; d < Dim(); ++d)
-          S1final(d) += cshift(idc, d) * geq_(idc);
+          ws_.S1final[d] += ws_.cshift[idc][d] * geq[idc];
       }
 
       // Small numerical tolerance check
-      const Scalar_ tol_check = Scalar_(1e-10) * std::max(Scalar_(1.0), std::abs(targetE));
-      if (std::abs(S0final - targetE) < tol_check && (S1final - targetQ).norm() / std::max(Scalar_(1.0), targetQ.norm()) < Scalar_(1e-9)) {
+      const Scalar s1_final_0_minus_target = ws_.S1final[0] - ws_.targetQ[0];
+      const Scalar s1_final_1_minus_target = ws_.S1final[1] - ws_.targetQ[1];
+      const Scalar s1_minus_target_norm =
+        sqrt(s1_final_0_minus_target * s1_final_0_minus_target + s1_final_1_minus_target * s1_final_1_minus_target);
+      const Scalar targetQ_norm = sqrt(ws_.targetQ[0] * ws_.targetQ[0] + ws_.targetQ[1] * ws_.targetQ[1]);
+      const Scalar tol_check = Scalar(1e-10) * (((Scalar(1.0)) > (fabs(targetE))) ? (Scalar(1.0)) : (fabs(targetE)));
+      if (fabs(S0final - targetE) < tol_check && s1_minus_target_norm / (((Scalar(1.0)) > (targetQ_norm)) ? (Scalar(1.0)) : (targetQ_norm)) < Scalar(1e-9)) {
         // Success; store multipliers for warm start (chi recovered from scaleFactor and smax if wanted)
 
         // Compute chi from scaleFactor relation: scaleFactor = rho * exp(chi + smax)
         // => chi = log(scaleFactor / rho) - smax
-        const Scalar_ chi_val = std::log(scaleFactor / (*rho_)) - smax;
-        lastGx_(0) = chi_val;
-        lastGx_(1) = xi(0);
-        lastGx_(2) = xi(1);
-        lastGxValid_ = true;
+        const Scalar chi_val = log(scaleFactor / (*rho)) - smax;
+        lastGx[0] = chi_val;
+        lastGx[1] = ws_.xi[0];
+        lastGx[2] = ws_.xi[1];
         success = true;
       } else {
         // Numerical mismatch (rare): fall through to fallback below
@@ -675,26 +774,30 @@ auto LbmD2Q9<Scalar_>::computeGeq() -> void {
 
   // Fallback: conservative normalized-Wi distribution (if solver failed)
   if (!success) {
-    lastGxValid_ = false;
-    const Scalar_ total = Scalar_(2.0) * (*rho_) * E;
-    Scalar_ sumW = Scalar_(0);
+    for (Index iddP1 = 0; iddP1 < Dim() + 1; ++iddP1)
+      lastGx[iddP1] = Scalar(0.0);
+
+    const Scalar total = Scalar(2.0) * (*rho) * E;
+    Scalar sumW = Scalar(0);
 #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc)
-      sumW += Wi(idc);
+      sumW += ws_.Wi[idc];
 
-    if (sumW <= tiny) {
-      const Scalar_ uni = total / Scalar_(Speeds());
+    if (sumW <= kTiny_) {
+      const Scalar uni = total / Scalar(Speeds());
 #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc)
-        geq_(idc) = uni;
+        geq[idc] = uni;
     } else {
-      const Scalar_ uni = total / sumW;
+      const Scalar uni = total / sumW;
 #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc)
-        geq_(idc) = Wi(idc) * uni;
+        geq[idc] = ws_.Wi[idc] * uni;
     }
   }
 }
+
+#pragma omp end declare target
 } // namespace lbmini::openmp
 
 #endif // LBMINI_OPENMP_LBMD2Q9_HPP_

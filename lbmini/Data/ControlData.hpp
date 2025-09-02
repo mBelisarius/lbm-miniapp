@@ -4,19 +4,18 @@
 #include <Eigen/Dense>
 
 namespace lbmini {
-
-template <typename Scalar_>
+template<typename Scalar>
 struct ControlData {
   using Index = Eigen::Index;
 
-  Scalar_ tmax;     // Simulation time
-  Scalar_ Ux;       // Shifted lattice velocity in x-direction
-  Scalar_ Uy;       // Shifted lattice velocity in y-direction
-  Scalar_ Uz;       // Shifted lattice velocity in z-direction
-  Scalar_ idw;      // Inverse density weighting
-  Index printStep;  // Printing frequency
+  Scalar tmax;     // Simulation time
+  Scalar Ux;       // Shifted lattice velocity in x-direction
+  Scalar Uy;       // Shifted lattice velocity in y-direction
+  Scalar Uz;       // Shifted lattice velocity in z-direction
+  Scalar idw;      // Inverse density weighting
+  Index printStep; // Printing frequency
 
-  Scalar_ U(const Index d) const {
+  Scalar U(const Index d) const {
     if (d == 0)
       return Ux;
     if (d == 1)
@@ -26,7 +25,6 @@ struct ControlData {
     return 0;
   }
 };
-
-}  // namespace lbmini
+} // namespace lbmini
 
 #endif  // LBMINI_CONTROL_DATA_HPP_

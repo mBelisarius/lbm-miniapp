@@ -11,53 +11,52 @@
 #include "Data/PerformanceData.hpp"
 
 namespace lbmini {
-template<typename Scalar_, Eigen::Index dim_>
-std::tuple<FluidData<Scalar_>, MeshData<Scalar_, dim_>, ControlData<Scalar_>, PerformanceData>
+template<typename Scalar, Eigen::Index Dim>
+std::tuple<FluidData<Scalar>, MeshData<Scalar, Dim>, ControlData<Scalar>, PerformanceData>
 ReadYaml(const std::string& filename) {
   using Index = Eigen::Index;
 
   YAML::Node config = YAML::LoadFile(filename);
 
-  FluidData<Scalar_> fluid;
-  fluid.densityL = config["Fluid"]["densityL"].as<Scalar_>();
-  fluid.pressureL = config["Fluid"]["pressureL"].as<Scalar_>();
-  fluid.densityR = config["Fluid"]["densityR"].as<Scalar_>();
-  fluid.pressureR = config["Fluid"]["pressureR"].as<Scalar_>();
-  fluid.viscosity = config["Fluid"]["viscosity"].as<Scalar_>();
-  fluid.prandtl = config["Fluid"]["prandtl"].as<Scalar_>();
-  fluid.gamma = config["Fluid"]["gamma"].as<Scalar_>();
-  fluid.specificHeatCv = Scalar_(1.0) / (fluid.gamma - Scalar_(1.0));
-  fluid.specificHeatCp = fluid.specificHeatCv + Scalar_(1.0);
+  FluidData<Scalar> fluid{};
+  fluid.densityL = config["Fluid"]["densityL"].as<Scalar>();
+  fluid.pressureL = config["Fluid"]["pressureL"].as<Scalar>();
+  fluid.densityR = config["Fluid"]["densityR"].as<Scalar>();
+  fluid.pressureR = config["Fluid"]["pressureR"].as<Scalar>();
+  fluid.viscosity = config["Fluid"]["viscosity"].as<Scalar>();
+  fluid.prandtl = config["Fluid"]["prandtl"].as<Scalar>();
+  fluid.gamma = config["Fluid"]["gamma"].as<Scalar>();
+  fluid.specificHeatCv = Scalar(1.0) / (fluid.gamma - Scalar(1.0));
+  fluid.specificHeatCp = fluid.specificHeatCv + Scalar(1.0);
   fluid.constant = fluid.specificHeatCp - fluid.specificHeatCv;
   fluid.conductivity = fluid.specificHeatCp * fluid.viscosity / fluid.prandtl;
 
-  MeshData<Scalar_, dim_> mesh;
-  mesh.lenght[0] = config["Mesh"]["lx"].as<Scalar_>();
+  MeshData<Scalar, Dim> mesh{};
+  mesh.lenght[0] = config["Mesh"]["lx"].as<Scalar>();
   mesh.size[0] = config["Mesh"]["nx"].as<Index>();
 
-  ControlData<Scalar_> control;
-  control.tmax = config["Control"]["tmax"].as<Scalar_>();
-  control.Ux = config["Control"]["Ux"].as<Scalar_>();
-  control.idw = config["Control"]["idw"].as<Scalar_>();
+  ControlData<Scalar> control{};
+  control.tmax = config["Control"]["tmax"].as<Scalar>();
+  control.Ux = config["Control"]["Ux"].as<Scalar>();
+  control.idw = config["Control"]["idw"].as<Scalar>();
   control.printStep = config["Control"]["printStep"].as<Index>();
 
-  PerformanceData performance;
+  PerformanceData performance{};
   performance.backend = config["Performance"]["backend"].as<Index>();
   performance.cores = config["Performance"]["cores"].as<Index>();
-  performance.tileSize = config["Performance"]["tileSize"].as<Index>();
 
-  if (dim_ >= 2) {
-    mesh.lenght[1] = config["Mesh"]["ly"].as<Scalar_>();
+  if (Dim >= 2) {
+    mesh.lenght[1] = config["Mesh"]["ly"].as<Scalar>();
     mesh.size[1] = config["Mesh"]["ny"].as<Index>();
 
-    control.Uy = config["Control"]["Uy"].as<Scalar_>();
+    control.Uy = config["Control"]["Uy"].as<Scalar>();
   }
 
-  if (dim_ >= 3) {
-    mesh.lenght[2] = config["Mesh"]["lz"].as<Scalar_>();
+  if (Dim >= 3) {
+    mesh.lenght[2] = config["Mesh"]["lz"].as<Scalar>();
     mesh.size[2] = config["Mesh"]["nz"].as<Index>();
 
-    control.Uz = config["Control"]["Uz"].as<Scalar_>();
+    control.Uz = config["Control"]["Uz"].as<Scalar>();
   }
 
   return { fluid, mesh, control, performance };

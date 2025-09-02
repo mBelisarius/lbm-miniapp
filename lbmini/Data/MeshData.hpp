@@ -5,24 +5,24 @@
 
 namespace lbmini {
 
-template <typename Scalar_, Eigen::Index dim_>
+template <typename Scalar, Eigen::Index Dim>
 struct MeshData {
   using Index = Eigen::Index;
 
-  Eigen::Array<Scalar_, dim_, 1> lenght;
-  Eigen::Array<Index, dim_, 1> size;
+  Scalar lenght[Dim];
+  Index size[Dim];
 
-  Scalar_ lx() const { return lenght[0]; }
+  Scalar lx() const { return lenght[0]; }
 
-  Scalar_ ly() const {
-    if constexpr (dim_ >= 2)
+  Scalar ly() const {
+    if constexpr (Dim >= 2)
       return lenght[1];
 
     return 0;
   }
 
-  Scalar_ lz() const {
-    if constexpr (dim_ >= 3)
+  Scalar lz() const {
+    if constexpr (Dim >= 3)
       return lenght[2];
 
     return 0;
@@ -31,14 +31,14 @@ struct MeshData {
   Index nx() const { return size[0]; }
 
   Index ny() const {
-    if constexpr (dim_ >= 2)
+    if constexpr (Dim >= 2)
       return size[1];
 
     return 0;
   }
 
   Index nz() const {
-    if constexpr (dim_ >= 3)
+    if constexpr (Dim >= 3)
       return size[2];
 
     return 0;

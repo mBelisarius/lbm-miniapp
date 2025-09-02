@@ -46,6 +46,8 @@ public:
 
   void Step();
 
+  void Run(Index steps);
+
 protected:
   template<typename Func>
   void iterateDim(Func func);
@@ -185,6 +187,12 @@ void LbmTube<Scalar_, LbmClassType_>::Step() {
       lattices_(idx[0], idx[1]).ComputeMacroscopic();
     }
   );
+}
+
+template<typename Scalar_, typename LbmClassType_>
+void LbmTube<Scalar_, LbmClassType_>::Run(Index steps) {
+  for (Index step = 0; step < steps; ++step)
+    Step();
 }
 
 template<typename Scalar_, typename LbmClassType_>
