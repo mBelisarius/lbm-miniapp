@@ -120,6 +120,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 add_library("${ProjectName}-data" STATIC
         lbmini/Data.hpp
         lbmini/Data/ControlData.hpp
+        lbmini/Data/DataEnums.hpp
         lbmini/Data/DataReader.hpp
         lbmini/Data/FluidData.hpp
         lbmini/Data/MeshData.hpp
@@ -143,8 +144,10 @@ target_link_libraries("${ProjectName}-data"
 add_library(
         "${ProjectName}-lbm" STATIC
         lbmini/Lbm/LbmBase.hpp
-        lbmini/Lbm/OpenMp/LbmD2Q9.hpp
-        lbmini/Lbm/OpenMp/LbmTube.hpp
+        lbmini/Lbm/OpenMpCpu/LbmD2Q9.hpp
+        lbmini/Lbm/OpenMpCpu/LbmTube.hpp
+        lbmini/Lbm/OpenMpGpu/LbmD2Q9.hpp
+        lbmini/Lbm/OpenMpGpu/LbmTube.hpp
         lbmini/Lbm/Plain/LbmD2Q9.hpp
         lbmini/Lbm/Plain/LbmTube.hpp
         lbmini/Utils.hpp

@@ -4,8 +4,7 @@
 #include <Eigen/Dense>
 
 namespace lbmini {
-
-template <typename Scalar, Eigen::Index Dim>
+template<typename Scalar, Eigen::Index Dim>
 struct MeshData {
   using Index = Eigen::Index;
 
@@ -44,7 +43,6 @@ struct MeshData {
     return 0;
   }
 };
-
-}  // namespace lbmini
+} // namespace lbmini
 
 #endif  // LBMINI_DATA_MESH_DATA_HPP_

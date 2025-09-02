@@ -1,5 +1,5 @@
-#ifndef LBMINI_OPENMP_LBMTUBE_HPP_
-#define LBMINI_OPENMP_LBMTUBE_HPP_
+#ifndef LBMINI_OPENMPGPU_LBMTUBE_HPP_
+#define LBMINI_OPENMPGPU_LBMTUBE_HPP_
 
 #include <Eigen/Dense>
 #include <omp.h>
@@ -9,7 +9,7 @@
 
 #include "Data.hpp"
 
-namespace lbmini::openmp {
+namespace lbmini::openmp::gpu {
 // Forward declaration
 template<typename>
 class LbmD2Q9;
@@ -418,5 +418,6 @@ void LbmTube<Scalar_, LbmClassType_>::Run(Index steps) {
     }
   }
 }
-}
-#endif
+} // namespace lbmini::openmp::gpu
+
+#endif // LBMINI_OPENMPGPU_LBMTUBE_HPP_

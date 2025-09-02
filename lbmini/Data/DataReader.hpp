@@ -6,6 +6,7 @@
 #include <tuple>
 
 #include "Data/ControlData.hpp"
+#include "Data/DataEnums.hpp"
 #include "Data/FluidData.hpp"
 #include "Data/MeshData.hpp"
 #include "Data/PerformanceData.hpp"
@@ -42,7 +43,8 @@ ReadYaml(const std::string& filename) {
   control.printStep = config["Control"]["printStep"].as<Index>();
 
   PerformanceData performance{};
-  performance.backend = config["Performance"]["backend"].as<Index>();
+  performance.target = config["Performance"]["target"].as<TargetEnum>();
+  performance.backend = config["Performance"]["backend"].as<BackendEnum>();
   performance.cores = config["Performance"]["cores"].as<Index>();
 
   if (Dim >= 2) {

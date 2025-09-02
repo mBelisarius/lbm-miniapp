@@ -6,10 +6,13 @@
 #include <string>
 #include <unsupported/Eigen/CXX11/Tensor>
 #include <chrono>
+#include <omp.h>
 
 #include "Data.hpp"
-#include "Lbm/OpenMp/LbmD2Q9.hpp"
-#include "Lbm/OpenMp/LbmTube.hpp"
+#include "Lbm/OpenMpCpu/LbmD2Q9.hpp"
+#include "Lbm/OpenMpCpu/LbmTube.hpp"
+#include "Lbm/OpenMpGpu/LbmD2Q9.hpp"
+#include "Lbm/OpenMpGpu/LbmTube.hpp"
 #include "Lbm/Plain/LbmD2Q9.hpp"
 #include "Lbm/Plain/LbmTube.hpp"
 
@@ -60,7 +63,7 @@ void run(
   OutputData(lbmTube, mesh, 0, outpath, 0.0);
 
   const Index stepsPerOutput = std::max(kSteps / control.printStep, Index(1));
-  for (Index i = 0; i < kSteps; ) {
+  for (Index i = 0; i < kSteps;) {
     const Index stepsPerChunk = std::min(stepsPerOutput, kSteps - i);
     lbmTube.Run(stepsPerChunk);
     i += stepsPerChunk;
@@ -115,36 +118,79 @@ int main(int argc, char* argv[]) {
   const auto start_time = std::chrono::high_resolution_clock::now();
 
   // LBM simulation
-  if (performance.backend == 0) {
-    std::cout << "Using plain backend." << std::endl;
-    using LbmLattice = lbmini::plain::LbmD2Q9<Scalar>;
-    using LbmTube = lbmini::plain::LbmTube<Scalar, LbmLattice>;
-    run<Scalar, LbmLattice, LbmTube>(
-      fluid,
-      mesh,
-      control,
-      performance,
-      output_path,
-      kSteps,
-      start_time
-    );
-  } else if (performance.backend == 1) {
-    std::cout << "Using OpenMP backend." << std::endl;
-    using LbmLattice = lbmini::openmp::LbmD2Q9<Scalar>;
-    using LbmTube = lbmini::openmp::LbmTube<Scalar, LbmLattice>;
-    run<Scalar, LbmLattice, LbmTube>(
-      fluid,
-      mesh,
-      control,
-      performance,
-      output_path,
-      kSteps,
-      start_time
-    );
-  } else {
-    std::cerr << "Invalid backend selected" << std::endl;
-    return 1;
-  }
+  switch (performance.target) {
+    case lbmini::TargetEnum::CPU: {
+      switch (performance.backend) {
+        case lbmini::BackendEnum::Plain: {
+          std::cout << "Using plain backend." << std::endl;
+          using LbmLattice = lbmini::plain::LbmD2Q9<Scalar>;
+          using LbmTube = lbmini::plain::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmLattice, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            output_path,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        case lbmini::BackendEnum::OpenMP: {
+          std::cout << "Using OpenMP backend on CPU." << std::endl;
+          omp_set_default_device(0);
+          using LbmLattice = lbmini::openmp::cpu::LbmD2Q9<Scalar>;
+          using LbmTube = lbmini::openmp::cpu::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmLattice, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            output_path,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        default: {
+          std::cerr << "Invalid backend selected for CPU." << std::endl;
+          return 1;
+        }
+      };
+      break;
+    }
+
+    case lbmini::TargetEnum::GPU: {
+      switch (performance.backend) {
+        case lbmini::BackendEnum::OpenMP: {
+          std::cout << "Using OpenMP backend on GPU." << std::endl;
+          omp_set_default_device(1);
+          using LbmLattice = lbmini::openmp::gpu::LbmD2Q9<Scalar>;
+          using LbmTube = lbmini::openmp::gpu::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmLattice, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            output_path,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        default: {
+          std::cerr << "Invalid backend selected for GPU." << std::endl;
+          return 1;
+        }
+      };
+      break;
+    }
+
+    default: {
+      std::cerr << "Invalid target selected." << std::endl;
+      return 1;
+    }
+  };
 
   const auto end_time = std::chrono::high_resolution_clock::now();
   const std::chrono::duration<double> elapsed_time = end_time - start_time;

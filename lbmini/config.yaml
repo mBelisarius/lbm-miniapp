@@ -24,5 +24,6 @@ Control:
     printStep: 100
 
 Performance:
-    backend: 1     # Backend to use (0: plain; 1: OpenMP; 2: OpenACC)
-    cores: 0       # Number of cores (0 for auto)
+    target: CPU     # Target device (CPU; GPU)
+    backend: Plain  # Backend to use (Plain; OpenMP)
+    cores: 0        # Number of CPU cores (0 for auto)

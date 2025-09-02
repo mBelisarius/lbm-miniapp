@@ -1,5 +1,5 @@
-#ifndef LBMINI_OPENMP_LBMD2Q9_HPP_
-#define LBMINI_OPENMP_LBMD2Q9_HPP_
+#ifndef LBMINI_OPENMPGPU_LBMD2Q9_HPP_
+#define LBMINI_OPENMPGPU_LBMD2Q9_HPP_
 
 #include <cmath>
 #include <cfloat>
@@ -8,7 +8,7 @@
 #include "Data/FluidData.hpp"
 #include "Lbm/LbmBase.hpp"
 
-namespace lbmini::openmp {
+namespace lbmini::openmp::gpu {
 template<typename Scalar>
 class LbmD2Q9 {
 public:
@@ -16,6 +16,7 @@ public:
 
   // using Base = LbmClassBase<Scalar, 2, 9>;
   // using Base::Dim, Base::Speeds;
+
   static constexpr Index Dim() { return 2; }
 
   static constexpr Index Speeds() { return 9; }
@@ -220,7 +221,7 @@ auto LbmD2Q9<Scalar>::Init(
   // Initialize g to geq
   computeGeq(rho, p, tem, u, f, feq, g, geq, lastGx, pFluid, pControl);
 
-#pragma omp simd
+  #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
     f[idc] = feq[idc];
     g[idc] = geq[idc];
@@ -255,7 +256,7 @@ auto LbmD2Q9<Scalar>::ComputeMacroscopic(
     ws_.mom[i] = Scalar(0.0);
   }
 
-#pragma omp simd
+  #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
     *rho += f[idc];
     nrg += g[idc];
@@ -316,7 +317,7 @@ auto LbmD2Q9<Scalar>::Collision(
 
   // Knudsen sensor epsilon (Eq. 19)
   Scalar eps = Scalar(0.0);
-#pragma omp simd
+  #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
     Scalar diff = f[idc] - feq[idc];
     eps += fabs(diff) / (((feq[idc]) > (kTiny_)) ? (feq[idc]) : (kTiny_));
@@ -356,7 +357,7 @@ auto LbmD2Q9<Scalar>::Collision(
   for (Index a = 0; a < Dim(); ++a) {
     for (Index b = 0; b < Dim(); ++b) {
       Scalar p_ab = 0, peq_ab = 0;
-#pragma omp simd
+      #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc) {
         Scalar cia = static_cast<Scalar>(Velocity(idc, a));
         Scalar cib = static_cast<Scalar>(Velocity(idc, b));
@@ -371,7 +372,7 @@ auto LbmD2Q9<Scalar>::Collision(
   }
 
   // Collisions
-#pragma omp simd
+  #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
     // f distribution
     f[idc] += omegaLoc * (feq[idc] - f[idc]);
@@ -427,7 +428,7 @@ auto LbmD2Q9<Scalar>::computeFeq(
   const FluidData<Scalar>& pFluid,
   const ControlData<Scalar>& pControl
 ) -> void {
-#pragma omp simd
+  #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
     feq[idc] = *rho;
     for (Index idd = 0; idd < Dim(); ++idd)
@@ -458,7 +459,7 @@ auto LbmD2Q9<Scalar>::computeGeq(
   Scalar E = pFluid.specificHeatCv * (*tem) + Scalar(0.5) * u2;
 
   // Precompute Wi (axis product) and shifted velocities cshift = c + U
-#pragma omp simd
+  #pragma omp simd
   for (Index idc = 0; idc < Speeds(); ++idc) {
     ws_.Wi[idc] = Weights(idc, *tem);
     for (Index d = 0; d < Dim(); ++d)
@@ -474,7 +475,7 @@ auto LbmD2Q9<Scalar>::computeGeq(
   if (targetE <= Scalar(0.0)) {
     // fallback: simple equal distribution
     const Scalar total = Scalar(2.0) * (*rho) * E;
-#pragma omp simd
+    #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc)
       geq[idc] = total / Scalar(Speeds());
 
@@ -507,7 +508,7 @@ auto LbmD2Q9<Scalar>::computeGeq(
   for (Index iter = 0; iter < maxIter; ++iter) {
     // Compute s_i = xi · c_i and smax for numeric stability
     Scalar smax = -HUGE_VAL;
-#pragma omp simd
+    #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc) {
       Scalar dot = Scalar(0);
       for (Index d = 0; d < Dim(); ++d)
@@ -613,7 +614,7 @@ auto LbmD2Q9<Scalar>::computeGeq(
       // Quick evaluation of residual at xicand (repeat same routine)
       // Compute s_i, smax, e_i, Z, S1n
       Scalar candSmax = -HUGE_VAL;
-#pragma omp simd
+      #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc) {
         Scalar dot = Scalar(0);
         for (Index d = 0; d < Dim(); ++d)
@@ -696,7 +697,7 @@ auto LbmD2Q9<Scalar>::computeGeq(
   if (xiConverged) {
     // Final compute of e_i and Z using xi (with smax factoring)
     Scalar smax = -HUGE_VAL;
-#pragma omp simd
+    #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc) {
       Scalar dot = Scalar(0);
       for (Index d = 0; d < Dim(); ++d)
@@ -713,7 +714,7 @@ auto LbmD2Q9<Scalar>::computeGeq(
 
     for (Index i = 0; i < Speeds(); ++i) { ws_.e[i] = Scalar(0); }
     Scalar Z = Scalar(0);
-#pragma omp simd
+    #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc) {
       Scalar expo = ws_.si[idc] - smax;
 
@@ -735,14 +736,14 @@ auto LbmD2Q9<Scalar>::computeGeq(
     if (Z > kTiny_) {
       // Scale factor so that sum geq = targetE: geq_i = (targetE / Z) * e_i
       const Scalar scaleFactor = targetE / Z;
-#pragma omp simd
+      #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc)
         geq[idc] = scaleFactor * ws_.e[idc];
 
       // Final sanity test: recompute S1 and check it matches targetQ (within FP)
       for (Index i = 0; i < Dim(); ++i) { ws_.S1final[i] = Scalar(0); }
       Scalar S0final = Scalar(0);
-#pragma omp simd
+      #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc) {
         S0final += geq[idc];
         for (Index d = 0; d < Dim(); ++d)
@@ -779,18 +780,18 @@ auto LbmD2Q9<Scalar>::computeGeq(
 
     const Scalar total = Scalar(2.0) * (*rho) * E;
     Scalar sumW = Scalar(0);
-#pragma omp simd
+    #pragma omp simd
     for (Index idc = 0; idc < Speeds(); ++idc)
       sumW += ws_.Wi[idc];
 
     if (sumW <= kTiny_) {
       const Scalar uni = total / Scalar(Speeds());
-#pragma omp simd
+      #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc)
         geq[idc] = uni;
     } else {
       const Scalar uni = total / sumW;
-#pragma omp simd
+      #pragma omp simd
       for (Index idc = 0; idc < Speeds(); ++idc)
         geq[idc] = ws_.Wi[idc] * uni;
     }
@@ -798,6 +799,6 @@ auto LbmD2Q9<Scalar>::computeGeq(
 }
 
 #pragma omp end declare target
-} // namespace lbmini::openmp
+} // namespace lbmini::openmp::gpu
 
-#endif // LBMINI_OPENMP_LBMD2Q9_HPP_
+#endif // LBMINI_OPENMPGPU_LBMD2Q9_HPP_
