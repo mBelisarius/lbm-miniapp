@@ -1,0 +1,12 @@
+# Force latexmk to use biber for bibliography processing
+$bibtex_use_biber = 1;
+
+# Always build PDF with pdflatex
+$pdf_mode = 1;
+$pdflatex = 'pdflatex -interaction=nonstopmode -synctex=1 %O %S';
+
+# Run makeindex if needed
+$makeindex = 'makeindex %O -s %S.ist %S';
+
+# Cleanup extensions on latexmk -c
+@generated_exts = (@generated_exts, 'bbl', 'bcf', 'blg', 'run.xml');

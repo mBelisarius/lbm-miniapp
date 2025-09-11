@@ -1,0 +1,196 @@
+%---------------------------------------------------------------------------------------
+
+\chapter[Metodologia]{Metodologia}\label{ch:metodologia}
+
+%---------------------------------------------------------------------------------------
+
+% Lista de abreviaturas e de siglas
+
+%---------------------------------------------------------------------------------------
+
+% Lista de simbolos
+
+%---------------------------------------------------------------------------------------
+
+Apresenta-se a seguir a metodologia de simulação em dinâmica dos fluidos computacional a partir da formulação matemática pelo método de Lattice Boltzmann, suas características, limitações e adaptações para escoamentos compressíveis.
+São descritos o processo de validação através da solução analítica do problema do tubo de Sod utilizado como referência, as métricas de desempenho, as configurações de testes (forte e fraco), e a seleção de tecnologias paralelas.
+
+%---------------------------------------------------------------------------------------
+
+\section{Método de Lattice Boltzmann para Escoamentos Compressíveis}\label{sec:metodo-de-lattice-boltzmann-para-escoamentos-compressiveis}
+
+O LBM resolve a dinâmica de um conjunto de funções de distribuição discretas $f_i(\mathbf{x},t)$ associadas a um conjunto de direções de velocidade $\{\mathbf{c}_i\}_{i=0}^{Q-1}$ sobre uma malha regular, com evolução via esquema colisão–propagação. A formulação clássica de \textcite{Chen1998} emprega o operador BGK, 
+$
+f_i(\mathbf{x}+\mathbf{c}_i\Delta t,t+\Delta t) 
+= f_i(\mathbf{x},t) 
+- \omega \left[f_i(\mathbf{x},t)-f_i^{\text{eq}}(\rho,\mathbf{u},T)\right],
+$
+onde $\omega$ é a taxa de relaxação e $f_i^{\text{eq}}$ é a distribuição de equilíbrio que assegura a recuperação das equações macroscópicas por expansão de Chapman–Enskog.
+Para escoamentos compressíveis, é necessário incorporar energia e variação de temperatura, estendendo o conjunto de momentos conservados e o equilíbrio (por exemplo, a partir de expansões de Hermite de maior ordem ou funções de Maxwell–Boltzmann com dependência em $T$), além de técnicas de estabilização/regularização.
+
+Trabalhos recentes propõem esquemas eficientes em redes padrão como D3Q19/D2Q9 com extensões de termos térmicos e correções de compressibilidade~\cite{Guo2020}, bem como procedimentos de regularização de altos momentos não-equilíbrio para mitigar oscilações próximas a descontinuidades (choques)~\cite{Tran2022}.
+A regularização filtra componentes não-hidrodinâmicas dos tensores de ordem superior antes da colisão, reduzindo ruído e instabilidades numéricas.
+Alternativamente, pode-se empregar modelos com múltiplas relaxações (MRT) e/ou operadores entropicamente estáveis (ELBM), ao custo de maior complexidade.
+
+Neste trabalho, adota-se um conjunto de distribuições e uma colisão compatível com compressibilidade moderada a alta, com:
+\begin{itemize}
+    \item reconstrução de grandezas macroscópicas por momentos de $f_i$ para $\rho$, $\rho\mathbf{u}$ e energia;
+    \item distribuição de equilíbrio $f_i^{\text{eq}}(\rho,\mathbf{u},T)$ construída para recuperar as equações de Euler/Navier–Stokes compressíveis ao nível desejado de ordem;
+    \item regularização iterativa dos momentos não-equilíbrio controlada por um parâmetro de ponderação, visando amortecer overshoots e oscilações de Gibbs em frentes de choque;
+    \item tratamento de condições de contorno compatível com o problema de tubo de choque (estados esquerdo/direito).
+\end{itemize}
+
+%---------------------------------------------------------------------------------------
+
+\section{Problema do Tubo de Choque de Sod}\label{sec:problema-do-tubo-de-choque-de-sod}
+
+% TODO: Desenvolver o texto.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Solução Numérica Utilizando o Método LBM}\label{subsec:solucao-numerica-utilizando-o-metodo-lbm}
+
+% TODO: Desenvolver o texto.
+% TODO: Melhorar o texto sobre as condições de contorno.
+
+Para o tubo de choque 3D com perturbação unidimensional, utilizam-se:
+
+\begin{itemize}
+    \item Contorno permissivo (saída não refletiva) nas extremidades longitudinais: as distribuições que advêm do exterior do domínio são reconstruídas a partir do estado macroscópico adjacente (extrapolação de primeira ordem) ou de um estado-alvo suave, minimizando reflexões espúrias;
+    \item Periodicidade nas demais direções (transversais), obtida copiando as distribuições que saem por uma face para a face oposta;
+    \item Inicialização com estados esquerdo/direito ($L/R$) separados por membrana em $x_0$, impondo $(\rho,p,\mathbf{u})$ distintos nos subdomínios.
+\end{itemize}
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Solução Analítica}\label{subsec:solucao-analitica}
+
+\todo{Escrever a formulação da solução analítica completa.}
+
+Para validação, utiliza-se o problema de Riemann unidimensional (tubo de choque de Sod), com estados iniciais à esquerda (L) e à direita (R): $\left(\rho_L, u_L, p_L\right)$ e $\left(\rho_R, u_R, p_R\right)$, separados por uma membrana na posição $x_0$.
+A solução analítica para um gás ideal com razão de calores $\gamma$ envolve a interação de três ondas: (i) uma onda de rarefação, (ii) uma onda de contato e (iii) uma onda de choque.
+O perfil ao tempo $t>0$ é calculado resolvendo-se o sistema de equações de Rankine–Hugoniot para as regiões e a compatibilidade através da rarefação, obtendo $p^\ast$ e $u^\ast$ no estado intermediário.
+A partir de $p^\ast, u^\ast$, determinam-se as posições das frentes e os perfis de $\rho(x,t)$, $u(x,t)$ e $p(x,t)$.
+
+No contexto deste estudo, a solução de referência é utilizada para:
+\begin{itemize}
+    \item normalizar grandezas simuladas (por exemplo, adimensionar $u$ por uma escala acústica local);
+    \item computar erros $L_1/L_2/L_\infty$ entre simulação e analítico ao longo do tempo;
+    \item avaliar a convergência de malha (refinos em $N_x$) e o impacto de parâmetros de regularização do LBM na espessura numérica do choque e na difusão da onda de contato.
+\end{itemize}
+
+Em regime hipersônico, a intensidade da descontinuidade cresce e o amortecimento numérico torna-se crítico para evitar oscilações.
+Técnicas de regularização e ajustes no tempo de relaxação efetivo (viscosidade numérica) mostram-se decisivas para estabilidade e fidelidade, conforme indicado em \textcite{Tran2022, Rathnayake2024}.
+
+%---------------------------------------------------------------------------------------
+
+\section{Análise de Escalabilidade e Complexidade}\label{sec:analise-de-escalabilidade-e-complexidade}
+
+Para avaliar a escalabilidade de implementações do método LBM para escoamentos compressíveis, é essencial adotar métricas de desempenho padronizadas e procedimentos de comparação controlados. Para isso, consideram-se testes de escalonamento forte e fraco, variando o número de núcleos de processamento para um domínio de problema fixo (escalonamento forte) ou crescimento proporcional do problema (escalonamento fraco). A partir desses testes, calcula-se o \textit{speedup} (aceleração) e a eficiência paralela. Em geral define-se o \textit{speedup} S como a razão entre o tempo de execução em um único núcleo e o tempo em P núcleos, $S = T_1 / T_P$, e a eficiência paralela $\eta = S/P$ \cite{Lauricella2025}. Alternativamente, especialmente para o método LBM, pode-se medir diretamente o \textit{throughput} em GLUPS (\textit{giga-lattice updates per second}), que expressa quantos bilhões de células são atualizadas por segundo. Por exemplo, \textcite{Tomczak2021} reporta alcançar até 2.5 GLUPS em dupla precisão em GPU de alto desempenho, representando uma alta fração da largura de banda de memória teórica do dispositivo (por volta de 60–70\%) e está intimamente ligado ao uso de recursos de memória.
+
+As métricas principais consideradas incluem:
+
+\begin{itemize}
+    \item \textit{Throughput} (GLUPS): mede a taxa de atualizações de células LBM por segundo. Essa métrica de “giga-” é padronizada em literatura de LBM para comparar implementações em diferentes arquiteturas. Uma alta taxa em GLUPS indica que o código está próximo do limite de textit{throughput} de hardware (geralmente limitado por largura de banda);
+	\item \textit{Speedup} e eficiência paralela: definidas a partir de medições de tempo ou GLUPS. Em particular, pode-se usar definições baseadas em GLUPS: $S(P) = GLUPS(P) / GLUPS(1)$, $\eta = S(P) / P$, conforme proposto em estudos de LBM de larga escala~\cite{Lauricella2025}. A eficiência ideal (teórica) é $\eta = 1$, mas perdas são comuns devido a latências na comunicação e sobrecargas dos barramentos de memória;
+	\item Complexidade do código (LOC): conta-se o número de linhas de código (LOC, \textit{lines of code}) necessárias para a implementação. Essa métrica mede a complexidade do código e a dificuldade em realizar manutenções ou expansões para suportar novas técnicas e generalizações do modelo;
+	\item Uso de memória e largura de banda: avalia o consumo de memória por célula por núcleo e a fração da largura de banda efetivamente usada. Na maioria das implementações LBM, o escoamento é intensivo em memória. Portanto, medir quantos bytes são lidos ou escritos por atualização de célula e quão próximo do pico de banda está o código é fundamental.
+\end{itemize}
+    
+Além dessas métricas quantitativas, considera-se a avaliação da portabilidade e complexidade.
+O número de parâmetros do hardware necessários, a facilidade de paralelizar laços de repetição, e o esforço de adaptação (por exemplo, inserção de diretivas ou funções específicas) também são considerados parte da análise de complexidade.
+
+A metodologia para avaliar a escalabilidade e complexidade é definida pelos passos:
+\begin{itemize}
+    \item Escalonamento forte: escolher um conjunto de tamanhos de domínio representativos e executar testes variando a quantidade de núcleos de processamento $P$;
+	\item Escalonamento fraco: escolher um conjunto de tamanhos de domínio representativos e executar testes variando a resolução do domínio do problema proporcionalmente à variação da quantidade de núcleos de processamento $P$;
+	\item Em cada caso, medir o tempo de simulação por passo e o GLUPS alcançado. Calcular a aceleração e eficiência. Comparar se o GLUPS total cresce linearmente com P de acordo com a escala ideal linear $S = P$;
+	\item Incluir na análise também dados como consumo de memória total (em GigaBytes), banda de memória utilizada calculada através das informações da arquitetura do hardware, e contagem de linhas de código para cada versão implementada;
+	\item Empregar ferramentas de \textit{profiling} para quantificar a utilização de recursos não trivialmente obtidos, como uso de caches, largura de banda, FLOPs efetivos.
+\end{itemize}
+
+%---------------------------------------------------------------------------------------
+
+\section{Seleção de Tecnologias para Implementação Computacional}\label{sec:selecao-de-tecnologias-para-implementacao-computacional}
+
+Nesta seção, discutimos sete tecnologias concorrentes para paralelização de códigos de alta performance: OpenCL, OpenMP, OpenACC, CUDA, Kokkos, RAJA e MPI. Cada uma delas oferecem vantagens e desvantagens entre desempenho bruto, portabilidade e complexidade de desenvolvimento.
+A \autoref{tab:comparativo-entre-tecnologias-de-programação-paralela} comparativa a seguir resume as principais características técnicas dessas tecnologias, focando em desempenho, portabilidade, facilidade de uso e adequação a sistemas HPC modernos.
+
+De forma mais detalhada, destacam-se as seguintes características:
+\begin{itemize}
+    \item OpenCL e CUDA: são bibliotecas que permitem implementar \textit{kernels} de computação massivamente paralelos. CUDA tipicamente atinge mais desempenho em GPUs NVIDIA, por oferecer otimizações específicas, como memória compartilhada de alto desempenho e instruções intrínsecas vetoriais. Entretanto, o OpenCL, sendo de código livre e aberto, permite rodar em qualquer fabricante de hardware, porém pode exigir vários ajustes manuais no código para obter desempenho semelhante.
+    \item OpenMP e OpenACC: são bibliotecas que fornece diretivas, também chamadas de \textit{pragmas}, que direcionam o compilador a realizar a paralelização de laços de repetição e o \textit{offload} para a GPU. Essa é a via mais fácil para acelerar códigos existentes, minimizando mudanças no código. A desvantagem é a perda de controle, visto que detalhes como cópia de vetores de dados ou mapeamento de laços de repetição podem ser imprevisíveis, dificultando a resolução de problemas e diminuindo a performance se comparados com métodos manuais de paralelização.
+    \item Kokkos e RAJA: bibliotecas de \textit{performance portability} que utiliza estrutura de dados e laços de repetição fornecidos como \textit{ParallelFor} e \textit{Views}. O mérito é escrever o código uma única vez e escolher o \textit{backend} (CUDA, OpenMP, HIP) durante a compilação ou de forma dinâmica.
+    \item MPI: é uma interface de mensageria usada para escalar entre nós em \textit{cluster} usando troca de mensagens de dados. Em termos de portabilidade, MPI é universal em \textit{clusters} de memória distribuída, enquanto as outras tecnologias são intrinsicamente limitadas a arquiteturas de memória compartilhada entre os nós de processamento. A eficiência do MPI pode ser alta em laços simples de atualização de células para o método LBM, mas a complexidade do código é maior devido à dados fantasma, sincronização. Ademais, em computação de alta performance, é frequentemente possível combinar MPI com outras tecnologias para memória compartilhada, atingindo níveis máximos de performance em nós com memória compartilhada e conjunto de nós com memória distribuída.
+\end{itemize}
+
+\begin{sidewaystable}
+    \centering
+    \par\caption{Comparativo entre tecnologias de programação paralela}
+    \begin{tabular}{
+        |>{\raggedright\arraybackslash}m{3.0cm}
+        |>{\raggedright\arraybackslash}m{6.0cm}
+        |>{\raggedright\arraybackslash}m{4.5cm}
+        |>{\raggedright\arraybackslash}m{3.0cm}
+        |>{\raggedright\arraybackslash}m{4.5cm}
+    |}
+        \toprule
+            \textbf{Tecnologia} & 
+            \textbf{Arquitetura} & 
+            \textbf{Modelo de programação} & 
+            \textbf{Complexidade} & 
+            \textbf{Portabilidade}
+            \\
+        \midrule
+            OpenCL & 
+            CPU\newline GPU (NVIDIA, AMD, Intel)\newline FPGA\newline DSP & 
+            Kernels C com gerenciamento manual & 
+            Alta & 
+            Alta independente de fabricante 
+            \\
+        \midrule
+            OpenMP & 
+            CPU (x86, ARM)\newline GPU (suporte recente) & 
+            Diretivas (pragmas) & 
+            Baixa & 
+            Alta independente de fabricante 
+            \\
+        \midrule
+            OpenACC & 
+            CPU\newline GPU (principalmente NVIDIA) & 
+            Diretivas (pragmas) & 
+            Baixa & 
+            Média com suporte principalmente para GPUs NVIDIA e compiladores
+            \\
+        \midrule
+            CUDA & 
+            GPU (exclusivamente NVIDIA) & 
+            Kernels C/C++ com API específica & 
+            Alta & 
+            Baixa com suporte exclusivo para GPUs NVIDIA
+            \\
+        \midrule
+            Kokkos & 
+            CPU (x86, ARM)\newline GPU (NVIDIA, AMD, Intel) & 
+            C++ com abstrações via \textit{templates} & 
+            Média & 
+            Alta independente de fabricante com múltiplos \textit{backends}
+            \\
+        \midrule
+            RAJA & 
+            CPU (x86, ARM)\newline GPU (NVIDIA, AMD, Intel) & 
+            C++ com políticas de execução & 
+            Média & 
+            Alta independente de fabricante com múltiplos \textit{backends}
+            \\
+        \midrule
+            MPI & 
+            CPU\newline GPU\newline Cluster distribuído & 
+            API de passagem de mensagens & 
+            Alta & 
+            Muito alta com suporte universal em sistemas distribuídos
+            \\
+        \bottomrule
+    \end{tabular}
+    \label{tab:comparativo-entre-tecnologias-de-programação-paralela}
+\end{sidewaystable}

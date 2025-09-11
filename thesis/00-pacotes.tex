@@ -1,0 +1,140 @@
+% ----------------------------------------------------------
+
+% Pacotes básicos 
+%\usepackage{lmodern}			% Usa a fonte Latin Modern			
+\usepackage[T1]{fontenc}		% Selecao de codigos de fonte.
+\usepackage[utf8]{inputenc}		% Codificacao do documento (conversão automática dos acentos)
+\usepackage{lastpage}			% Usado pela Ficha catalográfica
+\usepackage{indentfirst}		% Indenta o primeiro parágrafo de cada seção.
+\usepackage{color}		    	% Controle das cores
+\usepackage{graphicx}			% Inclusão de gráficos
+\usepackage{microtype} 			% para melhorias de justificação
+\usepackage{ifthen}		    	% para montar condicionais
+\usepackage[brazil]{babel}		% para utilizar termos em portugues
+\usepackage[final]{pdfpages}    % para incluir páginas de arquivos pdf
+\usepackage{lipsum}				% para geração de dummy text
+\usepackage{csquotes}
+\usepackage{textcase}           % robust uppercasing
+\usepackage{hyperref}
+
+% Ensure TOC and headers use robust uppercase
+\AtBeginDocument{\let\MakeUppercase\MakeTextUppercase}
+
+%\usepackage[style=long]{glossaries}
+%\usepackage{abntex2glossaries}
+
+\usepackage{cancel}         % permite representar o cancelamento de termos em texto ou equacoes
+\usepackage{xcolor} 	    % cores extendidas	
+\usepackage{smartdiagram}   % gera diagramas a partir de listas
+\usepackage{float} 		    % Para a figura ficar na posição correta
+\usepackage{textcomp} 		% supporte para fontes da Text Companion 
+\usepackage{longtable}		% uso de longtable
+\usepackage{amsmath}	    % simbolos matematicos
+\usepackage{lscape}         % páginas em paisagem
+\usepackage{multicol}       % mescla de colunas em tabelas
+\usepackage{multirow}       % mescla de linhas em tabelas
+\usepackage{newfloat}       % criação do indice de quadros
+\usepackage{caption} 		% configura legenda
+%[format=plain]
+	%\renewcommand\caption[1]{%
+    \captionsetup{font=small}	% tamanho da fonte 10pt
+    %,format=hang
+ 	% \caption{#1}}
+	%\captionsetup{width=0.8\textwidth}
+
+\usepackage{booktabs}
+\usepackage{adjustbox}
+\usepackage{rotating}
+\usepackage{array}
+
+% ----------------------------------------------------------
+
+% Pacotes de citações BibLaTeX
+\usepackage[style=abnt,backref=true,backend=biber,citecounter=true,backrefstyle=three]{biblatex}
+
+\DefineBibliographyStrings{brazil}{
+ backrefpage = {Citado \arabic{citecounter} vez na página},% originally "cited on page"
+ backrefpages = {Citado \arabic{citecounter} vezes nas páginas},% originally "cited on pages"
+}
+
+% ----------------------------------------------------------
+
+% alterando o aspecto da cor azul
+\definecolor{blue}{RGB}{55,10,249}
+
+% ----------------------------------------------------------
+
+\PrepareListOf{quadro}{
+    \renewcommand{\cftfigpresnum}{Quadro~}
+}
+
+\DeclareFloatingEnvironment[
+    fileext=loq,
+    listname={\textbf{LISTA DE QUADROS}},
+    name=Quadro,
+    %placement=p,
+    within= none, % numeracao continua
+    %within=section, % numeracao reinicia em cada seccao
+    %chapterlistsgaps=off
+]{quadro}
+
+\newlistentry{quadro}{loq}{0}
+
+% Customize ‘List of Diagrams’
+\PrepareListOf{quadro}{
+    \renewcommand{\cftquadropresnum}{\normalsize{QUADRO}~}
+    \setlength{\cftquadronumwidth}{3.2cm}
+    %\renewcommand{\cftquadroname}{\quadroname\space} 
+    \renewcommand*{\cftquadroaftersnum}{\hfill--\hfill}
+}
+
+\makeatletter
+%% we define a helper macro for adjusting lists of new floats to
+%% accept a * behind them for not being shown in the TOC, like
+%% the other list printing commands in memoir
+\newcommand{\AdjustForMemoir}[1]{
+  \csletcs{kept@listof#1}{listof#1}
+  \csdef{listof#1}{%
+    \@ifstar
+     {\csappto{newfloat@listof#1@hook}{\append@star}%
+      \csuse{kept@listof#1}}%
+     {\csuse{kept@listof#1}}%
+  }
+}
+
+\def\append@star#1{#1*}
+\makeatother
+
+\AdjustForMemoir{quadro} % prepare `\listofdirfigures` so it accepts a *
+
+\makeatletter
+\let\oldcontentsline\contentsline
+\def\contentsline#1#2{%
+    \expandafter\ifx\csname l@#1\endcsname\l@section
+	\expandafter\@firstoftwo
+	\else
+	\expandafter\@secondoftwo
+	\fi
+	{%
+		\oldcontentsline{#1}{\MakeTextUppercase{#2}}%
+	}{%
+	\normalsize %ajusta tamanho da fonte na lista
+	\oldcontentsline{#1}{#2}%
+}%
+}
+\makeatother
+
+% ----------------------------------------------------------
+
+% Ajusta indentação de Referencias no ToC
+\defbibheading{bay}[\bibname]{
+  \chapter*{#1}%
+  \markboth{#1}{#1}%
+  \addcontentsline{toc}{chapter}
+  {\protect\numberline{}\bibname}
+}
+
+\makeatletter
+\pretocmd{\chapter}{\addtocontents{toc}{\protect\addvspace{-5\p@}}}{}{}
+\pretocmd{\section}{\addtocontents{toc}{\protect\addvspace{2\p@}}}{}{}
+\makeatother

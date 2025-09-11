@@ -1,0 +1,142 @@
+%---------------------------------------------------------------------------------------
+
+\chapter[Implementação Computacional]{Implementação Computacional}\label{ch:implementacao-computacional}
+
+%---------------------------------------------------------------------------------------
+
+% Lista de abreviaturas e de siglas
+\criarsigla{SIMD}{textit{Single instruction, multiple data}}
+\criarsigla{TDD}{textit{Test-driven development}}
+
+%---------------------------------------------------------------------------------------
+
+% Lista de simbolos
+
+%---------------------------------------------------------------------------------------
+
+Neste capítulo, detalhamos a arquitetura e as tecnologias empregadas no desenvolvimento do software \texttt{lbm-miniapp} para simulações CFD utilizando o método de Lattice Boltzmann para escoamentos compressíveis, enfatizando decisões que impactam desempenho, portabilidade e validação. 
+
+O software é centrado na modularidade e extensibilidade, permitindo a fácil adição de novos modelos LBM e backends de computação.
+Os principais componentes do projeto são:
+
+\begin{itemize}
+    \item \texttt{lbmini/}: contém o código-fonte para as implementações do método LBM;
+    \item \texttt{simulations/}: resultados das simulações;
+    \item \texttt{test/}: testes unitários para test-driven development (TDD) do código;
+    \item \texttt{thesis/}: arquivos \LaTeX~ desta pesquisa;
+    \item \texttt{CMakeLists.txt}: gerenciamento de compilação e de dependências com CMake.
+\end{itemize}
+
+O processo de compilação do \texttt{lbm-miniapp} é gerenciado pelo CMake, que orquestra a compilação do código C++ e é configurado para suportar diferentes compiladores e tecnologias para HPC, incluindo o NVIDIA HPC SDK para compilação com suporte para GPUs da fabricante NVIDIA. O CMake também é responsável pela integração com bibliotecas de terceiros, com esse projeto utilizando:
+
+\begin{itemize}
+    \item Google Test: desenvolvimento e execução de testes;
+    \item yaml-cpp: gerenciamento dos arquivos de configuração das simulações;
+    \item OpenMP;
+    \item CUDA\@.
+\end{itemize}
+
+O controle e configuração da simulação é feito através de um arquivo estruturado no formato YAML, onde é possível definir as propriedades do fluido, distribuição e quantidade de células por direção, tempo de simulação, e o dispositivo que será utilizado para computação.
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Sequencial}\label{sec:implementacao-computacional-sequencial}
+
+A versão sequencial estabelece a referência funcional a ser seguida pelas implementações paralelizadas, disponibilizando interfaces que devem ser seguidas.
+A implementação computacional segue o paradigma \textit{streaming} e colisão com operador compatível com escoamentos compressíveis.
+As grandezas macroscópicas, como densidade, velocidade e pressão, são reconstruídas pelos momentos das distribuições discretas.
+
+A marcha no tempo segue os processos:
+
+\begin{enumerate}
+    \item Cálculo de $f_i^{eq}$ e $g_i^{eq}$;
+    \item Aplicação do operador de colisão;
+    \item Aplicação do operador de \textit{streaming} empurrado a partir de $\mathbf{c}_i$;
+    \item Aplicação de condições de contorno (permissiva na direção longitudinal, periódica em outras direções);
+    \item Reconstrução de propriedades macroscópicas pelos momentos de $f_i$ e $g_i$;
+    \item Saída de dados a cada N passos.
+\end{enumerate}
+
+Para maximizar a largura de banda efetiva, os dados das distribuições são armazenados em \textit{double buffers} e em arranjo que favorece acessos contíguos no laço mais interno.
+Na prática, empregam-se variações de \textit{Structure of Arrays} (SoA) ou \textit{Array of Structures of Arrays} (AoSoA) para que, ao iterar células, os dados necessários estejam em endereços sequenciais, beneficiando caches e vetorização \acrshort{SIMD}.
+O arranjo ping–pong evita dependências de ordenação e dispensa sincronizações nas variantes paralelizadas.
+
+A colisão é realizada localmente por célula e realiza relaxação de $(f_i, g_i)$ em direção a $(f_i^{eq}, g_i^{eq})$ com taxas ajustadas aos coeficientes de transporte.
+Em cenários com frentes de choque, emprega-se filtragem de momentos não-hidrodinâmicos antes da relaxação para maior robustez.
+
+O streaming é implementado em modo \textit{push}: os valores pós-colisão da célula $(x_\alpha, x_\beta, x_\gamma)$ são escritos no \emph{buffer} de saída da célula vizinha $(x_\alpha+\mathbf{c}_{i,\alpha}\Delta t, x_\beta+\mathbf{c}_{i,\beta}\Delta t, x_\gamma+\mathbf{c}_{i,\gamma}\Delta t)$.
+Nesta etapa aplica-se o parâmetro \textit{inverse density weighting} (IDW), controlado via configuração, para suavizar contribuições incidentes em regiões de grande descontinuidade:
+
+\begin{itemize}
+    \item Para cada direção $i$, ao escrever no vizinho, pondera-se a contribuição por um fator dependente da massa específica local/vizinha (função crescente de $\rho$ e do parâmetro \texttt{idw});
+    \item Intuitivamente, contribuições oriundas de vizinhos de \emph{baixa} densidade são atenuadas ao entrar em regiões de \emph{alta} densidade, o que reduz overshoots numéricos na interface de choque;
+    \item O IDW é aplicado exclusivamente na fase de \textit{streaming}; a etapa de colisão permanece independente deste parâmetro.
+\end{itemize}
+
+Esse tratamento preserva o custo linear do streaming, adicionando apenas operações escalares locais por direção, e mostrou-se eficaz para retardar instabilidades associadas a oscilações de Gibbs próximas ao choque, ao custo de uma leve difusão controlada.
+
+% TODO: Descrever a implementação do operador de colisão.
+% TODO: Descrever a implementação do operador de streaming.
+% TODO: Descrever a implementação das condições de contorno.
+
+Do ponto de vista de desempenho, a atualização por célula é tipicamente limitada por largura de banda de memória.
+Assim, privilegia-se:
+
+\begin{itemize}
+    \item Organização de dados favorável ao acesso contíguo na memória. Em CPUs modernas com vetorização \acrshort{SIMD} e em GPUs, arranjos do tipo \textit{Structure of Arrays} (SoA) ou \textit{Array of Structures of Arrays} (AoSoA) tendem a oferecer melhor coalescência e uso de cache do que \textit{Array of Structures} (AoS) puro. Adota-se a organização que maximize acessos contíguos por direção $i$ em laços internos;
+    \item Política de \textit{double buffering} (ping-pong) para as distribuições $f_i$ e $g_i$ entre passos, evitando dependências de ordenação entre as células e a necessidade de mecanismos de sincronização.
+\end{itemize}
+
+Ao final da simulação, são gerados arquivos de dados para análise e comparação com a solução analítica e é usada como base para aferir corretude das versões paralelas.
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando OpenCL}\label{sec:implementacao-computacional-utilizando-opencl}
+
+% TODO: Texto
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando OpenMP}\label{sec:implementacao-computacional-utilizando-openmp}
+
+A versão OpenMP introduz diretivas nos laços externos do tipo \texttt{\#pragma omp parallel for} e instruções SIMD (single instruction, multiple data) para CPUs. Para aceleradores de hardware como GPUS, é atribuída a computação ao dispositivo acelerador via \texttt{\#pragma omp target teams distribute parallel for}.
+O objetivo é maximizar a paralelização de laços de varredura do domínio, mantendo a simplicidade do código e reduzindo o esforço de manutenção.
+Cuidados incluem:
+
+\begin{itemize}
+    \item \textit{First-touch} e afinidade de memória;
+    \item Colisões e \textit{streaming} em buffers distintos para evitar \textit{data races};
+    \item Reduções explícitas para métricas agregadas.
+\end{itemize}
+
+% TODO: Comentar sobre o gerenciamento de memória.
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando OpenACC}\label{sec:implementacao-computacional-utilizando-openacc}
+
+% TODO: Texto
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando CUDA}\label{sec:implementacao-computacional-utilizando-cuda}
+
+% TODO: Texto
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando Kokkos}\label{sec:implementacao-computacional-utilizando-kokkos}
+
+% TODO: Texto
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando RAJA}\label{sec:implementacao-computacional-utilizando-raja}
+
+% TODO: Texto
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando MPI}\label{sec:implementacao-computacional-utilizando-mpi}
+
+% TODO: Texto

@@ -14,6 +14,7 @@ enum class TargetEnum {
 enum class BackendEnum {
   Plain,
   OpenMP,
+  CUDA,
 };
 } // namespace lbmini
 
@@ -65,6 +66,9 @@ struct convert<lbmini::BackendEnum> {
       case lbmini::BackendEnum::OpenMP:
         node = "OpenMP";
         break;
+      case lbmini::BackendEnum::CUDA:
+        node = "CUDA";
+        break;
       default:
         throw std::runtime_error("Invalid BackendEnum value for encoding.");
     }
@@ -81,6 +85,8 @@ struct convert<lbmini::BackendEnum> {
       backend = lbmini::BackendEnum::Plain;
     } else if (value == "OpenMP") {
       backend = lbmini::BackendEnum::OpenMP;
+    } else if (value == "CUDA") {
+      backend = lbmini::BackendEnum::CUDA;
     } else {
       return false; // Invalid value
     }

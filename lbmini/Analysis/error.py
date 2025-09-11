@@ -13,6 +13,17 @@ from pathlib import Path
 
 from analytical import solve
 
+TEXTS = {
+    'en': {
+        'xlabel': 'Number of lattices in x ($n_x$)',
+        'ylabel': 'RMSE for Density ($\\rho$)',
+    },
+    'br': {
+        'xlabel': 'Número de pontos em x ($n_x$)',
+        'ylabel': 'EQM da densidade ($\\rho$)',
+    },
+}
+
 
 def load_config(config_path):
     """Loads simulation parameters from a YAML file."""
@@ -152,7 +163,7 @@ def process_out_dir(out_dir):
         return None
 
 
-def main(base_dir):
+def main(base_dir, lang='en'): 
     out_dirs = sorted([p for p in Path(base_dir).glob("out*") if p.is_dir()])
 
     with multiprocessing.Pool() as pool:
@@ -170,6 +181,7 @@ def main(base_dir):
         plot_data[pr]['nx'].append(res['nx'])
         plot_data[pr]['rmse_rho'].append(res['rmse_rho'])
 
+    texts = TEXTS.get(lang, TEXTS['en'])
     fig, ax = plt.subplots(figsize=(10, 6))
     for pr, data in sorted(plot_data.items()):
         # Sort data by nx before plotting
@@ -178,13 +190,13 @@ def main(base_dir):
         rmses = [d[1] for d in sorted_data]
         ax.plot(nxs, rmses, linestyle='',marker='o', markersize=4, label=f'$p_L/p_R = {pr:.1f}$')
 
-    ax.set_xlabel('Number of lattices in x ($n_x$)')
-    ax.set_ylabel('RMSE for Density ($\\rho$)')
-    ax.set_title('Simulation Error vs. Grid Resolution')
+    ax.set_xlabel(texts['xlabel'])
+    ax.set_ylabel(texts['ylabel'])
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.grid(True, which="both", ls="--")
     ax.legend()
+    plt.tight_layout()
 
     plt.savefig(Path(base_dir) / 'error.png')
     print(f"Plot saved to {Path(base_dir) / 'error.png'}")
@@ -195,5 +207,6 @@ def main(base_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze Sod shock-tube simulation results and compare with analytical solutions.")
     parser.add_argument('--outpath', type=str, default='.', help='Directory containing the out* subdirectories.')
+    parser.add_argument('--lang', type=str, choices=['en', 'br'], default='en', help='Language for plot texts: en (English), br (Português).')
     args = parser.parse_args()
-    main(args.outpath)
+    main(args.outpath, lang=args.lang)

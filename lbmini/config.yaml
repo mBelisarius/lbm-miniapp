@@ -9,21 +9,20 @@ Fluid:
 
 Mesh:
     lx: 1.0
-    ly: 1.0e-1
-    lz: 1.0e-1
-    nx: 1000
-    ny: 10
-    nz: 10
+    ly: 1.0
+    lz: 1.0
+    nx: 50000
+    ny: 1
+    nz: 1
 
 Control:
     tmax: 0.2
-    Ux: 0.33  # The same value as the average velocity of the flow
+    Ux: 0.25 # The same value as the average velocity of the flow
     Uy: 0.0
     Uz: 0.0
-    idw: 1.14  # Higher IDW provides better shock capturing accuracy, but with higher latency (the shock is delayed in time)
-    printStep: 100
+    printStep: 20
 
 Performance:
     target: CPU     # Target device (CPU; GPU)
-    backend: Plain  # Backend to use (Plain; OpenMP)
+    backend: Plain  # Backend to use (Plain; OpenMP; CUDA)
     cores: 0        # Number of CPU cores (0 for auto)

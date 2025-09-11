@@ -9,20 +9,23 @@
 #include <omp.h>
 
 #include "Data.hpp"
-#include "Lbm/OpenMpCpu/LbmD2Q9.hpp"
-#include "Lbm/OpenMpCpu/LbmTube.hpp"
-#include "Lbm/OpenMpGpu/LbmD2Q9.hpp"
-#include "Lbm/OpenMpGpu/LbmTube.hpp"
-#include "Lbm/Plain/LbmD2Q9.hpp"
+#include "Lbm/ILattice.hpp"
+#include "Lbm/OpenMp/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/OpenMp/Cpu/LbmTube.hpp"
+#include "Lbm/OpenMp/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/OpenMp/Gpu/LbmTube.hpp"
+#include "Lbm/Cuda/LatticeD2Q9.hpp"
+#include "Lbm/Cuda/LbmTube.hpp"
+#include "Lbm/Plain/LatticeD2Q9.hpp"
 #include "Lbm/Plain/LbmTube.hpp"
 
 using namespace Eigen;
 
 // output data along x slice (y=z=middle)
-template<typename Scalar_, typename LbmTubeType>
+template<typename Scalar, typename LbmTubeType>
 void OutputData(
   const LbmTubeType& lbmTube,
-  const lbmini::MeshData<Scalar_, 2>& mesh,
+  const lbmini::MeshData<Scalar, 2>& mesh,
   Index step,
   const std::string& outDir,
   const double elapsed_seconds
@@ -30,7 +33,7 @@ void OutputData(
   std::ofstream file(std::filesystem::path(outDir) / ("data_" + std::to_string(step) + ".csv"));
   file << "runtime,x,ux,uy,density,pressure\n";
 
-  const Scalar_ dx = mesh.lx() / static_cast<Scalar_>(mesh.nx() - 1);
+  const Scalar dx = mesh.lx() / static_cast<Scalar>(mesh.nx() - 1);
   const auto& rho = lbmTube.Rho();
   const auto& p = lbmTube.P();
   const auto& u = lbmTube.U();
@@ -47,11 +50,11 @@ void OutputData(
   file.close();
 }
 
-template<typename Scalar_, typename LbmClassType, typename LbmTubeType>
+template<typename Scalar, typename LbmTubeType>
 void run(
-  const lbmini::FluidData<Scalar_>& fluid,
-  const lbmini::MeshData<Scalar_, LbmClassType::Dim()>& mesh,
-  const lbmini::ControlData<Scalar_>& control,
+  const lbmini::FluidData<Scalar>& fluid,
+  const lbmini::MeshData<Scalar, 2>& mesh,
+  const lbmini::ControlData<Scalar>& control,
   const lbmini::PerformanceData& performance,
   const std::string& outpath,
   const Index kSteps,
@@ -65,7 +68,7 @@ void run(
   const Index stepsPerOutput = std::max(kSteps / control.printStep, Index(1));
   for (Index i = 0; i < kSteps;) {
     const Index stepsPerChunk = std::min(stepsPerOutput, kSteps - i);
-    lbmTube.Run(stepsPerChunk);
+    lbmTube.Run(stepsPerChunk, true);
     i += stepsPerChunk;
 
     std::cout << "Time step: " << i << std::endl;
@@ -78,34 +81,34 @@ void run(
 int main(int argc, char* argv[]) {
   using Scalar = double;
 
-  std::string config_path = "config.yaml";
-  std::string output_path_base = "out";
+  std::string configPath = "config.yaml";
+  std::string outputPathBase = "out";
   for (int i = 1; i < argc; ++i) {
     if (std::string arg = argv[i]; arg == "--config") {
       if (i + 1 < argc) {
-        config_path = argv[++i];
+        configPath = argv[++i];
       }
     } else if (arg == "--outpath") {
       if (i + 1 < argc) {
-        output_path_base = argv[++i];
+        outputPathBase = argv[++i];
       }
     }
   }
 
   // Create unique output directory
-  std::string output_path = output_path_base;
+  std::string outputPath = outputPathBase;
   Index counter = 1;
-  while (std::filesystem::exists(output_path) && !std::filesystem::is_empty(output_path))
-    output_path = output_path_base + std::to_string(counter++);
+  while (std::filesystem::exists(outputPath) && !std::filesystem::is_empty(outputPath))
+    outputPath = outputPathBase + std::to_string(counter++);
 
-  std::filesystem::create_directory(output_path);
-  std::cout << "Outputting to directory: " << output_path << std::endl;
+  std::filesystem::create_directory(outputPath);
+  std::cout << "Outputting to directory: " << outputPath << std::endl;
 
   // Copy config file
-  std::filesystem::copy(config_path, std::filesystem::path(output_path) / "config.yaml");
+  std::filesystem::copy(configPath, std::filesystem::path(outputPath) / "config.yaml");
 
   // Read simulation settings from YAML file
-  auto [fluid, mesh, control, performance] = lbmini::ReadYaml<Scalar, 2>(config_path);
+  auto [fluid, mesh, control, performance] = lbmini::ReadYaml<Scalar, 2>(configPath);
 
   // Calculate the physical time step
   const Scalar cs2 = Scalar(1.0) / Scalar(3.0);
@@ -123,14 +126,14 @@ int main(int argc, char* argv[]) {
       switch (performance.backend) {
         case lbmini::BackendEnum::Plain: {
           std::cout << "Using plain backend." << std::endl;
-          using LbmLattice = lbmini::plain::LbmD2Q9<Scalar>;
+          using LbmLattice = lbmini::plain::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::plain::LbmTube<Scalar, LbmLattice>;
-          run<Scalar, LbmLattice, LbmTube>(
+          run<Scalar, LbmTube>(
             fluid,
             mesh,
             control,
             performance,
-            output_path,
+            outputPath,
             kSteps,
             start_time
           );
@@ -139,14 +142,14 @@ int main(int argc, char* argv[]) {
         case lbmini::BackendEnum::OpenMP: {
           std::cout << "Using OpenMP backend on CPU." << std::endl;
           omp_set_default_device(0);
-          using LbmLattice = lbmini::openmp::cpu::LbmD2Q9<Scalar>;
+          using LbmLattice = lbmini::openmp::cpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openmp::cpu::LbmTube<Scalar, LbmLattice>;
-          run<Scalar, LbmLattice, LbmTube>(
+          run<Scalar, LbmTube>(
             fluid,
             mesh,
             control,
             performance,
-            output_path,
+            outputPath,
             kSteps,
             start_time
           );
@@ -164,15 +167,37 @@ int main(int argc, char* argv[]) {
       switch (performance.backend) {
         case lbmini::BackendEnum::OpenMP: {
           std::cout << "Using OpenMP backend on GPU." << std::endl;
-          omp_set_default_device(1);
-          using LbmLattice = lbmini::openmp::gpu::LbmD2Q9<Scalar>;
+          if (omp_get_num_devices() < 1) {
+            std::cerr << "No OpenMP target devices available." << std::endl;
+            return 1;
+          }
+          // Use the first available GPU; do not force device 1 (may not exist).
+          omp_set_default_device(0);
+          std::cout << "  Target device: " << omp_get_default_device()
+                    << " / " << omp_get_num_devices() << std::endl;
+          using LbmLattice = lbmini::openmp::gpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openmp::gpu::LbmTube<Scalar, LbmLattice>;
-          run<Scalar, LbmLattice, LbmTube>(
+          run<Scalar, LbmTube>(
             fluid,
             mesh,
             control,
             performance,
-            output_path,
+            outputPath,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        case lbmini::BackendEnum::CUDA: {
+          std::cout << "Using CUDA backend on GPU." << std::endl;
+          using LbmLattice = lbmini::cuda::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::cuda::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            outputPath,
             kSteps,
             start_time
           );

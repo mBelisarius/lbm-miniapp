@@ -39,7 +39,7 @@ ReadYaml(const std::string& filename) {
   ControlData<Scalar> control{};
   control.tmax = config["Control"]["tmax"].as<Scalar>();
   control.Ux = config["Control"]["Ux"].as<Scalar>();
-  control.idw = config["Control"]["idw"].as<Scalar>();
+  control.idw = sqrt(fluid.gamma);
   control.printStep = config["Control"]["printStep"].as<Index>();
 
   PerformanceData performance{};
@@ -47,14 +47,14 @@ ReadYaml(const std::string& filename) {
   performance.backend = config["Performance"]["backend"].as<BackendEnum>();
   performance.cores = config["Performance"]["cores"].as<Index>();
 
-  if (Dim >= 2) {
+  if constexpr (Dim >= 2) {
     mesh.lenght[1] = config["Mesh"]["ly"].as<Scalar>();
     mesh.size[1] = config["Mesh"]["ny"].as<Index>();
 
     control.Uy = config["Control"]["Uy"].as<Scalar>();
   }
 
-  if (Dim >= 3) {
+  if constexpr (Dim >= 3) {
     mesh.lenght[2] = config["Mesh"]["lz"].as<Scalar>();
     mesh.size[2] = config["Mesh"]["nz"].as<Index>();
 

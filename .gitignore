@@ -4,8 +4,11 @@
 .vs/
 
 # Simulations
-simulations/out*
+simulations-*/
 
 # Compiled files
 build/
 cmake-build-*/
+
+# LaTeX
+thesis/out/

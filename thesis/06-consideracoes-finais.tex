@@ -1,0 +1,43 @@
+%---------------------------------------------------------------------------------------
+
+\chapter[Considerações Finais]{Considerações Finais}\label{ch:consideracoes-finais}
+
+%---------------------------------------------------------------------------------------
+
+% Lista de abreviaturas e de siglas
+
+%---------------------------------------------------------------------------------------
+
+% Lista de simbolos
+
+%---------------------------------------------------------------------------------------
+
+Este trabalho apresentou um miniaplicativo que implementa o método de Lattice–Boltzmann para escoamentos compressíveis, validado no problema do tubo de choque de Sod e avaliado quanto à escalabilidade em CPUs multinúcleo.
+Os resultados demonstram (i) consistência numérica nos regimes com descontinuidades, com taxa efetiva próxima da primeira ordem em normas globais, e (ii) bom aproveitamento de paralelismo de memória compartilhada para tamanhos de problema moderados a grandes, com eficiência elevada até o limite imposto por largura de banda e sincronizações.
+
+Do ponto de vista científico, a acurácia observada na razão de pressões pós-interação e a tendência de redução do EQM reforçam a viabilidade do LBM compressível como alternativa competitiva para problemas hiperbólicos com ondas de choque, preservando simplicidade algorítmica e regularidade de acesso à memória.
+Esse equilíbrio entre fidelidade física e eficiência computacional é particularmente atraente para estudos paramétricos e acoplamentos multiescala, onde o custo por simulação é crítico.
+
+Em termos de impacto acadêmico, o estudo fornece:
+- uma linha de base reprodutível para comparações entre esquemas de relaxação, discretizações em velocidade e estratégias de filtragem/dissipação controlada;
+- um perfil de desempenho que explicita gargalos práticos (largura de banda, afinidade, sincronizações), orientando pesquisas em otimização de kernels LBM no contexto de arquiteturas heterogêneas;
+- um artefato experimental útil para ensino e extensão, permitindo a estudantes e pesquisadores reproduzirem curvas de convergência e escalabilidade com esforço modesto.
+
+Como próximos passos, propomos um roteiro de evolução tecnológica e experimental:
+1) Portabilidade e performance-portability:
+   - Reestruturação dos kernels de colisão e streaming utilizando Kokkos, explorando execution spaces (OpenMP, CUDA/HIP) e layouts de dados compatíveis com coalescência/vetorização.
+   - Variante com RAJA para avaliar abstrações alternativas de políticas de execução e tiling, comparando sobrecusto e expressividade.
+2) Paralelismo distribuído:
+   - Implementação de decomposição de domínio 1D/2D com MPI, ghost layers e comunicação não bloqueante, além de agregação de mensagens para reduzir latência.
+   - Overlap comunicação-computação via progress engine e postagens antecipadas, com estratégias de balanceamento por partições desiguais quando houver heterogeneidade.
+3) Benchmarks em ambiente HPC:
+   - Campanha de escalabilidade forte e fraca em cluster com nós CPU e GPU, variando \(N_x\)–\(N_y\) e passos de tempo, medindo: throughput (MLUPS), eficiência, roofline (AI vs. BW), e custo energético por passo (J/step) quando disponível.
+   - Estudos de sensibilidade a parâmetros físicos (Ma, \(\nu\)) e numéricos (ordem de quadratura, filtros) para mapear estabilidade/acurácia versus custo.
+4) Engenharia de desempenho:
+   - Layout SoA com blocagem espacial, prefetching e alinhamento explícito; fusão de kernels; redução de pressão na memória por compressão de distribuição ou reconstrução on-the-fly de momentos.
+   - Testes de afinidade NUMA, pinning e variação de granularidade de tarefas.
+5) Validações adicionais:
+   - Baterias de casos com choques mais fortes (Lax, Shu–Osher) e 2D (choque refletido, canal supersônico), confrontando com soluções exatas e DNS/CFD estabelecidas.
+
+Concluímos que o miniaplicativo alcança um ponto de maturidade que justifica a migração para um arcabouço de portabilidade e sua avaliação em infraestruturas de HPC. A expectativa é sustentar eficiência próxima ao teto de largura de banda em CPUs modernas e explorar aceleração substancial em GPUs, preservando a robustez numérica nas regimes com descontinuidades.
+Essa trajetória posiciona o LBM compressível como ferramenta de vanguarda para investigações acadêmicas e aplicações industriais que demandam alto rendimento computacional.
