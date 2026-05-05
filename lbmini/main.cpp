@@ -21,7 +21,6 @@
 
 using namespace Eigen;
 
-// output data along x slice (y=z=middle)
 template<typename Scalar, typename LbmTubeType>
 void OutputData(
   const LbmTubeType& lbmTube,
@@ -31,20 +30,28 @@ void OutputData(
   const double elapsed_seconds
 ) {
   std::ofstream file(std::filesystem::path(outDir) / ("data_" + std::to_string(step) + ".csv"));
-  file << "runtime,x,ux,uy,density,pressure\n";
+  file << "runtime,x,y,ux,uy,density,pressure\n";
 
   const Scalar dx = mesh.lx() / static_cast<Scalar>(mesh.nx() - 1);
+  const Scalar dy = mesh.ly() / static_cast<Scalar>(mesh.ny() - 1); // Added dy calculation
+
   const auto& rho = lbmTube.Rho();
   const auto& p = lbmTube.P();
   const auto& u = lbmTube.U();
 
-  const Index y_slice = mesh.ny() / 2;
-
   for (Index i = 0; i < mesh.nx(); ++i) {
-    file << elapsed_seconds << ","
-      << 0.5 * dx + dx * i << "," << u(i, y_slice, 0) << "," << u(i, y_slice, 1) << ","
-      << rho(i, y_slice) << "," << p(i, y_slice)
-      << "\n";
+    const Scalar x_coord = 0.5 * dx + dx * i;
+    for (Index j = 0; j < mesh.ny(); ++j) {
+      const Scalar y_coord = 0.5 * dy + dy * j;
+
+      file << elapsed_seconds << ","
+           << x_coord << ","
+           << y_coord << ","
+           << u(i, j, 0) << ","
+           << u(i, j, 1) << ","
+           << rho(i, j) << ","
+           << p(i, j) << "\n";
+    }
   }
 
   file.close();
