@@ -1,8 +1,8 @@
-#include "Lbm/Cuda/LbmTube.hpp"
+#include "Lbm/Cuda/Gpu/LbmTube.hpp"
 #include <iostream>
-#include "Lbm/Cuda/LatticeD2Q9.hpp"
+#include "Lbm/Cuda/Gpu/LatticeD2Q9.hpp"
 
-namespace lbmini::cuda {
+namespace lbmini::cuda::gpu {
 __constant__ int kD2Q9Cx[9] = { 0, 1, -1, 0, 0, 1, -1, 1, -1 };
 __constant__ int kD2Q9Cy[9] = { 0, 0, 0, 1, -1, 1, -1, -1, 1 };
 
@@ -787,4 +787,4 @@ void LbmTube<Scalar, LatticeType>::streamAndMacroscopic() {
 
 
 template class LbmTube<double, LatticeD2Q9<double>>;
-} // namespace lbmini::cuda
+} // namespace lbmini::cuda::gpu

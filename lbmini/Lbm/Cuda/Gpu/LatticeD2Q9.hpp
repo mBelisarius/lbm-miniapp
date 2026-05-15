@@ -12,7 +12,7 @@
 #endif
 #endif
 
-namespace lbmini::cuda {
+namespace lbmini::cuda::gpu {
 template<typename Scalar>
 class LatticeD2Q9 : public ILattice<Scalar, 2, 9> {
 public:
@@ -71,6 +71,6 @@ private:
     7
   };
 };
-} // namespace lbmini::cuda
+} // namespace lbmini::cuda::gpu
 
 #endif // LBMINI_CUDA_LATTICED2Q9_HPP_

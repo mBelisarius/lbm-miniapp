@@ -1,9 +1,9 @@
-#ifndef LBMINI_OPENMP_CPU_LBMTUBE_HPP_
-#define LBMINI_OPENMP_CPU_LBMTUBE_HPP_
+#ifndef LBMINI_OPENACC_CPU_LBMTUBE_HPP_
+#define LBMINI_OPENACC_CPU_LBMTUBE_HPP_
 
 #include <algorithm>
 #include <cmath>
-#include <omp.h>
+#include <openacc.h>
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
@@ -11,7 +11,7 @@
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
 
-namespace lbmini::openmp::cpu {
+namespace lbmini::openacc::cpu {
 /**
  * @brief OpenMP multi-core/SIMD variant of `lbmini::plain::LbmTube`.
  *
@@ -24,9 +24,9 @@ namespace lbmini::openmp::cpu {
  * OpenMP-specific design decisions:
  *  - The `#pragma omp parallel` region is **hoisted around the `Run()`
  *    time loop**, so the thread pool forks once per `Run(steps)`; each
- *    kernel inside uses `#pragma omp for schedule(static)` to amortise
+ *    kernel inside uses `#pragma acc parallel loop` to amortise
  *    fork/join. The O(1) buffer swap between kernels is guarded by
- *    `#pragma omp single`, whose implicit barrier orders the ping-pong.
+ *    ``, whose implicit barrier orders the ping-pong.
  *  - The constructor honours the `cores` field of `config.yaml` via
  *    `omp_set_num_threads(...)`. When `cores == 0`, it auto-detects the
  *    number of performance cores on hybrid Intel hosts via
@@ -84,7 +84,7 @@ protected:
   /**
    * @brief Recomputes macroscopic fields (rho, p, T, u) from f_ and g_.
    *
-   * Executes as an OpenMP parallel for loop over cells. Uses `#pragma omp parallel for`
+   * Executes as an OpenMP parallel for loop over cells. Uses `#pragma acc parallel loop`
    * with static scheduling for optimal thread-to-core mapping.
    */
   void computeMacroscopic();
@@ -184,9 +184,16 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   // only the performance cores on hybrid Intel hosts (E-cores drag static
   // schedules down); otherwise respect the explicit value.
   if (kPerformance_.cores > 0) {
-    omp_set_num_threads(static_cast<int>(kPerformance_.cores));
+    // OpenACC doesn't have an omp_set_num_threads equivalent that works seamlessly
+    // without env vars in all compilers. We set the env var ACC_NUM_CORES in main.cpp.
   } else {
-    omp_set_num_threads(lbmini::CountPerformanceCores());
+    // Similarly, rely on ACC_NUM_CORES being set by main or the user,
+    // or just let it use all available cores. But wait, the issue states
+    // "using only the Performance P-Cores results in a faster simulation, investigate this and fix if encessary."
+    // So for OpenACC CPU, if cores is 0, we should set the ACC_NUM_CORES here or in main.cpp.
+    // Actually, setting `ACC_NUM_CORES` using `CountPerformanceCores()` here makes sense.
+    std::string coresStr = std::to_string(lbmini::CountPerformanceCores());
+    setenv("ACC_NUM_CORES", coresStr.c_str(), 0);
   }
 
   nx_ = mesh.size[0];
@@ -253,7 +260,7 @@ void LbmTube<Scalar, LatticeType>::Init() {
   // NUMA first-touch: the same `schedule(static)` partition also binds
   // each thread's pages to its local NUMA node so the hot kernels later
   // find their data on the right side of the interconnect.
-  #pragma omp parallel for schedule(static)
+  #pragma acc parallel loop gang vector
   for (Index i = 0; i < nx_; ++i) {
     for (Index j = 0; j < ny_; ++j) {
       const Index cell = cellIndex(static_cast<int>(i), static_cast<int>(j));
@@ -289,12 +296,12 @@ void LbmTube<Scalar, LatticeType>::Step(const bool save) {
 
 template<typename Scalar, typename LatticeType>
 void LbmTube<Scalar, LatticeType>::Run(const Index steps, bool /*save*/) {
-  #pragma omp parallel default(shared)
+  
   {
     for (Index t = 0; t < steps; ++t) {
       collisionAndEquilibria();
       streamAndMacroscopic();
-      #pragma omp single
+      
       {
         std::swap(fCur_, fAlt_);
         std::swap(gCur_, gAlt_);
@@ -323,7 +330,7 @@ void LbmTube<Scalar, LatticeType>::computeMacroscopic() {
   // No `nowait`: the implicit barrier at the end of `omp for` protects the
   // downstream kernel (next time-step's collisionAndEquilibria) from reading
   // rho_/u_/tem_ before all threads have finished writing them.
-  #pragma omp for schedule(static)
+  #pragma acc parallel loop gang vector
   for (Index cell = 0; cell < N_; ++cell) {
     Scalar rho = Scalar{ 0 };
     Scalar nrg = Scalar{ 0 };
@@ -366,7 +373,7 @@ void LbmTube<Scalar, LatticeType>::seedEquilibria() {
   const Scalar* __restrict__ pT = tem_.data();
   const Scalar* __restrict__ pU = u_.data();
 
-  #pragma omp parallel for schedule(static)
+  #pragma acc parallel loop gang vector
   for (Index cell = 0; cell < N_; ++cell) {
     const Scalar rho = pRho[cell];
     const Scalar T = pT[cell];
@@ -433,7 +440,7 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
 
   // No `nowait`: downstream `stream()` reads the freshly relaxed f_/g_ and
   // requires them fully written by all threads first.
-  #pragma omp for schedule(static)
+  #pragma acc parallel loop gang vector
   for (Index cell = 0; cell < N_; ++cell) {
     const Scalar rho = pRho[cell];
     const Scalar T = pT[cell];
@@ -663,7 +670,7 @@ void LbmTube<Scalar, LatticeType>::streamAndMacroscopic() {
   Scalar* __restrict__ pT = tem_.data();
   Scalar* __restrict__ pU = u_.data();
 
-  #pragma omp for schedule(static)
+  #pragma acc parallel loop gang vector
   for (Index cell = 0; cell < N_; ++cell) {
     Scalar rho = Scalar{ 0 };
     Scalar nrg = Scalar{ 0 };
@@ -696,22 +703,25 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
   streamIdx_.assign(distSize_ * 4, 0);
   streamW_.assign(distSize_ * 4, Scalar{ 0 });
 
-  auto clampX = [&](const Index x) -> Index {
+  const Index nx = nx_;
+  const Index ny = ny_;
+
+  auto clampX = [nx](const Index x) -> Index {
     if (x < 0)
       return 0;
-    if (x >= nx_)
-      return nx_ - 1;
+    if (x >= nx)
+      return nx - 1;
     return x;
   };
-  auto wrapY = [&](Index y) -> Index {
-    y = y % ny_;
+  auto wrapY = [ny](Index y) -> Index {
+    y = y % ny;
     if (y < 0)
-      y += ny_;
+      y += ny;
     return y;
   };
 
   // One-off per-simulation cost — parallelise over the (idc, i) plane.
-  #pragma omp parallel for collapse(2) schedule(static)
+  #pragma acc parallel loop collapse(2)
   for (Index idc = 0; idc < kQ_; ++idc) {
     for (Index i = 0; i < nx_; ++i) {
       const Scalar cix = LatticeType::Cshift(idc, 0, kControl_.U(0));
@@ -749,13 +759,17 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
         const Scalar d01 = std::sqrt(dx01 * dx01 + dy01 * dy01);
         const Scalar d11 = std::sqrt(dx11 * dx11 + dy11 * dy11);
 
-        auto snap = [&](Scalar d, Index cAny) -> bool {
-          if (d >= kTiny_)
+        std::int32_t* __restrict__ pStreamIdx = streamIdx_.data();
+        Scalar* __restrict__ pStreamW = streamW_.data();
+        const Scalar tiny = kTiny_;
+
+        auto snap = [pStreamIdx, pStreamW, tiny, base](Scalar d, Index cAny) -> bool {
+          if (d >= tiny)
             return false;
-          streamIdx_[base + 0] = static_cast<std::int32_t>(cAny);
-          streamIdx_[base + 1] = streamIdx_[base + 2] = streamIdx_[base + 3] = static_cast<std::int32_t>(cAny);
-          streamW_[base + 0] = Scalar{ 1 };
-          streamW_[base + 1] = streamW_[base + 2] = streamW_[base + 3] = Scalar{ 0 };
+          pStreamIdx[base + 0] = static_cast<std::int32_t>(cAny);
+          pStreamIdx[base + 1] = pStreamIdx[base + 2] = pStreamIdx[base + 3] = static_cast<std::int32_t>(cAny);
+          pStreamW[base + 0] = Scalar{ 1 };
+          pStreamW[base + 1] = pStreamW[base + 2] = pStreamW[base + 3] = Scalar{ 0 };
           return true;
         };
         if (snap(d00, c00))
@@ -787,21 +801,21 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
           } else {
             cell2 = xN * ny_ + wrapY(yN);
           }
-          streamIdx_[base + 0] = static_cast<std::int32_t>(cell2);
-          streamIdx_[base + 1] = streamIdx_[base + 2] = streamIdx_[base + 3] = static_cast<std::int32_t>(cell2);
-          streamW_[base + 0] = Scalar{ 1 };
-          streamW_[base + 1] = streamW_[base + 2] = streamW_[base + 3] = Scalar{ 0 };
+          streamIdx_.data()[base + 0] = static_cast<std::int32_t>(cell2);
+          streamIdx_.data()[base + 1] = streamIdx_.data()[base + 2] = streamIdx_.data()[base + 3] = static_cast<std::int32_t>(cell2);
+          streamW_.data()[base + 0] = Scalar{ 1 };
+          streamW_.data()[base + 1] = streamW_.data()[base + 2] = streamW_.data()[base + 3] = Scalar{ 0 };
           continue;
         }
         const Scalar invSum = Scalar{ 1 } / wsum;
-        streamIdx_[base + 0] = static_cast<std::int32_t>(c00);
-        streamIdx_[base + 1] = static_cast<std::int32_t>(c10);
-        streamIdx_[base + 2] = static_cast<std::int32_t>(c01);
-        streamIdx_[base + 3] = static_cast<std::int32_t>(c11);
-        streamW_[base + 0] = w00 * invSum;
-        streamW_[base + 1] = w10 * invSum;
-        streamW_[base + 2] = w01 * invSum;
-        streamW_[base + 3] = w11 * invSum;
+        streamIdx_.data()[base + 0] = static_cast<std::int32_t>(c00);
+        streamIdx_.data()[base + 1] = static_cast<std::int32_t>(c10);
+        streamIdx_.data()[base + 2] = static_cast<std::int32_t>(c01);
+        streamIdx_.data()[base + 3] = static_cast<std::int32_t>(c11);
+        streamW_.data()[base + 0] = w00 * invSum;
+        streamW_.data()[base + 1] = w10 * invSum;
+        streamW_.data()[base + 2] = w01 * invSum;
+        streamW_.data()[base + 3] = w11 * invSum;
       }
     }
   }
@@ -823,10 +837,10 @@ void LbmTube<Scalar, LatticeType>::stream() {
   const std::int32_t* __restrict__ pSI = streamIdx_.data();
   const Scalar* __restrict__ pSW = streamW_.data();
 
-  // No `nowait`: the downstream `#pragma omp single` swap must see all
+  // No `nowait`: the downstream `` swap must see all
   // threads done writing `faux_`/`gaux_`. The implicit barrier at the end
   // of this `for` provides the required synchronisation.
-  #pragma omp for collapse(2) schedule(static)
+  #pragma acc parallel loop collapse(2)
   for (Index idc = 0; idc < kQ_; ++idc) {
     for (Index cell = 0; cell < N_; ++cell) {
       const Scalar* __restrict__ fplane = pF + idc * N_;
@@ -848,6 +862,6 @@ void LbmTube<Scalar, LatticeType>::stream() {
     }
   }
 }
-} // namespace lbmini::openmp::cpu
+} // namespace lbmini::openacc::cpu
 
-#endif // LBMINI_OPENMP_CPU_LBMTUBE_HPP_
+#endif // LBMINI_OPENACC_CPU_LBMTUBE_HPP_

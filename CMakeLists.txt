@@ -177,10 +177,12 @@ add_library("${ProjectName}-lbm-openmp" STATIC
         lbmini/Lbm/OpenMp/Gpu/LatticeD2Q9.hpp
         lbmini/Lbm/OpenMp/Gpu/LbmTube.hpp
 )
+
 target_include_directories("${ProjectName}-lbm-openmp" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-openmp" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-openmp" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
 target_link_libraries("${ProjectName}-lbm-openmp" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
     target_compile_options("${ProjectName}-lbm-openmp" PUBLIC
             $<$<COMPILE_LANGUAGE:CXX>:-mp>
@@ -200,32 +202,91 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
         )
     endif()
 endif()
+
 if(TARGET OpenMP::OpenMP_CXX)
     target_link_libraries("${ProjectName}-lbm-openmp" PUBLIC OpenMP::OpenMP_CXX)
 endif()
 
+# --- Lbm OpenACC CPU
+
+add_library("${ProjectName}-lbm-openacc-cpu" STATIC
+        lbmini/Lbm/OpenAcc/Cpu/LatticeD2Q9.hpp
+        lbmini/Lbm/OpenAcc/Cpu/LbmTube.hpp
+)
+
+target_include_directories("${ProjectName}-lbm-openacc-cpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+set_target_properties("${ProjectName}-lbm-openacc-cpu" PROPERTIES LINKER_LANGUAGE CXX)
+target_compile_definitions("${ProjectName}-lbm-openacc-cpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+target_link_libraries("${ProjectName}-lbm-openacc-cpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+
+# --- Lbm OpenACC GPU
+
+add_library("${ProjectName}-lbm-openacc-gpu" STATIC
+        lbmini/Lbm/OpenAcc/Gpu/LatticeD2Q9.hpp
+        lbmini/Lbm/OpenAcc/Gpu/LbmTube.hpp
+)
+
+target_include_directories("${ProjectName}-lbm-openacc-gpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+set_target_properties("${ProjectName}-lbm-openacc-gpu" PROPERTIES LINKER_LANGUAGE CXX)
+target_compile_definitions("${ProjectName}-lbm-openacc-gpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+target_link_libraries("${ProjectName}-lbm-openacc-gpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
+    target_compile_options("${ProjectName}-lbm-openacc-cpu" PUBLIC
+            "-acc=multicore"
+            "-Minfo=accel,vect"
+    )
+    target_link_options("${ProjectName}-lbm-openacc-cpu" INTERFACE
+            "-acc=multicore"
+    )
+    target_compile_options("${ProjectName}-lbm-openacc-gpu" PUBLIC
+            "-acc=gpu"
+    )
+    target_link_options("${ProjectName}-lbm-openacc-gpu" INTERFACE
+            "-acc=gpu"
+    )
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options("${ProjectName}-lbm-openacc-cpu" PUBLIC
+            "-fopenacc"
+    )
+    target_link_options("${ProjectName}-lbm-openacc-cpu" INTERFACE
+            "-fopenacc"
+    )
+    target_compile_options("${ProjectName}-lbm-openacc-gpu" PUBLIC
+            "-fopenacc"
+    )
+    target_link_options("${ProjectName}-lbm-openacc-gpu" INTERFACE
+            "-fopenacc"
+    )
+endif()
+
+find_package(OpenCL REQUIRED)
+
 # --- Lbm Cuda
 
-set_source_files_properties(lbmini/Lbm/Cuda/LbmTube.cu PROPERTIES LANGUAGE CXX)
+set_source_files_properties(lbmini/Lbm/Cuda/Gpu/LbmTube.cu PROPERTIES LANGUAGE CXX)
 add_library("${ProjectName}-lbm-cuda" STATIC
-        lbmini/Lbm/Cuda/LatticeD2Q9.hpp
-        lbmini/Lbm/Cuda/LbmTube.hpp
-        lbmini/Lbm/Cuda/LbmTube.cu
+        lbmini/Lbm/Cuda/Gpu/LatticeD2Q9.hpp
+        lbmini/Lbm/Cuda/Gpu/LbmTube.hpp
+        lbmini/Lbm/Cuda/Gpu/LbmTube.cu
 )
+
 target_include_directories("${ProjectName}-lbm-cuda" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-cuda" PROPERTIES
         LINKER_LANGUAGE CXX
         CUDA_SEPARABLE_COMPILATION OFF
 )
+
 target_compile_definitions("${ProjectName}-lbm-cuda" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
 target_link_libraries("${ProjectName}-lbm-cuda" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
     if(ENABLE_CUDA)
         target_compile_options("${ProjectName}-lbm-cuda" PUBLIC
                 $<$<COMPILE_LANGUAGE:CXX>:-cuda>
                 $<$<COMPILE_LANGUAGE:CXX>:-gpu=${NVHPC_GPU_ARCH}>
         )
-        target_link_options("${ProjectName}-lbm-cuda" INTERFACE 
+        target_link_options("${ProjectName}-lbm-cuda" INTERFACE
                 $<$<LINK_LANGUAGE:CXX>:-cuda>
         )
     endif()
@@ -244,8 +305,35 @@ target_link_libraries("${ProjectName}-lbm"
         PUBLIC "${ProjectName}-data"
         PUBLIC "${ProjectName}-lbm-plain"
         PUBLIC "${ProjectName}-lbm-openmp"
+        PUBLIC "${ProjectName}-lbm-openacc-cpu"
+        PUBLIC "${ProjectName}-lbm-openacc-gpu"
+        PUBLIC "${ProjectName}-lbm-opencl-cpu"
+        PUBLIC "${ProjectName}-lbm-opencl-gpu"
         PUBLIC "${ProjectName}-lbm-cuda"
 )
+
+# --- Lbm OpenCL CPU
+
+add_library("${ProjectName}-lbm-opencl-cpu" STATIC
+        lbmini/Lbm/OpenCl/Cpu/LatticeD2Q9.hpp
+        lbmini/Lbm/OpenCl/Cpu/LbmTube.hpp
+)
+
+target_include_directories("${ProjectName}-lbm-opencl-cpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+set_target_properties("${ProjectName}-lbm-opencl-cpu" PROPERTIES LINKER_LANGUAGE CXX)
+target_compile_definitions("${ProjectName}-lbm-opencl-cpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+target_link_libraries("${ProjectName}-lbm-opencl-cpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data" PUBLIC OpenCL::OpenCL)
+
+# --- Lbm OpenCL GPU
+add_library("${ProjectName}-lbm-opencl-gpu" STATIC
+        lbmini/Lbm/OpenCl/Gpu/LatticeD2Q9.hpp
+        lbmini/Lbm/OpenCl/Gpu/LbmTube.hpp
+)
+
+target_include_directories("${ProjectName}-lbm-opencl-gpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+set_target_properties("${ProjectName}-lbm-opencl-gpu" PROPERTIES LINKER_LANGUAGE CXX)
+target_compile_definitions("${ProjectName}-lbm-opencl-gpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+target_link_libraries("${ProjectName}-lbm-opencl-gpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data" PUBLIC OpenCL::OpenCL)
 
 # --- Main
 

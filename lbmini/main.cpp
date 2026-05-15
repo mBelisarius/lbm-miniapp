@@ -1,23 +1,59 @@
-#include <Eigen/Dense>
+#undef _GLIBCXX_ASSERTIONS
+#define NDEBUG
+
+#if defined(__NVCOMPILER)
+namespace std {
+void __glibcxx_assert_fail(const char*, int, const char*, const char*) {}
+}
+#pragma acc routine(std::__glibcxx_assert_fail) seq
+#endif
+
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+
+#include <chrono>
 #include <cmath>
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <string>
-#include <unsupported/Eigen/CXX11/Tensor>
-#include <chrono>
 #include <omp.h>
+#include <string>
+
+#include <Eigen/Dense>
+#include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
+#include "Lbm/CountCores.hpp"
 #include "Lbm/ILattice.hpp"
+#include "Lbm/Cuda/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/Cuda/Gpu/LbmTube.hpp"
+#include "Lbm/OpenAcc/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/OpenAcc/Cpu/LbmTube.hpp"
+#include "Lbm/OpenAcc/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/OpenAcc/Gpu/LbmTube.hpp"
+#include "Lbm/OpenCl/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/OpenCl/Cpu/LbmTube.hpp"
+#include "Lbm/OpenCl/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/OpenCl/Gpu/LbmTube.hpp"
 #include "Lbm/OpenMp/Cpu/LatticeD2Q9.hpp"
 #include "Lbm/OpenMp/Cpu/LbmTube.hpp"
 #include "Lbm/OpenMp/Gpu/LatticeD2Q9.hpp"
 #include "Lbm/OpenMp/Gpu/LbmTube.hpp"
-#include "Lbm/Cuda/LatticeD2Q9.hpp"
-#include "Lbm/Cuda/LbmTube.hpp"
 #include "Lbm/Plain/LatticeD2Q9.hpp"
 #include "Lbm/Plain/LbmTube.hpp"
+
+// POCL (Portable Computing Language) uses a library constructor to read environment
+// variables like POCL_MAX_PTHREAD_COUNT upon library load.
+// Standard setenv() calls in main() execute too late. This constructor runs beforehand.
+__attribute__((constructor))
+void InitPoclEnvironment() {
+    std::string perfCoresStr = std::to_string(lbmini::CountPerformanceCores());
+    setenv("POCL_MAX_PTHREAD_COUNT", perfCoresStr.c_str(), 0);
+    // Explicitly restrict process affinity to P-cores instead of relying on POCL_AFFINITY
+    lbmini::SetProcessToPerformanceCores();
+}
 
 using namespace Eigen;
 
@@ -45,12 +81,12 @@ void OutputData(
       const Scalar y_coord = 0.5 * dy + dy * j;
 
       file << elapsed_seconds << ","
-           << x_coord << ","
-           << y_coord << ","
-           << u(i, j, 0) << ","
-           << u(i, j, 1) << ","
-           << rho(i, j) << ","
-           << p(i, j) << "\n";
+        << x_coord << ","
+        << y_coord << ","
+        << u(i, j, 0) << ","
+        << u(i, j, 1) << ","
+        << rho(i, j) << ","
+        << p(i, j) << "\n";
     }
   }
 
@@ -85,7 +121,7 @@ void run(
   }
 }
 
-int main(int argc, char* argv[]) {
+int main(const int argc, char* argv[]) {
   using Scalar = double;
 
   std::string configPath = "config.yaml";
@@ -128,6 +164,18 @@ int main(int argc, char* argv[]) {
   const auto start_time = std::chrono::high_resolution_clock::now();
 
   // LBM simulation
+  if (performance.cores > 0) {
+#if defined(_OPENMP)
+    omp_set_num_threads(performance.cores);
+#endif
+    std::string coresStr = std::to_string(performance.cores);
+    setenv("ACC_NUM_CORES", coresStr.c_str(), 1);
+    setenv("POCL_MAX_PTHREAD_COUNT", coresStr.c_str(), 1);
+  } else {
+    std::string perfCoresStr = std::to_string(lbmini::CountPerformanceCores());
+    setenv("ACC_NUM_CORES", perfCoresStr.c_str(), 1);
+  }
+
   switch (performance.target) {
     case lbmini::TargetEnum::CPU: {
       switch (performance.backend) {
@@ -162,6 +210,47 @@ int main(int argc, char* argv[]) {
           );
           break;
         }
+        case lbmini::BackendEnum::OpenACC: {
+          std::cout << "Using OpenACC backend on CPU." << std::endl;
+#if defined(_OPENACC)
+          acc_set_device_type(acc_device_host);
+#endif
+          using LbmLattice = lbmini::openacc::cpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::openacc::cpu::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            outputPath,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        case lbmini::BackendEnum::CUDA: {
+          throw std::runtime_error("Backend not available for CPU.");
+        }
+        case lbmini::BackendEnum::OpenCL: {
+          std::cout << "Using OpenCL backend on CPU." << std::endl;
+          using LbmLattice = lbmini::opencl::cpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::opencl::cpu::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            outputPath,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        case lbmini::BackendEnum::Kokkos:
+        case lbmini::BackendEnum::RAJA:
+        case lbmini::BackendEnum::MPI: {
+          throw std::runtime_error("Backend not yet implemented for CPU.");
+        }
         default: {
           std::cerr << "Invalid backend selected for CPU." << std::endl;
           return 1;
@@ -172,6 +261,9 @@ int main(int argc, char* argv[]) {
 
     case lbmini::TargetEnum::GPU: {
       switch (performance.backend) {
+        case lbmini::BackendEnum::Plain: {
+          throw std::runtime_error("Backend not available for GPU.");
+        }
         case lbmini::BackendEnum::OpenMP: {
           std::cout << "Using OpenMP backend on GPU." << std::endl;
           if (omp_get_num_devices() < 1) {
@@ -181,7 +273,7 @@ int main(int argc, char* argv[]) {
           // Use the first available GPU; do not force device 1 (may not exist).
           omp_set_default_device(0);
           std::cout << "  Target device: " << omp_get_default_device()
-                    << " / " << omp_get_num_devices() << std::endl;
+            << " / " << omp_get_num_devices() << std::endl;
           using LbmLattice = lbmini::openmp::gpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openmp::gpu::LbmTube<Scalar, LbmLattice>;
           run<Scalar, LbmTube>(
@@ -195,10 +287,17 @@ int main(int argc, char* argv[]) {
           );
           break;
         }
-        case lbmini::BackendEnum::CUDA: {
-          std::cout << "Using CUDA backend on GPU." << std::endl;
-          using LbmLattice = lbmini::cuda::LatticeD2Q9<Scalar>;
-          using LbmTube = lbmini::cuda::LbmTube<Scalar, LbmLattice>;
+        case lbmini::BackendEnum::OpenACC: {
+          std::cout << "Using OpenACC backend on GPU." << std::endl;
+#if defined(_OPENACC)
+#if 0
+          acc_set_device_type(acc_device_nvidia);
+#else
+          acc_set_device_type(acc_device_default);
+#endif
+#endif
+          using LbmLattice = lbmini::openacc::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::openacc::gpu::LbmTube<Scalar, LbmLattice>;
           run<Scalar, LbmTube>(
             fluid,
             mesh,
@@ -209,6 +308,41 @@ int main(int argc, char* argv[]) {
             start_time
           );
           break;
+        }
+        case lbmini::BackendEnum::CUDA: {
+          std::cout << "Using CUDA backend on GPU." << std::endl;
+          using LbmLattice = lbmini::cuda::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::cuda::gpu::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            outputPath,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        case lbmini::BackendEnum::OpenCL: {
+          std::cout << "Using OpenCL backend on GPU." << std::endl;
+          using LbmLattice = lbmini::opencl::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::opencl::gpu::LbmTube<Scalar, LbmLattice>;
+          run<Scalar, LbmTube>(
+            fluid,
+            mesh,
+            control,
+            performance,
+            outputPath,
+            kSteps,
+            start_time
+          );
+          break;
+        }
+        case lbmini::BackendEnum::Kokkos:
+        case lbmini::BackendEnum::RAJA:
+        case lbmini::BackendEnum::MPI: {
+          throw std::runtime_error("Backend not yet implemented for GPU.");
         }
         default: {
           std::cerr << "Invalid backend selected for GPU." << std::endl;

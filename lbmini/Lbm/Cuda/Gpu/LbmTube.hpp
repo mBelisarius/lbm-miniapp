@@ -5,9 +5,9 @@
 #include "Data.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
-#include "Lbm/Cuda/LatticeD2Q9.hpp"
+#include "Lbm/Cuda/Gpu/LatticeD2Q9.hpp"
 
-namespace lbmini::cuda {
+namespace lbmini::cuda::gpu {
 
 /**
  * @brief CUDA variant of the compressible LBM tube solver.
@@ -185,6 +185,6 @@ private:
   Scalar* gCur_ = nullptr;
   Scalar* gAlt_ = nullptr;
 };
-} // namespace lbmini::cuda
+} // namespace lbmini::cuda::gpu
 
 #endif // LBMINI_CUDA_LBMTUBE_HPP_

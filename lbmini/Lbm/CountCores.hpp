@@ -3,10 +3,12 @@
 
 #include <cmath>
 #include <fstream>
+#include <sched.h>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
-namespace lbmini::openmp::cpu {
+namespace lbmini {
 /**
  * @brief Count physical "performance" CPU cores available to the process.
  *
@@ -61,6 +63,50 @@ inline int CountPerformanceCores() {
 
   return static_cast<int>(std::thread::hardware_concurrency());
 }
+
+/**
+ * @brief Restrict the process CPU affinity to performance cores only.
+ */
+inline void SetProcessToPerformanceCores() {
+  std::ifstream in("/sys/devices/cpu_core/cpus");
+  if (!in.is_open())
+    return; // Fallback to OS default
+
+  std::string s;
+  std::getline(in, s);
+  if (s.empty())
+    return;
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  bool has_cores = false;
+
+  std::size_t i = 0;
+  while (i < s.size()) {
+    std::size_t j = i;
+    while (j < s.size() && s[j] != ',')
+      ++j;
+    if (const std::string tok = s.substr(i, j - i); !tok.empty()) {
+      if (const std::size_t dash = tok.find('-'); dash == std::string::npos) {
+        CPU_SET(std::stoi(tok), &cpuset);
+        has_cores = true;
+      } else {
+        const int a = std::stoi(tok.substr(0, dash));
+        const int b = std::stoi(tok.substr(dash + 1));
+        for (int c = a; c <= b; ++c) {
+          CPU_SET(c, &cpuset);
+          has_cores = true;
+        }
+      }
+    }
+    i = j + 1;
+  }
+
+  if (has_cores) {
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+  }
+}
+
 }
 
 #endif // LBMINI_OPENMP_CPU_COUNTCORES_HPP_

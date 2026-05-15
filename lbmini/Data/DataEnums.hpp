@@ -14,7 +14,12 @@ enum class TargetEnum {
 enum class BackendEnum {
   Plain,
   OpenMP,
+  OpenACC,
   CUDA,
+  OpenCL,
+  Kokkos,
+  RAJA,
+  MPI,
 };
 } // namespace lbmini
 
@@ -66,8 +71,23 @@ struct convert<lbmini::BackendEnum> {
       case lbmini::BackendEnum::OpenMP:
         node = "OpenMP";
         break;
+      case lbmini::BackendEnum::OpenACC:
+        node = "OpenACC";
+        break;
       case lbmini::BackendEnum::CUDA:
         node = "CUDA";
+        break;
+      case lbmini::BackendEnum::OpenCL:
+        node = "OpenCL";
+        break;
+      case lbmini::BackendEnum::Kokkos:
+        node = "Kokkos";
+        break;
+      case lbmini::BackendEnum::RAJA:
+        node = "RAJA";
+        break;
+      case lbmini::BackendEnum::MPI:
+        node = "MPI";
         break;
       default:
         throw std::runtime_error("Invalid BackendEnum value for encoding.");
@@ -85,8 +105,18 @@ struct convert<lbmini::BackendEnum> {
       backend = lbmini::BackendEnum::Plain;
     } else if (value == "OpenMP") {
       backend = lbmini::BackendEnum::OpenMP;
+    } else if (value == "OpenACC") {
+      backend = lbmini::BackendEnum::OpenACC;
     } else if (value == "CUDA") {
       backend = lbmini::BackendEnum::CUDA;
+    } else if (value == "OpenCL") {
+      backend = lbmini::BackendEnum::OpenCL;
+    } else if (value == "Kokkos") {
+      backend = lbmini::BackendEnum::Kokkos;
+    } else if (value == "RAJA") {
+      backend = lbmini::BackendEnum::RAJA;
+    } else if (value == "MPI") {
+      backend = lbmini::BackendEnum::MPI;
     } else {
       return false; // Invalid value
     }
