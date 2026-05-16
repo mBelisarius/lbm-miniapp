@@ -124,38 +124,33 @@ endif()
 # =========================================================
 # Targets
 
-# --- Data
+# --- Common
 
-add_library("${ProjectName}-data" STATIC
+add_library("${ProjectName}-common" STATIC
         lbmini/Data.hpp
         lbmini/Data/ControlData.hpp
         lbmini/Data/DataEnums.hpp
         lbmini/Data/DataReader.hpp
         lbmini/Data/FluidData.hpp
         lbmini/Data/MeshData.hpp
-)
-
-target_include_directories("${ProjectName}-data" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
-
-set_target_properties("${ProjectName}-data" PROPERTIES
-        LINKER_LANGUAGE CXX
-)
-
-target_compile_definitions("${ProjectName}-data" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-
-target_link_libraries("${ProjectName}-data"
-        PUBLIC Eigen3::Eigen
-        PUBLIC yaml-cpp::yaml-cpp
-)
-
-# --- Commom
-
-add_library("${ProjectName}-lbm" STATIC
         lbmini/Lbm/CountCores.hpp
         lbmini/Lbm/ILattice.hpp
         lbmini/Lbm/ILbmTube.hpp
         lbmini/Executor.hpp
         lbmini/Utils.hpp
+)
+
+target_include_directories("${ProjectName}-common" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+
+set_target_properties("${ProjectName}-common" PROPERTIES
+        LINKER_LANGUAGE CXX
+)
+
+target_compile_definitions("${ProjectName}-common" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+
+target_link_libraries("${ProjectName}-common"
+        PUBLIC Eigen3::Eigen
+        PUBLIC yaml-cpp::yaml-cpp
 )
 
 # --- Lbm Plain
@@ -167,7 +162,7 @@ add_library("${ProjectName}-lbm-plain" STATIC
 target_include_directories("${ProjectName}-lbm-plain" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-plain" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-plain" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-target_link_libraries("${ProjectName}-lbm-plain" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+target_link_libraries("${ProjectName}-lbm-plain" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common")
 
 # --- Lbm OpenMP
 
@@ -181,7 +176,7 @@ add_library("${ProjectName}-lbm-openmp" STATIC
 target_include_directories("${ProjectName}-lbm-openmp" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-openmp" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-openmp" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-target_link_libraries("${ProjectName}-lbm-openmp" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+target_link_libraries("${ProjectName}-lbm-openmp" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
     target_compile_options("${ProjectName}-lbm-openmp" PUBLIC
@@ -217,7 +212,7 @@ add_library("${ProjectName}-lbm-openacc-cpu" STATIC
 target_include_directories("${ProjectName}-lbm-openacc-cpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-openacc-cpu" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-openacc-cpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-target_link_libraries("${ProjectName}-lbm-openacc-cpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+target_link_libraries("${ProjectName}-lbm-openacc-cpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common")
 
 # --- Lbm OpenACC GPU
 
@@ -229,7 +224,7 @@ add_library("${ProjectName}-lbm-openacc-gpu" STATIC
 target_include_directories("${ProjectName}-lbm-openacc-gpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-openacc-gpu" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-openacc-gpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-target_link_libraries("${ProjectName}-lbm-openacc-gpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+target_link_libraries("${ProjectName}-lbm-openacc-gpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common")
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
     target_compile_options("${ProjectName}-lbm-openacc-cpu" PUBLIC
@@ -278,7 +273,7 @@ set_target_properties("${ProjectName}-lbm-cuda" PROPERTIES
 )
 
 target_compile_definitions("${ProjectName}-lbm-cuda" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-target_link_libraries("${ProjectName}-lbm-cuda" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data")
+target_link_libraries("${ProjectName}-lbm-cuda" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
     if(ENABLE_CUDA)
@@ -292,25 +287,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
     endif()
 endif()
 
-target_include_directories("${ProjectName}-lbm" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
-
-set_target_properties("${ProjectName}-lbm" PROPERTIES
-        LINKER_LANGUAGE CXX
-)
-
-target_compile_definitions("${ProjectName}-lbm" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-
-target_link_libraries("${ProjectName}-lbm"
-        PUBLIC Eigen3::Eigen
-        PUBLIC "${ProjectName}-data"
-        PUBLIC "${ProjectName}-lbm-plain"
-        PUBLIC "${ProjectName}-lbm-openmp"
-        PUBLIC "${ProjectName}-lbm-openacc-cpu"
-        PUBLIC "${ProjectName}-lbm-openacc-gpu"
-        PUBLIC "${ProjectName}-lbm-opencl-cpu"
-        PUBLIC "${ProjectName}-lbm-opencl-gpu"
-        PUBLIC "${ProjectName}-lbm-cuda"
-)
 
 # --- Lbm OpenCL CPU
 
@@ -322,9 +298,10 @@ add_library("${ProjectName}-lbm-opencl-cpu" STATIC
 target_include_directories("${ProjectName}-lbm-opencl-cpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-opencl-cpu" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-opencl-cpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-target_link_libraries("${ProjectName}-lbm-opencl-cpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data" PUBLIC OpenCL::OpenCL)
+target_link_libraries("${ProjectName}-lbm-opencl-cpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common" PUBLIC OpenCL::OpenCL)
 
 # --- Lbm OpenCL GPU
+
 add_library("${ProjectName}-lbm-opencl-gpu" STATIC
         lbmini/Lbm/OpenCl/Gpu/LatticeD2Q9.hpp
         lbmini/Lbm/OpenCl/Gpu/LbmTube.hpp
@@ -333,16 +310,46 @@ add_library("${ProjectName}-lbm-opencl-gpu" STATIC
 target_include_directories("${ProjectName}-lbm-opencl-gpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
 set_target_properties("${ProjectName}-lbm-opencl-gpu" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-opencl-gpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-target_link_libraries("${ProjectName}-lbm-opencl-gpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-data" PUBLIC OpenCL::OpenCL)
+target_link_libraries("${ProjectName}-lbm-opencl-gpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common" PUBLIC OpenCL::OpenCL)
+
+# --- Lbm MPI CPU
+
+find_package(MPI)
+if(MPI_CXX_FOUND)
+    add_library("${ProjectName}-lbm-mpi" STATIC
+            lbmini/Lbm/Mpi/Cpu/LatticeD2Q9.hpp
+            lbmini/Lbm/Mpi/Cpu/LbmTube.hpp
+    )
+
+    target_include_directories("${ProjectName}-lbm-mpi" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+    set_target_properties("${ProjectName}-lbm-mpi" PROPERTIES LINKER_LANGUAGE CXX)
+    target_compile_definitions("${ProjectName}-lbm-mpi" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+    target_link_libraries("${ProjectName}-lbm-mpi" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common" PUBLIC MPI::MPI_CXX)
+
+    # Add USE_MPI to lbm-miniapp-main and lbm-miniapp-test
+    add_compile_definitions(USE_MPI)
+endif()
 
 # --- Main
 
 add_executable("${ProjectName}-main" lbmini/main.cpp)
 set_target_properties("${ProjectName}-main" PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 target_link_libraries("${ProjectName}-main"
-        PUBLIC "${ProjectName}-data"
-        PUBLIC "${ProjectName}-lbm"
+        PUBLIC Eigen3::Eigen
+        PUBLIC "${ProjectName}-common"
+        PUBLIC "${ProjectName}-lbm-plain"
+        PUBLIC "${ProjectName}-lbm-openmp"
+        PUBLIC "${ProjectName}-lbm-openacc-cpu"
+        PUBLIC "${ProjectName}-lbm-openacc-gpu"
+        PUBLIC "${ProjectName}-lbm-opencl-cpu"
+        PUBLIC "${ProjectName}-lbm-opencl-gpu"
+        PUBLIC "${ProjectName}-lbm-cuda"
+        PUBLIC "${ProjectName}-lbm-mpi"
 )
+
+if(MPI_CXX_FOUND)
+    target_link_libraries("${ProjectName}-main" PUBLIC MPI::MPI_CXX)
+endif()
 
 # --- GTest
 
@@ -354,9 +361,12 @@ add_executable("${ProjectName}-test"
 set_target_properties("${ProjectName}-test" PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 target_link_libraries("${ProjectName}-test"
         PUBLIC gtest_main
-        PUBLIC "${ProjectName}-data"
-        PUBLIC "${ProjectName}-lbm"
+        PUBLIC "${ProjectName}-common"
 )
+
+if(MPI_CXX_FOUND)
+    target_link_libraries("${ProjectName}-test" PUBLIC MPI::MPI_CXX)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests("${ProjectName}-test")
