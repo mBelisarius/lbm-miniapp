@@ -22,17 +22,16 @@
 #define LBMINI_UNROLL_STR_(X) #X
 #define LBMINI_UNROLL_STR(X)  LBMINI_UNROLL_STR_(X)
 #if defined(__NVCOMPILER)
-  #define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(unroll(N)))
+#define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(unroll(N)))
 #elif defined(__clang__) || defined(__CUDACC__)
-  #define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(unroll N))
+#define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(unroll N))
 #elif defined(__GNUC__)
-  #define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(GCC unroll N))
+#define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(GCC unroll N))
 #else
-  #define LBMINI_UNROLL(N)
+#define LBMINI_UNROLL(N)
 #endif
 
 namespace lbmini {
-
 /**
  * @brief Cache-line-aligned allocator for host-side LBM storage.
  *
@@ -42,7 +41,7 @@ namespace lbmini {
  * the requested size to be a multiple of the alignment — we round up
  * internally.
  */
-template <typename T, std::size_t Align = 64>
+template<typename T, std::size_t Align = 64>
 struct AlignedAllocator {
   using value_type = T;
   using size_type = std::size_t;
@@ -50,19 +49,24 @@ struct AlignedAllocator {
   using propagate_on_container_move_assignment = std::true_type;
   using is_always_equal = std::true_type;
 
-  template <class U>
-  struct rebind { using other = AlignedAllocator<U, Align>; };
+  template<class U>
+  struct rebind {
+    using other = AlignedAllocator<U, Align>;
+  };
 
   AlignedAllocator() noexcept = default;
-  template <class U>
+
+  template<class U>
   explicit AlignedAllocator(const AlignedAllocator<U, Align>&) noexcept {}
 
   [[nodiscard]] static T* allocate(std::size_t n) {
-    if (n == 0) return nullptr;
+    if (n == 0)
+      return nullptr;
     const std::size_t bytes = n * sizeof(T);
     const std::size_t rounded = ((bytes + Align - 1) / Align) * Align;
     void* p = std::aligned_alloc(Align, rounded);
-    if (!p) throw std::bad_alloc();
+    if (!p)
+      throw std::bad_alloc();
     return static_cast<T*>(p);
   }
 
@@ -71,9 +75,10 @@ struct AlignedAllocator {
   }
 };
 
-template <class T, class U, std::size_t A>
+template<class T, class U, std::size_t A>
 inline bool operator==(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) noexcept { return true; }
-template <class T, class U, std::size_t A>
+
+template<class T, class U, std::size_t A>
 inline bool operator!=(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) noexcept { return false; }
 
 /**
@@ -90,9 +95,8 @@ inline bool operator!=(const AlignedAllocator<T, A>&, const AlignedAllocator<U, 
  * abstraction is kept intentionally small — only the operations used by
  * `LbmTube` (`assign`, `data`, `size`, `swap`, `begin/end`) are assumed.
  */
-template <typename T>
+template<typename T>
 using DeviceBuffer = std::vector<T, AlignedAllocator<T, 64>>;
-
 } // namespace lbmini
 
 #endif // LBMINI_LBM_DEVICEBUFFER_HPP_

@@ -12,7 +12,6 @@
 #include "Lbm/ILbmTube.hpp"
 
 namespace lbmini::plain {
-
 /**
  * @brief GPU-oriented, scalability-tuned reference implementation of the
  *        compressible LBM tube solver.
@@ -81,13 +80,19 @@ public:
    * @{
    */
   [[nodiscard]] Tensor<Scalar, kDim_> P() const override;
+
   [[nodiscard]] Tensor<Scalar, kDim_> Rho() const override;
+
   [[nodiscard]] Tensor<Scalar, kDim_> T() const override;
+
   [[nodiscard]] Tensor<Scalar, kDim_ + 1> U() const override;
+
   /** @} */
 
   void Init() override;
+
   void Step(bool save) override;
+
   void Run(Index steps, bool save) override;
 
 protected:
@@ -96,7 +101,9 @@ protected:
   //   Velocity field:      u[d * N + i*ny + j]       (SoA, d-major)
   //   Distribution fields: f[idc * N + i*ny + j]     (SoA, idc-major)
   [[nodiscard]] Index cellIndex(const Index i, const Index j) const { return i * ny_ + j; }
+
   [[nodiscard]] Index distIndex(const Index idc, const Index cell) const { return idc * N_ + cell; }
+
   [[nodiscard]] Index uIndex(const Index d, const Index cell) const { return d * N_ + cell; }
 
   /**
@@ -170,6 +177,7 @@ protected:
    * `computeMacroscopic()` to unify the interface across all backends.
    */
   void streamAndMacroscopic();
+
   /** @} */
 
 private:
@@ -204,7 +212,7 @@ private:
   // The tables are allocated in [idc][cell][k] order (k=0..3) so the streaming
   // kernel accesses them coalesced across cells for fixed idc.
   lbmini::DeviceBuffer<std::int32_t> streamIdx_; // size distSize_ * 4
-  lbmini::DeviceBuffer<Scalar>       streamW_;   // size distSize_ * 4
+  lbmini::DeviceBuffer<Scalar> streamW_;         // size distSize_ * 4
 };
 
 template<typename Scalar, typename LatticeType>
@@ -278,10 +286,10 @@ void LbmTube<Scalar, LatticeType>::Init() {
       u_[1 * N_ + cell] = Scalar{ 0 };
       if (i < nx_ / 2) {
         rho_[cell] = kFluid_.densityL;
-        p_[cell]   = kFluid_.pressureL;
+        p_[cell] = kFluid_.pressureL;
       } else {
         rho_[cell] = kFluid_.densityR;
-        p_[cell]   = kFluid_.pressureR;
+        p_[cell] = kFluid_.pressureR;
       }
       tem_[cell] = LatticeType::Cs2 * p_[cell] / (rho_[cell] * kFluid_.constant);
       for (Index d = 0; d < kDim_ + 1; ++d)
@@ -322,13 +330,16 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
   streamW_.assign(distSize_ * 4, Scalar{ 0 });
 
   auto clampX = [&](const Index x) -> Index {
-    if (x < 0) return 0;
-    if (x >= nx_) return nx_ - 1;
+    if (x < 0)
+      return 0;
+    if (x >= nx_)
+      return nx_ - 1;
     return x;
   };
   auto wrapY = [&](Index y) -> Index {
     y = y % ny_;
-    if (y < 0) y += ny_;
+    if (y < 0)
+      y += ny_;
     return y;
   };
 
@@ -348,7 +359,7 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
         const Index x1 = x0 + 1;
         const Index y1 = y0 + 1;
         const Index cx0 = clampX(x0), cx1 = clampX(x1);
-        const Index wy0 = wrapY(y0),  wy1 = wrapY(y1);
+        const Index wy0 = wrapY(y0), wy1 = wrapY(y1);
 
         const Index c00 = cx0 * ny_ + wy0;
         const Index c10 = cx1 * ny_ + wy0;
@@ -371,17 +382,22 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
         const Scalar d11 = std::sqrt(dx11 * dx11 + dy11 * dy11);
 
         auto snap = [&](Scalar d, Index cAny) -> bool {
-          if (d >= kTiny_) return false;
+          if (d >= kTiny_)
+            return false;
           streamIdx_[base + 0] = static_cast<std::int32_t>(cAny);
           streamIdx_[base + 1] = streamIdx_[base + 2] = streamIdx_[base + 3] = static_cast<std::int32_t>(cAny);
           streamW_[base + 0] = Scalar{ 1 };
           streamW_[base + 1] = streamW_[base + 2] = streamW_[base + 3] = Scalar{ 0 };
           return true;
         };
-        if (snap(d00, c00)) continue;
-        if (snap(d10, c10)) continue;
-        if (snap(d01, c01)) continue;
-        if (snap(d11, c11)) continue;
+        if (snap(d00, c00))
+          continue;
+        if (snap(d10, c10))
+          continue;
+        if (snap(d01, c01))
+          continue;
+        if (snap(d11, c11))
+          continue;
 
         const Scalar idw = kControl_.idw;
         const Scalar w00 = Scalar{ 1 } / std::pow(d00, idw);
@@ -480,7 +496,9 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
     for (Index d = 0; d < kDim_; ++d)
       cshift[idc][d] = LatticeType::Cshift(idc, d, Ushift[d]);
 
-  using std::exp; using std::log; using std::fabs;
+  using std::exp;
+  using std::log;
+  using std::fabs;
 
   for (Index cell = 0; cell < N_; ++cell) {
     const Scalar rho = pRho[cell];
@@ -498,9 +516,12 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
         const Scalar uia = (d == 0 ? ux : uy) - Ushift[d];
         const Scalar uia2t = uia * uia + T;
         Scalar pf;
-        if (vi == 0)       pf = Scalar{ 1 } - uia2t;
-        else if (vi == 1)  pf = Scalar{ 0.5 } * ( uia + uia2t);
-        else /* vi == -1*/ pf = Scalar{ 0.5 } * (-uia + uia2t);
+        if (vi == 0)
+          pf = Scalar{ 1 } - uia2t;
+        else if (vi == 1)
+          pf = Scalar{ 0.5 } * (uia + uia2t);
+        else /* vi == -1*/
+          pf = Scalar{ 0.5 } * (-uia + uia2t);
         phi *= pf;
       }
       feqLocal[idc] = phi;
@@ -535,7 +556,8 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
       smax = -kMaxExp_;
       for (Index idc = 0; idc < kQ_; ++idc) {
         Scalar s = Scalar{ 0 };
-        for (Index d = 0; d < kDim_; ++d) s += xi[d] * cshift[idc][d];
+        for (Index d = 0; d < kDim_; ++d)
+          s += xi[d] * cshift[idc][d];
         si[idc] = s;
         smax = (s > smax) ? s : smax;
       }
@@ -582,7 +604,7 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
 
       const Scalar r0 = S1[0] * invZ - targetM[0];
       const Scalar r1 = S1[1] * invZ - targetM[1];
-      xi[0] -= alpha * ( J[1][1] * r0 - J[0][1] * r1) * invDet;
+      xi[0] -= alpha * (J[1][1] * r0 - J[0][1] * r1) * invDet;
       xi[1] -= alpha * (-J[1][0] * r0 + J[0][0] * r1) * invDet;
       alpha *= Scalar{ 0.5 };
     }
@@ -593,7 +615,8 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
       smax = -kMaxExp_;
       for (Index idc = 0; idc < kQ_; ++idc) {
         Scalar s = Scalar{ 0 };
-        for (Index d = 0; d < kDim_; ++d) s += xi[d] * cshift[idc][d];
+        for (Index d = 0; d < kDim_; ++d)
+          s += xi[d] * cshift[idc][d];
         si[idc] = s;
         smax = (s > smax) ? s : smax;
       }
@@ -647,9 +670,13 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
     }
     eps /= Scalar(kQ_);
     Scalar sigma = Scalar{ 1 };
-    if (eps >= Scalar{ 1 })         sigma = omega;
-    else if (eps >= Scalar{ 0.1 })  sigma = Scalar{ 1.35 };
-    else if (eps >= Scalar{ 0.01 }) sigma = Scalar{ 1.05 };
+    if (eps >= Scalar{ 1 })
+      sigma = omega;
+    else if (eps >= Scalar{ 0.1 })
+      sigma = Scalar{ 1.35 };
+    else
+      if (eps >= Scalar{ 0.01 })
+        sigma = Scalar{ 1.05 };
 
     Scalar omegaL = omega / sigma;
     omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };
@@ -692,15 +719,15 @@ void LbmTube<Scalar, LatticeType>::seedEquilibria() {
   Scalar* __restrict__ pF = f_.data();
   Scalar* __restrict__ pG = g_.data();
   const Scalar* __restrict__ pRho = rho_.data();
-  const Scalar* __restrict__ pT   = tem_.data();
-  const Scalar* __restrict__ pU   = u_.data();
+  const Scalar* __restrict__ pT = tem_.data();
+  const Scalar* __restrict__ pU = u_.data();
 
   for (Index cell = 0; cell < N_; ++cell) {
     const Scalar rho = pRho[cell];
-    const Scalar T   = pT[cell];
-    const Scalar ux  = pU[0 * N_ + cell];
-    const Scalar uy  = pU[1 * N_ + cell];
-    const Scalar u2  = ux * ux + uy * uy;
+    const Scalar T = pT[cell];
+    const Scalar ux = pU[0 * N_ + cell];
+    const Scalar uy = pU[1 * N_ + cell];
+    const Scalar u2 = ux * ux + uy * uy;
 
     // Feq (product form).
     for (Index idc = 0; idc < kQ_; ++idc) {
@@ -710,9 +737,12 @@ void LbmTube<Scalar, LatticeType>::seedEquilibria() {
         const Scalar uia = (d == 0 ? ux : uy) - Ushift[d];
         const Scalar uia2t = uia * uia + T;
         Scalar pf;
-        if (vi == 0)       pf = Scalar{ 1 } - uia2t;
-        else if (vi == 1)  pf = Scalar{ 0.5 } * ( uia + uia2t);
-        else               pf = Scalar{ 0.5 } * (-uia + uia2t);
+        if (vi == 0)
+          pf = Scalar{ 1 } - uia2t;
+        else if (vi == 1)
+          pf = Scalar{ 0.5 } * (uia + uia2t);
+        else
+          pf = Scalar{ 0.5 } * (-uia + uia2t);
         phi *= pf;
       }
       pF[idc * N_ + cell] = phi;
@@ -722,7 +752,8 @@ void LbmTube<Scalar, LatticeType>::seedEquilibria() {
     const Scalar E = kFluid_.specificHeatCv * T + Scalar{ 0.5 } * u2;
     const Scalar targetE = Scalar{ 2 } * rho * E;
     Scalar sumW = Scalar{ 0 };
-    for (Index idc = 0; idc < kQ_; ++idc) sumW += LatticeType::Weights(idc, T);
+    for (Index idc = 0; idc < kQ_; ++idc)
+      sumW += LatticeType::Weights(idc, T);
     const Scalar sc = (sumW > kTiny_) ? targetE / sumW : targetE / Scalar(kQ_);
     for (Index idc = 0; idc < kQ_; ++idc) {
       const Scalar wi = (sumW > kTiny_) ? LatticeType::Weights(idc, T) : Scalar{ 1 };
@@ -736,20 +767,20 @@ void LbmTube<Scalar, LatticeType>::stream() {
   // Pure streaming: branch-free 4-way IDW gather from f_/g_ into faux_/gaux_.
   // Intentionally NOT fused with the macroscopic reduction — see the class
   // `stream()` docstring for the kernel-fission rationale (GPU occupancy).
-  const Scalar*       __restrict__ pF   = f_.data();
-  const Scalar*       __restrict__ pG   = g_.data();
-  Scalar*             __restrict__ pFaux = faux_.data();
-  Scalar*             __restrict__ pGaux = gaux_.data();
-  const std::int32_t* __restrict__ pSI  = streamIdx_.data();
-  const Scalar*       __restrict__ pSW  = streamW_.data();
+  const Scalar* __restrict__ pF = f_.data();
+  const Scalar* __restrict__ pG = g_.data();
+  Scalar* __restrict__ pFaux = faux_.data();
+  Scalar* __restrict__ pGaux = gaux_.data();
+  const std::int32_t* __restrict__ pSI = streamIdx_.data();
+  const Scalar* __restrict__ pSW = streamW_.data();
 
   for (Index idc = 0; idc < kQ_; ++idc) {
-    const Scalar*       __restrict__ fplane   = pF + idc * N_;
-    const Scalar*       __restrict__ gplane   = pG + idc * N_;
-    Scalar*             __restrict__ fOut     = pFaux + idc * N_;
-    Scalar*             __restrict__ gOut     = pGaux + idc * N_;
+    const Scalar* __restrict__ fplane = pF + idc * N_;
+    const Scalar* __restrict__ gplane = pG + idc * N_;
+    Scalar* __restrict__ fOut = pFaux + idc * N_;
+    Scalar* __restrict__ gOut = pGaux + idc * N_;
     const std::int32_t* __restrict__ idxPlane = pSI + idc * N_ * 4;
-    const Scalar*       __restrict__ wPlane   = pSW + idc * N_ * 4;
+    const Scalar* __restrict__ wPlane = pSW + idc * N_ * 4;
 
     for (Index cell = 0; cell < N_; ++cell) {
       const std::int32_t i0 = idxPlane[cell * 4 + 0];
@@ -771,7 +802,6 @@ void LbmTube<Scalar, LatticeType>::streamAndMacroscopic() {
   stream();
   computeMacroscopic();
 }
-
 } // namespace lbmini::plain
 
 #endif // LBMINI_PLAIN_LBMTUBE_HPP_

@@ -135,7 +135,9 @@ public:
 
 protected:
   [[nodiscard]] Index cellIndex(const Index i, const Index j) const { return i * ny_ + j; }
+
   [[nodiscard]] Index distIndex(const Index idc, const Index cell) const { return idc * N_ + cell; }
+
   [[nodiscard]] Index uIndex(const Index d, const Index cell) const { return d * N_ + cell; }
 
   /**
