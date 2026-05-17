@@ -4,7 +4,6 @@
 #include <unsupported/Eigen/CXX11/Tensor>
 
 namespace lbmini {
-
 /**
  * @class ILbmTube
  * @brief Base class for Lattice-Boltzmann fluid simulations of high-speed compressible flows.

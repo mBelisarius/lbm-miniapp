@@ -101,6 +101,11 @@ if (NOT NVHPC_FOUND)
 endif ()
 
 # =========================================================
+# MPI
+
+find_package(MPI)
+
+# =========================================================
 # yaml-cpp
 
 include(FetchContent)
@@ -314,27 +319,22 @@ target_link_libraries("${ProjectName}-lbm-opencl-gpu" PUBLIC Eigen3::Eigen PUBLI
 
 # --- Lbm MPI CPU
 
-find_package(MPI)
-if(MPI_CXX_FOUND)
-    add_library("${ProjectName}-lbm-mpi" STATIC
-            lbmini/Lbm/Mpi/Cpu/LatticeD2Q9.hpp
-            lbmini/Lbm/Mpi/Cpu/LbmTube.hpp
-    )
+add_library("${ProjectName}-lbm-mpi" STATIC
+        lbmini/Lbm/Mpi/Cpu/LatticeD2Q9.hpp
+        lbmini/Lbm/Mpi/Cpu/LbmTube.hpp
+)
 
-    target_include_directories("${ProjectName}-lbm-mpi" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
-    set_target_properties("${ProjectName}-lbm-mpi" PROPERTIES LINKER_LANGUAGE CXX)
-    target_compile_definitions("${ProjectName}-lbm-mpi" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
-    target_link_libraries("${ProjectName}-lbm-mpi" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common" PUBLIC MPI::MPI_CXX)
-
-    # Add USE_MPI to lbm-miniapp-main and lbm-miniapp-test
-    add_compile_definitions(USE_MPI)
-endif()
+target_include_directories("${ProjectName}-lbm-mpi" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+set_target_properties("${ProjectName}-lbm-mpi" PROPERTIES LINKER_LANGUAGE CXX)
+target_compile_definitions("${ProjectName}-lbm-mpi" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+target_link_libraries("${ProjectName}-lbm-mpi" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common" PUBLIC MPI::MPI_CXX)
 
 # --- Main
 
 add_executable("${ProjectName}-main" lbmini/main.cpp)
 set_target_properties("${ProjectName}-main" PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 target_link_libraries("${ProjectName}-main"
+        PUBLIC MPI::MPI_CXX
         PUBLIC Eigen3::Eigen
         PUBLIC "${ProjectName}-common"
         PUBLIC "${ProjectName}-lbm-plain"
@@ -347,10 +347,6 @@ target_link_libraries("${ProjectName}-main"
         PUBLIC "${ProjectName}-lbm-mpi"
 )
 
-if(MPI_CXX_FOUND)
-    target_link_libraries("${ProjectName}-main" PUBLIC MPI::MPI_CXX)
-endif()
-
 # --- GTest
 
 enable_testing()
@@ -360,13 +356,11 @@ add_executable("${ProjectName}-test"
 )
 set_target_properties("${ProjectName}-test" PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 target_link_libraries("${ProjectName}-test"
+        PUBLIC MPI::MPI_CXX
+        PUBLIC Eigen3::Eigen
         PUBLIC gtest_main
         PUBLIC "${ProjectName}-common"
 )
-
-if(MPI_CXX_FOUND)
-    target_link_libraries("${ProjectName}-test" PUBLIC MPI::MPI_CXX)
-endif()
 
 include(GoogleTest)
 gtest_discover_tests("${ProjectName}-test")

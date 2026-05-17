@@ -4,7 +4,6 @@
 #include "Lbm/ILattice.hpp"
 
 namespace lbmini::mpi::cpu {
-
 /**
  * @brief D2Q9 lattice descriptor for the MPI CPU implementation.
  *
@@ -76,20 +75,28 @@ private:
    * can be inlined at every call site on both host and device.
    */
   static constexpr Index kVelocity_[Lattice::Speeds()][Lattice::Dim()] = {
-    {  0,  0 },
-    {  1,  0 },
-    { -1,  0 },
-    {  0,  1 },
-    {  0, -1 },
-    {  1,  1 },
+    { 0, 0 },
+    { 1, 0 },
+    { -1, 0 },
+    { 0, 1 },
+    { 0, -1 },
+    { 1, 1 },
     { -1, -1 },
-    {  1, -1 },
-    { -1,  1 },
+    { 1, -1 },
+    { -1, 1 },
   };
 
   /// Opposite-direction table (used for bounce-back boundary conditions).
   static constexpr Index kOpposite_[Lattice::Speeds()] = {
-    0, 2, 1, 4, 3, 6, 5, 8, 7
+    0,
+    2,
+    1,
+    4,
+    3,
+    6,
+    5,
+    8,
+    7
   };
 };
 } // namespace lbmini::mpi::cpu

@@ -106,7 +106,6 @@ inline void SetProcessToPerformanceCores() {
     sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
   }
 }
-
 }
 
 #endif // LBMINI_OPENMP_CPU_COUNTCORES_HPP_

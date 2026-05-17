@@ -8,20 +8,16 @@ void __glibcxx_assert_fail(const char*, int, const char*, const char*) {}
 #pragma acc routine(std::__glibcxx_assert_fail) seq
 #endif
 
-#if defined(_OPENMP)
-#include <omp.h>
-#endif
-
-#include <unistd.h>
-#include <vector>
 #include <chrono>
 #include <cmath>
-
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mpi.h>
 #include <omp.h>
 #include <string>
+#include <unistd.h>
+#include <vector>
 
 #include <Eigen/Dense>
 #include <unsupported/Eigen/CXX11/Tensor>
@@ -31,6 +27,8 @@ void __glibcxx_assert_fail(const char*, int, const char*, const char*) {}
 #include "Lbm/ILattice.hpp"
 #include "Lbm/Cuda/Gpu/LatticeD2Q9.hpp"
 #include "Lbm/Cuda/Gpu/LbmTube.hpp"
+#include "Lbm/Mpi/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/Mpi/Cpu/LbmTube.hpp"
 #include "Lbm/OpenAcc/Cpu/LatticeD2Q9.hpp"
 #include "Lbm/OpenAcc/Cpu/LbmTube.hpp"
 #include "Lbm/OpenAcc/Gpu/LatticeD2Q9.hpp"
@@ -46,21 +44,15 @@ void __glibcxx_assert_fail(const char*, int, const char*, const char*) {}
 #include "Lbm/Plain/LatticeD2Q9.hpp"
 #include "Lbm/Plain/LbmTube.hpp"
 
-#ifdef USE_MPI
-#include <mpi.h>
-#include "Lbm/Mpi/Cpu/LatticeD2Q9.hpp"
-#include "Lbm/Mpi/Cpu/LbmTube.hpp"
-#endif
-
 // POCL (Portable Computing Language) uses a library constructor to read environment
 // variables like POCL_MAX_PTHREAD_COUNT upon library load.
 // Standard setenv() calls in main() execute too late. This constructor runs beforehand.
 __attribute__((constructor))
 void InitPoclEnvironment() {
-    std::string perfCoresStr = std::to_string(lbmini::CountPerformanceCores());
-    setenv("POCL_MAX_PTHREAD_COUNT", perfCoresStr.c_str(), 0);
-    // Explicitly restrict process affinity to P-cores instead of relying on POCL_AFFINITY
-    lbmini::SetProcessToPerformanceCores();
+  std::string perfCoresStr = std::to_string(lbmini::CountPerformanceCores());
+  setenv("POCL_MAX_PTHREAD_COUNT", perfCoresStr.c_str(), 0);
+  // Explicitly restrict process affinity to P-cores instead of relying on POCL_AFFINITY
+  lbmini::SetProcessToPerformanceCores();
 }
 
 using namespace Eigen;
@@ -78,7 +70,8 @@ void OutputData(
   const auto p = lbmTube.P();
   const auto u = lbmTube.U();
 
-  if (rank != 0) return;
+  if (rank != 0)
+    return;
 
   std::ofstream file(std::filesystem::path(outDir) / ("data_" + std::to_string(step) + ".csv"));
   file << "runtime,x,y,ux,uy,density,pressure\n";
@@ -117,11 +110,11 @@ void run(
   // LBM simulation
   LbmTubeType lbmTube(fluid, mesh, control, performance);
   lbmTube.Init();
-  
+
   int rank = 0;
-#ifdef USE_MPI
+  #ifdef USE_MPI
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-#endif
+  #endif
 
   OutputData(lbmTube, mesh, 0, outpath, 0.0, rank);
 
@@ -133,7 +126,7 @@ void run(
 
     const auto current_time = std::chrono::high_resolution_clock::now();
     const std::chrono::duration<double> elapsed_seconds = current_time - startRunTime;
-    
+
     if (rank == 0) {
       std::cout << "Time step: " << i << std::endl;
     }
@@ -163,16 +156,16 @@ int main(int argc, char* argv[]) {
 
   bool use_mpi = (performance.backend == lbmini::BackendEnum::MPI);
 
-#ifdef USE_MPI
+  #ifdef USE_MPI
   if (use_mpi) {
     bool is_under_mpi = std::getenv("OMPI_COMM_WORLD_SIZE") != nullptr ||
-                        std::getenv("PMI_RANK") != nullptr ||
-                        std::getenv("PMIX_RANK") != nullptr;
-    
+      std::getenv("PMI_RANK") != nullptr ||
+      std::getenv("PMIX_RANK") != nullptr;
+
     if (!is_under_mpi) {
       int num_procs = performance.cores > 0 ? performance.cores : lbmini::CountPerformanceCores();
       std::string num_procs_str = std::to_string(num_procs);
-      
+
       std::vector<char*> args;
       args.push_back(const_cast<char*>("mpirun"));
       args.push_back(const_cast<char*>("--use-hwthread-cpus"));
@@ -183,26 +176,26 @@ int main(int argc, char* argv[]) {
         args.push_back(argv[i]);
       }
       args.push_back(nullptr);
-      
+
       execvp("mpirun", args.data());
-      
+
       std::cerr << "Failed to automatically launch mpirun. Please run with mpirun manually." << std::endl;
       return 1;
     }
   }
-#endif
+  #endif
 
   int rank = 0;
-#ifdef USE_MPI
+  #ifdef USE_MPI
   if (use_mpi) {
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   }
-#endif
+  #endif
 
   // Create unique output directory
   std::string outputPath = outputPathBase;
-  
+
   if (rank == 0) {
     Index counter = 1;
     while (std::filesystem::exists(outputPath) && !std::filesystem::is_empty(outputPath))
@@ -214,16 +207,17 @@ int main(int argc, char* argv[]) {
     // Copy config file
     std::filesystem::copy(configPath, std::filesystem::path(outputPath) / "config.yaml");
   }
-  
-#ifdef USE_MPI
+
+  #ifdef USE_MPI
   if (use_mpi) {
     // Broadcast the chosen output directory path to all ranks, just in case
     int pathLen = outputPath.size();
     MPI_Bcast(&pathLen, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    if (rank != 0) outputPath.resize(pathLen);
+    if (rank != 0)
+      outputPath.resize(pathLen);
     MPI_Bcast(outputPath.data(), pathLen, MPI_CHAR, 0, MPI_COMM_WORLD);
   }
-#endif
+  #endif
 
   // Calculate the physical time step
   const Scalar cs2 = Scalar(1.0) / Scalar(3.0);
@@ -237,9 +231,9 @@ int main(int argc, char* argv[]) {
 
   // LBM simulation
   if (performance.cores > 0) {
-#if defined(_OPENMP)
+    #if defined(_OPENMP)
     omp_set_num_threads(performance.cores);
-#endif
+    #endif
     std::string coresStr = std::to_string(performance.cores);
     setenv("ACC_NUM_CORES", coresStr.c_str(), 1);
     setenv("POCL_MAX_PTHREAD_COUNT", coresStr.c_str(), 1);
@@ -284,9 +278,9 @@ int main(int argc, char* argv[]) {
         }
         case lbmini::BackendEnum::OpenACC: {
           std::cout << "Using OpenACC backend on CPU." << std::endl;
-#if defined(_OPENACC)
+          #if defined(_OPENACC)
           acc_set_device_type(acc_device_host);
-#endif
+          #endif
           using LbmLattice = lbmini::openacc::cpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openacc::cpu::LbmTube<Scalar, LbmLattice>;
           run<Scalar, LbmTube>(
@@ -322,9 +316,9 @@ int main(int argc, char* argv[]) {
         case lbmini::BackendEnum::RAJA: {
           throw std::runtime_error("Backend not yet implemented for CPU.");
         }
-#ifdef USE_MPI
         case lbmini::BackendEnum::MPI: {
-          if (rank == 0) std::cout << "Using MPI backend on CPU." << std::endl;
+          if (rank == 0)
+            std::cout << "Using MPI backend on CPU." << std::endl;
           using LbmLattice = lbmini::mpi::cpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::mpi::cpu::LbmTube<Scalar, LbmLattice>;
           run<Scalar, LbmTube>(
@@ -338,11 +332,6 @@ int main(int argc, char* argv[]) {
           );
           break;
         }
-#else
-        case lbmini::BackendEnum::MPI: {
-          throw std::runtime_error("MPI Backend not compiled for CPU.");
-        }
-#endif
         default: {
           std::cerr << "Invalid backend selected for CPU." << std::endl;
           return 1;
@@ -381,13 +370,13 @@ int main(int argc, char* argv[]) {
         }
         case lbmini::BackendEnum::OpenACC: {
           std::cout << "Using OpenACC backend on GPU." << std::endl;
-#if defined(_OPENACC)
-#if 0
+          #if defined(_OPENACC)
+          #if 0
           acc_set_device_type(acc_device_nvidia);
-#else
+          #else
           acc_set_device_type(acc_device_default);
-#endif
-#endif
+          #endif
+          #endif
           using LbmLattice = lbmini::openacc::gpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openacc::gpu::LbmTube<Scalar, LbmLattice>;
           run<Scalar, LbmTube>(
@@ -456,11 +445,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Simulation completed. Total run time: " << elapsed_time.count() << " s" << std::endl;
   }
 
-#ifdef USE_MPI
   if (use_mpi) {
     MPI_Finalize();
   }
-#endif
 
   return 0;
 }

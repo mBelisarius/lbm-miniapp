@@ -12,6 +12,7 @@ public:
 
   // This class only defines an interface and should not be created as an object
   ILattice() = delete;
+
   ~ILattice() = delete;
 
   static constexpr Index Dim() { return Dim_; }
@@ -69,7 +70,6 @@ public:
     const ControlData<Scalar>& pControl
   );
 };
-
 } // namespace lbmini
 
 #endif // LBMINI_ILATTICE_HPP_

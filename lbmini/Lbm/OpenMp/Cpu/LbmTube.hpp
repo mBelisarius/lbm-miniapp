@@ -611,9 +611,8 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
       sigma = omega;
     else if (eps >= Scalar{ 0.1 })
       sigma = Scalar{ 1.35 };
-    else
-      if (eps >= Scalar{ 0.01 })
-        sigma = Scalar{ 1.05 };
+    else if (eps >= Scalar{ 0.01 })
+      sigma = Scalar{ 1.05 };
 
     Scalar omegaL = omega / sigma;
     omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };

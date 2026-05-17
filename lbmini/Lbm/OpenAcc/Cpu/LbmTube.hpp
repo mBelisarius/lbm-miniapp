@@ -296,12 +296,11 @@ void LbmTube<Scalar, LatticeType>::Step(const bool save) {
 
 template<typename Scalar, typename LatticeType>
 void LbmTube<Scalar, LatticeType>::Run(const Index steps, bool /*save*/) {
-  
   {
     for (Index t = 0; t < steps; ++t) {
       collisionAndEquilibria();
       streamAndMacroscopic();
-      
+
       {
         std::swap(fCur_, fAlt_);
         std::swap(gCur_, gAlt_);
@@ -618,9 +617,8 @@ void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
       sigma = omega;
     else if (eps >= Scalar{ 0.1 })
       sigma = Scalar{ 1.35 };
-    else
-      if (eps >= Scalar{ 0.01 })
-        sigma = Scalar{ 1.05 };
+    else if (eps >= Scalar{ 0.01 })
+      sigma = Scalar{ 1.05 };
 
     Scalar omegaL = omega / sigma;
     omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };
