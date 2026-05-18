@@ -40,7 +40,23 @@ typedef cl_int (CL_API_CALL *pfn_clEnqueueCommandBufferKHR)(cl_uint, cl_command_
 
 typedef cl_int (CL_API_CALL *pfn_clReleaseCommandBufferKHR)(cl_command_buffer_khr_ptr);
 
+#include "Lbm/CountCores.hpp"
+
 namespace lbmini::opencl::cpu {
+
+// POCL (Portable Computing Language) uses a library constructor to read environment
+// variables like POCL_MAX_PTHREAD_COUNT upon library load.
+// Standard setenv() calls in main() execute too late. This constructor runs beforehand.
+#ifdef __linux__
+__attribute__((constructor))
+static void InitPoclEnvironment() {
+  std::string perfCoresStr = std::to_string(lbmini::CountPerformanceCores());
+  setenv("POCL_MAX_PTHREAD_COUNT", perfCoresStr.c_str(), 0);
+  // Explicitly restrict process affinity to P-cores instead of relying on POCL_AFFINITY
+  lbmini::SetProcessToPerformanceCores();
+}
+#endif
+
 /**
  * @brief OpenCL variant of the compressible LBM tube solver for CPUs.
  *

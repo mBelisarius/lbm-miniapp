@@ -80,6 +80,16 @@ public:
 
   void Run(Index steps, bool save) override;
 
+  int Rank() const override { return rank_; }
+
+  void BroadcastOutputPath(std::string& path) const override {
+    int pathLen = path.size();
+    MPI_Bcast(&pathLen, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (rank_ != 0)
+      path.resize(pathLen);
+    MPI_Bcast(path.data(), pathLen, MPI_CHAR, 0, MPI_COMM_WORLD);
+  }
+
 protected:
   // Flat-index helpers.
   //   Macro fields:        rho[i*ny + j]

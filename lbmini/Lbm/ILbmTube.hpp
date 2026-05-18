@@ -42,6 +42,12 @@ public:
   /** @brief Advances the simulation by multiple time steps. */
   virtual void Run(Index steps, bool save) = 0;
 
+  /** @brief Returns the rank of the current process (0 for non-MPI backends). */
+  virtual int Rank() const { return 0; }
+
+  /** @brief Broadcasts the output path across MPI ranks (no-op for non-MPI backends). */
+  virtual void BroadcastOutputPath(std::string& /*path*/) const {}
+
 protected:
   ILbmTube() = default;
 };

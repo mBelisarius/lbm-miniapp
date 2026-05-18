@@ -1,6 +1,7 @@
 #ifndef LBMINI_ILATTICE_HPP_
 #define LBMINI_ILATTICE_HPP_
 
+#include <Eigen/Core>
 #include "Data/ControlData.hpp"
 #include "Data/FluidData.hpp"
 
@@ -11,9 +12,9 @@ public:
   using Index = Eigen::Index;
 
   // This class only defines an interface and should not be created as an object
-  ILattice() = delete;
+  ILattice() = default;
 
-  ~ILattice() = delete;
+  virtual ~ILattice() = default;
 
   static constexpr Index Dim() { return Dim_; }
 

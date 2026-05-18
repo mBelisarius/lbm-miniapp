@@ -142,6 +142,7 @@ add_library("${ProjectName}-common" STATIC
         lbmini/Lbm/ILattice.hpp
         lbmini/Lbm/ILbmTube.hpp
         lbmini/Executor.hpp
+        lbmini/Executor.cpp
         lbmini/Utils.hpp
 )
 
@@ -151,7 +152,10 @@ set_target_properties("${ProjectName}-common" PROPERTIES
         LINKER_LANGUAGE CXX
 )
 
-target_compile_definitions("${ProjectName}-common" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+if(MPI_CXX_FOUND)
+    target_compile_definitions("${ProjectName}-common" PUBLIC USE_MPI)
+    target_link_libraries("${ProjectName}-common" PUBLIC MPI::MPI_CXX)
+endif()
 
 target_link_libraries("${ProjectName}-common"
         PUBLIC Eigen3::Eigen
