@@ -74,14 +74,7 @@ Entretanto, essa abordagem pode restringir a portabilidade do código, exigindo 
 Por outro lado, camadas de abstração oferecem uma abordagem mais genérica, permitindo que o mesmo código seja executado em múltiplas plataformas com modificações mínimas, embora essa portabilidade possa vir acompanhada de uma leve penalização em performance~\cite{Wong2016}.
 
 Essa comparação é crucial para a escolha dos frameworks a serem empregados no desenvolvimento dos mini-aplicativos apresentados neste trabalho, onde a meta é avaliar não apenas o desempenho computacional, mas também o custo de desenvolvimento e a escalabilidade do código em arquiteturas heterogêneas.
-Os capítulos 2.3.1–2.3.7 apresentam os principais frameworks utilizados na comunidade HPC, com ênfase em suas origens, desenvolvedores, arquiteturas suportadas e características distintivas.
-
-%---------------------------------------------------------------------------------------
-
-\subsection{OpenCL}\label{subsec:opencl}
-
-Desenvolvido pelo Khronos Group, o OpenCL é uma API de código aberto que possibilita a programação paralela em diferentes dispositivos, incluindo CPUs, GPUs, FPGAs e outros aceleradores.
-Sua arquitetura baseada em kernels e filas de comandos permite que os desenvolvedores escrevam código portátil, embora muitas vezes seja necessário realizar otimizações específicas para cada tipo de hardware~\cite{Stone2010}.
+Os capítulos 2.3.1–2.3.7 apresentam os principais modelos de programação utilizados na comunidade HPC, com ênfase em suas origens, desenvolvedores, arquiteturas suportadas e características distintivas.
 
 %---------------------------------------------------------------------------------------
 
@@ -89,7 +82,7 @@ Sua arquitetura baseada em kernels e filas de comandos permite que os desenvolve
 
 Inicialmente desenvolvido para facilitar a programação em sistemas de memória compartilhada, o OpenMP é amplamente utilizado em CPUs multi-core.
 Com a evolução para a versão 4.0 e posteriores, o OpenMP passou a oferecer suporte também para dispositivos aceleradores.
-Seus destaques em relação a outros frameworks incluem sua facilidade de integração e a maturidade da especificação~\cite{Dagum1998}.
+Seus destaques em relação a outros modelos de programação incluem sua facilidade de integração e a maturidade da especificação~\cite{Dagum1998}.
 
 %---------------------------------------------------------------------------------------
 
@@ -102,8 +95,15 @@ A especificação do OpenACC é mantida por um consórcio de empresas e institui
 
 \subsection{CUDA}\label{subsec:cuda}
 
-A plataforma CUDA, desenvolvida pela NVIDIA, representa um dos frameworks proprietários mais avançados para programação em GPUs. A sua arquitetura permite um controle fino sobre a memória e a execução paralela, resultando em um desempenho elevado para aplicações otimizadas.
+A plataforma CUDA, desenvolvida pela NVIDIA, representa um dos modelos proprietários mais avançados para programação em GPUs. A sua arquitetura permite um controle fino sobre a memória e a execução paralela, resultando em um desempenho elevado para aplicações otimizadas.
 Contudo, a natureza proprietária do CUDA impõe desafios significativos quanto à portabilidade, uma vez que seu código é restrito a hardware NVIDIA~\cite{Chakrabarti2012}.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{OpenCL}\label{subsec:opencl}
+
+Desenvolvido pelo Khronos Group, o OpenCL é uma API de código aberto que possibilita a programação paralela em diferentes dispositivos, incluindo CPUs, GPUs, FPGAs e outros aceleradores.
+Sua arquitetura baseada em kernels e filas de comandos permite que os desenvolvedores escrevam código portátil, embora muitas vezes seja necessário realizar otimizações específicas para cada tipo de hardware~\cite{Stone2010}.
 
 %---------------------------------------------------------------------------------------
 

@@ -1,142 +1,370 @@
 %---------------------------------------------------------------------------------------
 
-\chapter[Implementação Computacional]{Implementação Computacional}\label{ch:implementacao-computacional}
+\chapter{Implementação Computacional}\label{ch:implementacao-computacional}
 
 %---------------------------------------------------------------------------------------
 
 % Lista de abreviaturas e de siglas
-\criarsigla{SIMD}{textit{Single instruction, multiple data}}
-\criarsigla{TDD}{textit{Test-driven development}}
+\criarsigla{SIMD}{Single instruction, multiple data}
+\criarsigla{SIMT}{Single instruction, multiple threads}
+\criarsigla{TDD}{Test-driven development}
+\criarsigla{SoA}{Structure of Arrays}
+\criarsigla{AoS}{Array of Structures}
+\criarsigla{API}{Application Programming Interface}
+\criarsigla{HPC}{High Performance Computing}
+\criarsigla{MPI}{Message Passing Interface}
+\criarsigla{CUDA}{Compute Unified Device Architecture}
+\criarsigla{JIT}{Just-In-Time}
+\criarsigla{VRAM}{Video Random Access Memory}
 
 %---------------------------------------------------------------------------------------
 
-% Lista de simbolos
+Neste capítulo são detalhadas a arquitetura e as tecnologias empregadas no desenvolvimento do software para simulações de dinâmica de fluidos computacional (CFD) utilizando o método de Lattice Boltzmann (LBM) para escoamentos compressíveis, com foca em decisões que impactam o desempenho em arquiteturas heterogêneas, a portabilidade entre diferentes fornecedores de hardware e a facilidade de manutenção e extensão do código.
+
+O software adota uma arquitetura orientada a objetos em C++ moderno, estruturada para abstrair as complexidades de diferentes modelos de programação de computação de alto desempenho (HPC). O núcleo da simulação é definido por uma interface comum que estabelece o contrato para os diversos modelos de paralelização, permitindo que um orquestrador central instancie a estratégia adequada em tempo de execução com base na configuração do usuário.
+
+A arquitetura central baseia-se no padrão de projeto \textit{Strategy}, em que uma classe controladora gerencia o ciclo de vida da simulação, a entrada e saída de dados, e a medição de desempenho.
+Esta abstração permite que a lógica de controle, como a marcha no tempo apresentada no Algoritmo~\ref{alg:marcha-tempo-detalhado} e a reconstrução de campos macroscópicos para exportação, permaneça independente do hardware utilizado, seja ele uma CPU sequencial, uma GPU ou um \textit{cluster} distribuído.
+\begin{algorithm}[ht]
+    \caption{Marcha no Tempo para LBM Compressível com Acoplamento Térmico}\label{alg:marcha-tempo-detalhado}
+    \Entrada{Dados do fluido, malha computacional, tempo final $t_{end}$}
+    \Saida{Campos macroscópicos $\rho, \mathbf{u}, T$ em cada passo}
+    Inicializar campos $\rho, \mathbf{u}, T$ e distribuições $f_i, g_i$\;
+    \Enquanto{$t < t_{end}$}{
+        \For{cada célula da malha}{
+            Reconstruir $(\rho, \mathbf{u}, T)$ a partir de $f_i$ e $g_i$\;
+            \tcp{Newton-Raphson para o modelo térmico}
+            Resolver iterativamente para as variáveis macroscópicas\;
+            Calcular equilíbrios $f_i^{eq}(\rho, \mathbf{u}, T)$ e $g_i^{eq}(\rho, \mathbf{u}, T)$\;
+            Aplicar colisão (BGK): $f_i^* = f_i - \omega_f (f_i - f_i^{eq})$ e $g_i^* = g_i - \omega_g (g_i - g_i^{eq})$\;
+        }
+        \Se{estratégia de paralelismo é MPI}{
+            Sincronizar \textit{halos} de $f_i^*$ e $g_i^*$ entre processos\;
+        }
+        \For{cada célula da malha}{
+            Propagar (\textit{streaming}): $f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i^*(\mathbf{x}, t)$\;
+            $g_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = g_i^*(\mathbf{x}, t)$\;
+            Aplicar condições de contorno (paredes, entrada/saída)\;
+        }
+        $t \leftarrow t + \Delta t$\;
+        \Se{passo de gravação}{
+            Exportar resultados $(\rho, \mathbf{u}, T)$ em formato VTK\;
+        }
+    }
+\end{algorithm}
+
+O processo de compilação detecta automaticamente a presença de compiladores e bibliotecas como o NVIDIA HPC SDK (para OpenACC e OpenMP), NVCC (para CUDA), e implementações de MPI e OpenCL. Isso garante que o simulador possa ser compilado e executado em uma ampla variedade de ambientes.
+O controle e configuração da simulação é feito através de um arquivo de configuração, onde se definem as propriedades do fluido, a malha computacional e a tecnologia de execução.
 
 %---------------------------------------------------------------------------------------
 
-Neste capítulo, detalhamos a arquitetura e as tecnologias empregadas no desenvolvimento do software \texttt{lbm-miniapp} para simulações CFD utilizando o método de Lattice Boltzmann para escoamentos compressíveis, enfatizando decisões que impactam desempenho, portabilidade e validação. 
+\section{Arquitetura do Código}\label{sec:arquitetura-simulador}
 
-O software é centrado na modularidade e extensibilidade, permitindo a fácil adição de novos modelos LBM e backends de computação.
-Os principais componentes do projeto são:
+A arquitetura do código foi projetada para suportar a execução em múltiplas tecnologias de paralelização sem a necessidade de reescrever a lógica física do modelo LBM. Para alcançar este objetivo, o sistema utiliza o padrão de projeto \textit{Strategy}, centralizado na interface abstrata \texttt{ILbmTube} e na classe orquestradora \texttt{Executor}.
 
-\begin{itemize}
-    \item \texttt{lbmini/}: contém o código-fonte para as implementações do método LBM;
-    \item \texttt{simulations/}: resultados das simulações;
-    \item \texttt{test/}: testes unitários para test-driven development (TDD) do código;
-    \item \texttt{thesis/}: arquivos \LaTeX~ desta pesquisa;
-    \item \texttt{CMakeLists.txt}: gerenciamento de compilação e de dependências com CMake.
-\end{itemize}
+A interface \texttt{ILbmTube} define o contrato que todos os resolvedores devem implementar, incluindo métodos para inicialização (\texttt{Init}), execução de passos de tempo (\texttt{Step} e \texttt{Run}) e acesso aos campos macroscópicos (\texttt{P}, \texttt{Rho}, \texttt{T}, \texttt{U}). Esta abstração permite que o \texttt{Executor} gerencie o ciclo de vida da simulação de forma agnóstica ao \textit{hardware}, conforme apresentado no Código~\ref{lst:interface-ilbmtube}.
+\begin{lstlisting}[language=C++, caption={Interface base ILbmTube que define o contrato para os resolvedores.}, label={lst:interface-ilbmtube}, float=ht]
+template<typename Scalar, typename LatticeType>
+class ILbmTube {
+public:
+  virtual ~ILbmTube() = default;
+  virtual Tensor<Scalar, LatticeType::Dim()> P() const = 0;
+  virtual Tensor<Scalar, LatticeType::Dim()> Rho() const = 0;
+  virtual Tensor<Scalar, LatticeType::Dim()> T() const = 0;
+  virtual Tensor<Scalar, LatticeType::Dim() + 1> U() const = 0;
+  virtual void Init() = 0;
+  virtual void Step(bool save) = 0;
+  virtual void Run(Index steps, bool save) = 0;
+};
+\end{lstlisting}
 
-O processo de compilação do \texttt{lbm-miniapp} é gerenciado pelo CMake, que orquestra a compilação do código C++ e é configurado para suportar diferentes compiladores e tecnologias para HPC, incluindo o NVIDIA HPC SDK para compilação com suporte para GPUs da fabricante NVIDIA. O CMake também é responsável pela integração com bibliotecas de terceiros, com esse projeto utilizando:
+O \texttt{Executor} atua como um \textit{Singleton} que seleciona a implementação correta de \texttt{ILbmTube} em tempo de execução, baseando-se no arquivo de configuração (\texttt{config.yaml}). Ele também é responsável pela medição de desempenho e exportação de resultados em formato VTK para visualização posterior.
+O impacto desta arquitetura na complexidade do código é positivo, pois isola a complexidade das APIs de paralelismo em classes específicas, facilitando a inclusão de novas estratégias de paralelização.
 
-\begin{itemize}
-    \item Google Test: desenvolvimento e execução de testes;
-    \item yaml-cpp: gerenciamento dos arquivos de configuração das simulações;
-    \item OpenMP;
-    \item CUDA\@.
-\end{itemize}
+Um componente crítico para a performance é a classe \texttt{DeviceBuffer}, que gerencia a alocação de memória.
+Em arquiteturas de CPU, ela se comporta como um \texttt{std::vector} alinhado, enquanto em GPUs ela encapsula ponteiros de memória de dispositivo (\textit{device pointers}), residindo no que se denomina memória do dispositivo (\textit{device memory}). A escolha do \textit{layout} de memória Structure of Arrays (SoA) é fundamental: ao armazenar cada componente da distribuição de probabilidade ($f_0, f_1, \dots, f_8$) em blocos contíguos de memória, maximiza-se o uso do cache em CPUs através da busca antecipada (\textit{prefetching}), mecanismo no qual o processador carrega dados da memória principal para o cache antes que sejam explicitamente solicitados.
+Além disso, este \textit{layout} garante o coalescimento de memória (\textit{memory coalescing}) em GPUs, técnica que permite combinar múltiplos acessos à memória global realizados por diferentes \textit{threads} em uma única transação, desde que os endereços acessados sejam adjacentes simultaneamente.
 
-O controle e configuração da simulação é feito através de um arquivo estruturado no formato YAML, onde é possível definir as propriedades do fluido, distribuição e quantidade de células por direção, tempo de simulação, e o dispositivo que será utilizado para computação.
-
-%---------------------------------------------------------------------------------------
+A marcha no tempo segue uma estrutura de pipeline que minimiza transferências entre a memória do sistema principal (\textit{host memory}), referente à RAM do sistema, e a memória do dispositivo (\textit{device memory}), referente à VRAM da GPU, conforme orquestrado pelo ciclo principal.
 
 \section{Implementação Computacional Sequencial}\label{sec:implementacao-computacional-sequencial}
 
-A versão sequencial estabelece a referência funcional a ser seguida pelas implementações paralelizadas, disponibilizando interfaces que devem ser seguidas.
-A implementação computacional segue o paradigma \textit{streaming} e colisão com operador compatível com escoamentos compressíveis.
-As grandezas macroscópicas, como densidade, velocidade e pressão, são reconstruídas pelos momentos das distribuições discretas.
+A versão sequencial, referida no código como \textit{Plain}, estabelece a referência funcional para o projeto.
+Ela implementa o modelo LBM compressível seguindo a formulação de \textcite{Tran2022}, utilizando as classes de tensores da biblioteca Eigen para manipulação de dados multidimensionais em C++.
 
-A marcha no tempo segue os processos:
+O objetivo desta implementação, além de fornecer uma referência para validação científica, é servir como um modelo de arquitetura para as demais implementações.
+Por esta razão, o código evita construções excessivamente específicas de CPU, como o uso de listas ligadas ou ponteiros complexos, preferindo uma estrutura de dados linear e laços de repetição simples que podem ser facilmente portados para outras tecnologias HPC\@.
+
+A estrutura principal de dados utiliza o \textit{layout} SoA (\textit{Structure of Arrays}), onde as distribuições de probabilidade $f_i$ e $g_i$ para cada uma das $Q=9$ velocidades da rede D2Q9 são armazenadas em buffers contíguos.
+Esta escolha visa facilitar a vetorização por parte do compilador e serve como base para o acesso coalescido de memória nas variantes de aceleradores.
+O algoritmo principal é dividido em etapas discretas encapsuladas na classe \texttt{lbmini::plain::LbmTube}:
 
 \begin{enumerate}
-    \item Cálculo de $f_i^{eq}$ e $g_i^{eq}$;
-    \item Aplicação do operador de colisão;
-    \item Aplicação do operador de \textit{streaming} empurrado a partir de $\mathbf{c}_i$;
-    \item Aplicação de condições de contorno (permissiva na direção longitudinal, periódica em outras direções);
-    \item Reconstrução de propriedades macroscópicas pelos momentos de $f_i$ e $g_i$;
-    \item Saída de dados a cada N passos.
+    \item \textbf{Cálculo de grandezas macroscópicas}: reconstrução de $\rho$, $\mathbf{u}$, $T$ e $p$ a partir dos momentos de $f_i$ e $g_i$, em que $\mathbf{u}$ é o vetor velocidade e $p$ a pressão local.
+    \item \textbf{Colisão e equilíbrio}: aplicação do operador BGK e cálculo das distribuições de equilíbrio $f_i^{eq}$ e $g_i^{eq}$.
+    Esta etapa é a mais custosa computacionalmente devido à solução iterativa utilizando Newton-Raphson.
+    \item \textbf{Streaming}: transporte das distribuições entre nós vizinhos da malha utilizando interpolação por pesos de distância inversa (\textit{Inverse Distance Weighting}, IDW).
 \end{enumerate}
 
-Para maximizar a largura de banda efetiva, os dados das distribuições são armazenados em \textit{double buffers} e em arranjo que favorece acessos contíguos no laço mais interno.
-Na prática, empregam-se variações de \textit{Structure of Arrays} (SoA) ou \textit{Array of Structures of Arrays} (AoSoA) para que, ao iterar células, os dados necessários estejam em endereços sequenciais, beneficiando caches e vetorização \acrshort{SIMD}.
-O arranjo ping–pong evita dependências de ordenação e dispensa sincronizações nas variantes paralelizadas.
+A etapa de colisão é dividida em dois subproblemas: a determinação do equilíbrio para o campo de densidade ($f_i^{eq}$) e para o campo de energia total ($g_i^{eq}$). Enquanto $f_i^{eq}$ é calculado via forma de produto fatorado, a determinação de $g_i^{eq}$ exige a solução de um sistema não linear para garantir a conservação de energia em regimes compressíveis.
+Na implementação computacional, isto é feito através de um laço fixo de iterações Newton-Raphson, conforme mostrado no Código~\ref{lst:plain-newton}.
+Esta escolha de laço fixo é estratégica para garantir a previsibilidade do fluxo de execução em futuras implementações SIMT para GPUs.
+\begin{lstlisting}[language=C++, caption={Resolvedor Newton-Raphson para equilíbrio térmico.}, label={lst:plain-newton}, float=ht]
+for (Index iter = 0; iter < maxIter; ++iter) {
+    // Calculo da Jacobiana J e do residuo r
+    const Scalar detJ = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+    const Scalar invDet = Scalar{ 1 } / detJ;
 
-A colisão é realizada localmente por célula e realiza relaxação de $(f_i, g_i)$ em direção a $(f_i^{eq}, g_i^{eq})$ com taxas ajustadas aos coeficientes de transporte.
-Em cenários com frentes de choque, emprega-se filtragem de momentos não-hidrodinâmicos antes da relaxação para maior robustez.
+    // Atualizacao dos multiplicadores de Lagrange xi
+    xi[0] -= alpha * (J[1][1] * r[0] - J[0][1] * r[1]) * invDet;
+    xi[1] -= alpha * (-J[1][0] * r[0] + J[0][0] * r[1]) * invDet;
+    alpha *= Scalar{ 0.5 }; // Reducao do passo
+}
+\end{lstlisting}
+Em que $\xi$ representa os multiplicadores de Lagrange, $\alpha$ é o fator de amortecimento do passo, $J$ denota a matriz Jacobiana e $r$ indica o vetor resíduo.
 
-O streaming é implementado em modo \textit{push}: os valores pós-colisão da célula $(x_\alpha, x_\beta, x_\gamma)$ são escritos no \emph{buffer} de saída da célula vizinha $(x_\alpha+\mathbf{c}_{i,\alpha}\Delta t, x_\beta+\mathbf{c}_{i,\beta}\Delta t, x_\gamma+\mathbf{c}_{i,\gamma}\Delta t)$.
-Nesta etapa aplica-se o parâmetro \textit{inverse density weighting} (IDW), controlado via configuração, para suavizar contribuições incidentes em regiões de grande descontinuidade:
+No simulador, a implementação sequencial utiliza laços aninhados que percorrem a malha, onde cada célula é processada de forma independente.
+O Código~\ref{lst:plain-collision} exemplifica a estrutura de processamento da colisão na CPU, evidenciando o uso do \textit{layout} SoA para acesso aos dados.
+\begin{lstlisting}[language=C++, caption={Processamento sequencial da colisão e equilíbrio.}, label={lst:plain-collision}, float=ht]
+for (Index cell = 0; cell < N; ++cell) {
+    const Scalar rho = pRho[cell];
+    const Scalar Tv = pT[cell];
+    const Scalar ux = pU[0 * N + cell];
+    const Scalar uy = pU[1 * N + cell];
 
-\begin{itemize}
-    \item Para cada direção $i$, ao escrever no vizinho, pondera-se a contribuição por um fator dependente da massa específica local/vizinha (função crescente de $\rho$ e do parâmetro \texttt{idw});
-    \item Intuitivamente, contribuições oriundas de vizinhos de \emph{baixa} densidade são atenuadas ao entrar em regiões de \emph{alta} densidade, o que reduz overshoots numéricos na interface de choque;
-    \item O IDW é aplicado exclusivamente na fase de \textit{streaming}; a etapa de colisão permanece independente deste parâmetro.
-\end{itemize}
+    // Calculo de feq e geq (Newton-Raphson omitido para brevidade)
+    compute_equilibria(cell, rho, Tv, ux, uy, feq, geq);
 
-Esse tratamento preserva o custo linear do streaming, adicionando apenas operações escalares locais por direção, e mostrou-se eficaz para retardar instabilidades associadas a oscilações de Gibbs próximas ao choque, ao custo de uma leve difusão controlada.
+    // Aplicacao do operador BGK em cada direcao idc
+    for (Index idc = 0; idc < 9; ++idc) {
+        const Index idx = idc * N + cell;
+        pF[idx] = pF[idx] + omegaL * (feq[idc] - pF[idx]);
+        pG[idx] = pG[idx] + omegaL * (geq[idc] - pG[idx]);
+    }
+}
+\end{lstlisting}
+Em que $N$ é o número total de células, \texttt{cell} é o índice da célula atual, \texttt{idc} representa a direção da velocidade discreta, $\omega_L$ é o parâmetro de relaxação e $f_i$, $g_i$ são as funções de distribuição para densidade e energia, respectivamente.
 
-% TODO: Descrever a implementação do operador de colisão.
-% TODO: Descrever a implementação do operador de streaming.
-% TODO: Descrever a implementação das condições de contorno.
-
-Do ponto de vista de desempenho, a atualização por célula é tipicamente limitada por largura de banda de memória.
-Assim, privilegia-se:
-
-\begin{itemize}
-    \item Organização de dados favorável ao acesso contíguo na memória. Em CPUs modernas com vetorização \acrshort{SIMD} e em GPUs, arranjos do tipo \textit{Structure of Arrays} (SoA) ou \textit{Array of Structures of Arrays} (AoSoA) tendem a oferecer melhor coalescência e uso de cache do que \textit{Array of Structures} (AoS) puro. Adota-se a organização que maximize acessos contíguos por direção $i$ em laços internos;
-    \item Política de \textit{double buffering} (ping-pong) para as distribuições $f_i$ e $g_i$ entre passos, evitando dependências de ordenação entre as células e a necessidade de mecanismos de sincronização.
-\end{itemize}
-
-Ao final da simulação, são gerados arquivos de dados para análise e comparação com a solução analítica e é usada como base para aferir corretude das versões paralelas.
-
-%---------------------------------------------------------------------------------------
-
-\section{Implementação Computacional Utilizando OpenCL}\label{sec:implementacao-computacional-utilizando-opencl}
-
-% TODO: Texto
+A etapa de \textit{streaming} é implementada utilizando tabelas de índices pré-computadas, que mapeiam os vizinhos de cada célula considerando as condições de contorno periódicas ou de parede.
+Isso elimina a necessidade de cálculos geométricos repetitivos durante a marcha no tempo.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Computacional Utilizando OpenMP}\label{sec:implementacao-computacional-utilizando-openmp}
+%---------------------------------------------------------------------------------------
 
-A versão OpenMP introduz diretivas nos laços externos do tipo \texttt{\#pragma omp parallel for} e instruções SIMD (single instruction, multiple data) para CPUs. Para aceleradores de hardware como GPUS, é atribuída a computação ao dispositivo acelerador via \texttt{\#pragma omp target teams distribute parallel for}.
-O objetivo é maximizar a paralelização de laços de varredura do domínio, mantendo a simplicidade do código e reduzindo o esforço de manutenção.
-Cuidados incluem:
+A implementação OpenMP suporta tanto paralelismo em multicore quanto aceleração de \textit{hardware} com GPUs.
+\begin{lstlisting}[language=C++, caption={Diretiva de paralelização OpenMP para CPUs multinúcleo.}, label={lst:openmp-cpu}, float=ht]
+#pragma omp parallel for schedule(static)
+for (Index cell = 0; cell < N; ++cell) {
+    // Implementacao da colisao e streaming
+    collide_and_stream(cell);
+}
+\end{lstlisting}
+Para CPUs, utiliza-se a diretiva mostrada no Código~\ref{lst:openmp-cpu} para garantir que os laços de células sejam distribuídos entre núcleos e vetorizados via instruções SIMD \parencite{Dagum1998}, onde $N$ representa o número total de células e \texttt{cell} o índice da iteração.
 
-\begin{itemize}
-    \item \textit{First-touch} e afinidade de memória;
-    \item Colisões e \textit{streaming} em buffers distintos para evitar \textit{data races};
-    \item Reduções explícitas para métricas agregadas.
-\end{itemize}
+A arquitetura para OpenMP foca na escalabilidade vertical (\textit{strong scaling}) em sistemas com múltiplos processadores físicos.
+Um fator crítico de performance abordado é a afinidade de \textit{threads} e o acesso à memória em sistemas NUMA (\textit{Non-Uniform Memory Access}). Ao utilizar a cláusula \texttt{schedule(static)}, o simulador garante que as mesmas células sejam processadas pelas mesmas \textit{threads} em cada passo de tempo, o que melhora a localidade de dados no cache L3 e minimiza o tráfego no barramento entre processadores.
+\begin{lstlisting}[language=C++, caption={Uso de SIMD e afinidade no OpenMP.}, label={lst:openmp-simd}, float=ht]
+#pragma omp parallel for simd schedule(static)
+for (Index cell = 0; cell < N; ++cell) {
+    // O compilador pode usar instrucoes AVX/AVX-512 aqui
+    pRho[cell] = 0;
+    for (int idc = 0; idc < 9; ++idc) {
+        pRho[cell] += pF[idc * N + cell];
+    }
+}
+\end{lstlisting}
+Nas implementações em paralelo, a variável \texttt{cell} é utilizada como índice para a distribuição de carga de trabalho entre os núcleos ou \textit{threads} de execução.
 
-% TODO: Comentar sobre o gerenciamento de memória.
+A paralelização é configurada com escalonamento estático para minimizar a latência de gerência de \textit{threads} em uma malha uniforme.
+Na versão para aceleradores de \textit{hardware}, a gestão de memória é feita de forma explícita via diretivas \texttt{\#pragma omp target data}, garantindo que os dados residam no acelerador durante toda a simulação e evitando o custo proibitivo de transferência via comunicação PCIe entre passos de tempo.
+
+A diretiva \texttt{collapse(2)} é aplicada em malhas bidimensionais para aumentar o espaço de iteração disponível para o escalonador da GPU. Além disso, utiliza-se a cláusula \texttt{thread\_limit} para sintonizar a ocupação dos multiprocessadores.
+O impacto na complexidade é moderado, pois as diretivas OpenMP são menos intrusivas que o CUDA ou OpenCL, permitindo manter o código C++ muito próximo da versão sequencial.
+No entanto, a sintonização fina para performance (\textit{performance tuning}) exige um conhecimento profundo do comportamento do compilador e da arquitetura alvo.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Computacional Utilizando OpenACC}\label{sec:implementacao-computacional-utilizando-openacc}
+%---------------------------------------------------------------------------------------
 
-% TODO: Texto
+A tecnologia OpenACC foca na produtividade e portabilidade entre diferentes famílias de GPUs.
+A lógica de implementação é muito próxima da versão sequencial e da versão utilizando OpenMP, mas decorada com diretivas \texttt{\#pragma acc} que instruem o compilador sobre o paralelismo disponível e a gestão de dados entre as memórias do sistema principal (\textit{host memory}) e do dispositivo acelerador (\textit{device memory}) \parencite{Wolfe2018}.
+
+O impacto do OpenACC na complexidade do código é mínimo, pois permite manter uma única base de código para CPU e GPU. A implementação computacional utiliza o modelo de dados estruturados do OpenACC para garantir que grandes tensores de distribuições $f$ e $g$ sejam mantidos na memória da GPU durante todo o laço de tempo.
+Utiliza-se a cláusula \texttt{present} para indicar que os dados já foram movidos para o dispositivo, evitando transferências redundantes no barramento PCIe que degradariam severamente o desempenho.
+
+A estruturação do código em funções \textit{inline} marcadas com \texttt{\#pragma acc routine seq} permite que a lógica complexa do método Newton-Raphson seja reutilizada sem duplicação de código, mantendo a modularidade.
+Esta é uma vantagem significativa em termos de manutenção em comparação com o CUDA, onde a lógica precisaria ser duplicada ou movida para arquivos de cabeçalho com qualificadores de dispositivo (\textit{device}).
+A paralelização em OpenACC é expressa de forma descritiva, onde o desenvolvedor define as regiões paralelas e o compilador mapeia as iterações para os aceleradores, conforme ilustrado no Código~\ref{lst:openacc-parallel}.
+Para otimizar a performance, utiliza-se a cláusula \texttt{vector\_length(256)} para sintonizar o tamanho do vetor de execução na GPU, além de garantir que os laços internos de velocidades sejam processados de forma sequencial por cada \textit{thread} (\texttt{routine seq}), maximizando a reutilização de registradores.
+\begin{lstlisting}[language=C++, caption={Uso de acc routine para reutilização de código.}, label={lst:openacc-routine}, float=ht]
+#pragma acc routine seq
+void compute_feq_acc(Scalar rho, Scalar u, int idc) {
+    // Mesma logica da versao sequencial
+    return ...;
+}
+\end{lstlisting}
+\begin{lstlisting}[language=C++, caption={Diretivas OpenACC para paralelização em GPU.}, label={lst:openacc-parallel}, float=ht]
+#pragma acc parallel loop present(pF, pG, pRho, pT, pU)
+for (int cell = 0; cell < N; ++cell) {
+    const Scalar rho = pRho[cell];
+    // Execucao paralela no dispositivo...
+}
+\end{lstlisting}
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Computacional Utilizando CUDA}\label{sec:implementacao-computacional-utilizando-cuda}
+%---------------------------------------------------------------------------------------
 
-% TODO: Texto
+A implementação em CUDA representa a versão de máxima performance para arquiteturas NVIDIA. Diferente da versão sequencial, os kernels CUDA são especializados para explorar o paralelismo massivo de nível de \textit{thread} e a hierarquia de memória da GPU \parencite{Chakrabarti2012}.
+
+A escolha de arquitetura no CUDA foca em dois pilares: a maximização da ocupação dos multiprocessadores (\textit{Streaming Multiprocessors}, SMs) e a eficiência do subsistema de memória.
+Para isso, o simulador mapeia cada célula da malha para uma \textit{thread} CUDA individual.
+Dada a natureza do algoritmo LBM, que é limitado por largura de banda de memória (\textit{bandwidth-bound}), o uso do layout SoA é crucial para permitir que as requisições de memória de um \textit{warp} sejam combinadas em uma única transação de memória global (\textit{coalescing}).
+
+Uma das principais otimizações é o uso de memória constante para armazenar as velocidades discretas da rede ($c_x, c_y$) e os pesos.
+Como estes dados são lidos simultaneamente por todas as \textit{threads} de um \textit{warp}, o uso de cache constante reduz a latência de acesso em comparação com a memória global.
+Além disso, utiliza-se a memória compartilhada (\textit{shared memory}) em etapas específicas para reduzir o tráfego com a memória global (\textit{VRAM}), embora a implementação atual priorize o uso de registradores devido à baixa complexidade geométrica da malha.
+
+A implementação utiliza \textit{double buffering} para as distribuições $f$ e $g$, eliminando dependências de escrita durante o \textit{streaming}.
+Além disso, emprega-se a técnica de \textit{loop unrolling} manual via \texttt{\#pragma unroll} nos laços internos de velocidades ($Q=9$), o que permite ao compilador \texttt{nvcc} otimizar o uso de registradores e reduzir o custo de controle de fluxo.
+A paralelização é executada distribuindo as células da malha entre os blocos e \textit{threads} da GPU.
+O Código~\ref{lst:cuda-parallel} detalha como o índice global da célula é mapeado para a hierarquia de execução CUDA e como o acesso aos dados segue o padrão SoA para garantir o coalescimento de memória (\textit{memory coalescing}), em que \texttt{blockIdx}, \texttt{blockDim} e \texttt{threadIdx} são variáveis intrínsecas do CUDA para identificação de \textit{threads}.
+Outro ponto relevante é o uso de fluxos CUDA (\textit{CUDA Streams}) para permitir a sobreposição de transferência de dados (\texttt{cudaMemcpyAsync}) com a execução de kernels.
+\begin{lstlisting}[language=C++, caption={Uso de registradores e unroll em kernel CUDA.}, label={lst:cuda-unroll}, float=ht]
+// Unrolling para forcar o uso de registradores
+#pragma unroll
+for (int idc = 0; idc < 9; ++idc) {
+    const Scalar fi = pF[idc * N + cell];
+    const Scalar feq = compute_feq(rho, u, idc);
+    pFaux[idc * N + cell] = fi + omega * (feq - fi);
+}
+\end{lstlisting}
+\begin{lstlisting}[language=C++, caption={Lógica de paralelização e acesso SoA em kernel CUDA.}, label={lst:cuda-parallel}, float=ht]
+__global__ void collisionKernel(Scalar* pF, Scalar* pG, int N) {
+    // Mapeamento de thread para celula da malha
+    int cell = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (cell < N) {
+        // Acesso SoA: idc * N + cell garante acesso contiguo entre threads
+        for (int idc = 0; idc < 9; ++idc) {
+            const int idx = idc * N + cell;
+            Scalar fi = pF[idx];
+            // Processamento local da colisao...
+            pF[idx] = fi_new;
+        }
+    }
+}
+\end{lstlisting}
+
+Para minimizar a latência de lançamento de kernels, as etapas de colisão e \textit{streaming} são agrupadas em um único kernel (\textit{kernel fusion}), reduzindo o tráfego de memória global ao manter valores intermediários em registradores entre as operações.
+
+%---------------------------------------------------------------------------------------
+
+\section{Implementação Computacional Utilizando OpenCL}\label{sec:implementacao-computacional-utilizando-opencl}
+%---------------------------------------------------------------------------------------
+
+O módulo OpenCL provê portabilidade funcional para diversos aceleradores, incluindo GPUs de diferentes fabricantes (NVIDIA, AMD, Intel) e FPGAs.
+A implementação utiliza a API C++ de alto nível para gerenciar a complexidade do padrão OpenCL\@, abstraindo a criação de contextos, filas de comando e gerenciamento de buffers, o que reduz a verbosidade do código principal.
+
+Diferente do CUDA, onde a paralelização é integrada ao compilador da linguagem, o OpenCL adota um modelo de plataforma e dispositivo.
+A arquitetura do simulador lida com isso através da compilação JIT (\textit{Just-In-Time}). Os kernels são escritos em linguagem OpenCL C (baseada em C99) e fornecidos como cadeias de caracteres ou arquivos externos, sendo compilados apenas durante a fase de inicialização do programa.
+Esta abordagem permite que o software realize otimizações específicas para o \textit{hardware} detectado no momento da execução, como o ajuste do tamanho do grupo de trabalho (\textit{work-group size}) e o uso de extensões de precisão dupla (\texttt{cl\_khr\_fp64}).
+
+O layout de memória SoA é rigorosamente mantido para garantir acessos coalescidos, o que é vital para a performance em GPUs AMD e Intel.
+\begin{lstlisting}[language=C, caption={Lógica de indexação global em kernel OpenCL.}, label={lst:opencl-kernel}, float=ht]
+__kernel void collisionKernel(__global Scalar* pF, __global Scalar* pG, int N) {
+    // Obtencao do indice global da celula
+    int cell = get_global_id(0);
+
+    if (cell < N) {
+        // Acesso SoA e processamento...
+    }
+}
+\end{lstlisting}
+Diferente do CUDA, onde a sintaxe é integrada ao C++, no OpenCL a paralelização é expressa no kernel utilizando funções intrínsecas para obter o índice global de execução, como demonstrado no Código~\ref{lst:opencl-kernel}.
+A complexidade da implementação OpenCL reside principalmente no gerenciamento explícito da sincronização entre o sistema principal e o dispositivo de aceleração de \textit{hardware} através de eventos (\texttt{cl::Event}), que são utilizados no código para enfileirar as etapas da marcha no tempo sem bloqueios desnecessários da CPU\@.
+\begin{lstlisting}[language=C++, caption={Gerenciamento de buffers e kernels via API C++ do OpenCL.}, label={lst:opencl-cpp}, float=ht]
+// Criacao de buffers no dispositivo
+cl::Buffer bufF(context, CL_MEM_READ_WRITE, sizeInBytes);
+cl::Buffer bufRho(context, CL_MEM_READ_WRITE, rhoSizeInBytes);
+
+// Configuracao dos argumentos e despacho do kernel
+kernelMacroscopic.setArg(0, bufF);
+kernelMacroscopic.setArg(1, bufRho);
+queue.enqueueNDRangeKernel(kernelMacroscopic, cl::NullRange, cl::NDRange(N), cl::NullRange);
+\end{lstlisting}
+
+Um desafio no OpenCL é a latência no despacho de comandos.
+Para mitigar isso, a implementação utiliza filas de execução configuradas para execução fora de ordem quando suportado, e buffers de comandos para agrupar as chamadas de kernel da marcha no tempo em uma única submissão ao dispositivo, reduzindo a carga no processador principal (\textit{host processor}).
+Em termos de performance, o OpenCL apresenta resultados competitivos com o CUDA, embora o custo de compilação inicial (JIT) e a necessidade de kernels em arquivos separados aumentem a complexidade de manutenção do código.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Computacional Utilizando Kokkos}\label{sec:implementacao-computacional-utilizando-kokkos}
+%---------------------------------------------------------------------------------------
 
-% TODO: Texto
+A arquitetura utilizando Kokkos baseia-se no uso de \textit{Views} para o gerenciamento de memória e \textit{Parallel Dispatch} para a execução dos kernels.
+Ao contrário das versões nativas que exigem a gestão manual de buffers entre o hospedeiro e o dispositivo, o Kokkos utiliza espaços de memória (\textit{Memory Spaces}) e \textit{Execution Spaces} que são resolvidos em tempo de compilação para o módulo selecionado (como CUDA para GPUs NVIDIA ou OpenMP para CPUs multicore).
+O impacto na complexidade é reduzido pela unificação do código de paralelismo, permitindo que a mesma lógica de colisão e \textit{streaming} seja executada em diferentes arquiteturas apenas alterando os parâmetros de compilação.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Computacional Utilizando RAJA}\label{sec:implementacao-computacional-utilizando-raja}
+%---------------------------------------------------------------------------------------
 
-% TODO: Texto
+A integração com o RAJA permite a escrita de laços de repetição agnósticos à plataforma através de políticas de execução (\textit{Execution Policies}).
+O diferencial do RAJA reside na sua flexibilidade para compor diferentes estratégias de paralelização utilizando \textit{templates} de C++, facilitando a experimentação com diferentes níveis de paralelismo (como a combinação de RAJA com CUDA ou OpenMP) sem alterar a estrutura fundamental do código-fonte.
+Estas implementações representam a vanguarda da portabilidade de desempenho, servindo como base para futuras extensões do simulador em ambientes de computação heterogênea de próxima geração.
+
+%---------------------------------------------------------------------------------------
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Computacional Utilizando MPI}\label{sec:implementacao-computacional-utilizando-mpi}
+%---------------------------------------------------------------------------------------
 
-% TODO: Texto
+Para permitir simulações de larga escala que excedem a capacidade de memória e processamento de um único sistema computacional (também chamado de nó de computação), utiliza-se o padrão MPI para paralelismo em uma arquitetura com memória distribuída.
+A arquitetura distribuída baseia-se na decomposição de domínio unidimensional ao longo do eixo longitudinal ($x$), o que é particularmente eficiente para o estudo de tubos de choque, onde os gradientes mais intensos ocorrem nesta direção.
+
+A complexidade da implementação MPI reside na gestão explícita da comunicação e na consistência dos dados nas fronteiras dos subdomínios presentes em cada nó de computação.
+Cada processo MPI é responsável por uma fatia da malha total e mantém uma cópia local dos dados necessários para computar a colisão e o \textit{streaming}.
+A sincronização entre processos é realizada através da técnica de \textit{halos} ou \textit{ghost cells}, que são camadas extras de células nas bordas de cada subdomínio que armazenam os dados pertencentes aos processos vizinhos.
+
+Após a etapa de colisão, cada processo envia as distribuições em suas fronteiras para os vizinhos imediatos e recebe as distribuições correspondentes utilizando comunicações não-bloqueantes (\texttt{MPI\_Isend} e \texttt{MPI\_Irecv}).
+Isso permite a sobreposição de comunicação e computação (\textit{latency hiding}): enquanto as distribuições de fronteira viajam pela rede, o processo continua calculando a colisão nas células internas do domínio, onde os dados não dependem de informações externas.
+O impacto na performance é significativo em clusters de alta velocidade, permitindo escalabilidade quase linear (\textit{weak scaling}) para problemas de grande porte.
+
+A paralelização via MPI exige o empacotamento explícito dos dados de fronteira em buffers contíguos antes da transmissão, como mostrado no Código~\ref{lst:mpi-pack}, onde \texttt{ghosts} indica a largura da zona de troca (\textit{halo}), \texttt{ny} é a dimensão transversal da malha, \texttt{sendL} e \texttt{recvL} são os buffers de comunicação, e \texttt{reqs} armazena os estados das operações não-bloqueantes.
+Esta etapa é necessária porque os dados de interesse podem não estar contíguos na memória devido ao layout SoA bidimensional.
+Além disso, o simulador utiliza tipos de dados derivados do MPI (\texttt{MPI\_Type\_vector}) para automatizar este processo em malhas mais complexas, simplificando a codificação conforme ilustrado no Código~\ref{lst:mpi-type}.
+\begin{lstlisting}[language=C++, caption={Uso de tipos derivados MPI para troca de halos.}, label={lst:mpi-type}, float=ht]
+// Criacao de tipo vetor para colunas de halo
+MPI_Datatype haloType;
+MPI_Type_vector(ny, Q * 2, nx_local, MPI_DOUBLE, &haloType);
+MPI_Type_commit(&haloType);
+
+// Envio nao-bloqueante usando o tipo customizado
+MPI_Isend(&pF[0], 1, haloType, leftRank, tag, comm, &request);
+\end{lstlisting}
+\begin{lstlisting}[language=C++, caption={Empacotamento de halos e comunicação não-bloqueante MPI.}, label={lst:mpi-pack}, float=ht]
+// Empacotamento de dados de f e g para envio
+for (Index idc = 0; idc < 9; ++idc) {
+    for (Index i = 0; i < ghosts; ++i) {
+        for (Index j = 0; j < ny; ++j) {
+            Index cell = (i + ghosts) * ny + j;
+            sendL[idx++] = pF[idc * N + cell];
+            sendL[idx++] = pG[idc * N + cell];
+        }
+    }
+}
+
+// Comunicacao nao-bloqueante (Isend/Irecv)
+MPI_Isend(sendL, count, mpiType, leftRank, 0, comm, &reqs[0]);
+MPI_Irecv(recvL, count, mpiType, leftRank, 1, comm, &reqs[1]);
+\end{lstlisting}
+
+A arquitetura da implementação utilizando MPI encapsula a lógica de comunicação, garantindo que o restante do código veja o sistema distribuído de forma transparente, mantendo a consistência da arquitetura \textit{Strategy}.

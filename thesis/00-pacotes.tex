@@ -16,15 +16,24 @@
 \usepackage{csquotes}
 \usepackage{textcase}           % robust uppercasing
 \usepackage{hyperref}
+\addto\extrasbrazil{
+  \def\equationautorefname{Equação}
+  \def\figureautorefname{Figura}
+  \def\tableautorefname{Tabela}
+  \def\sectionautorefname{Seção}
+  \def\subsectionautorefname{Subseção}
+}
 
 % Ensure TOC and headers use robust uppercase
-\AtBeginDocument{\let\MakeUppercase\MakeTextUppercase}
+\let\MakeUppercase\MakeTextUppercase
+\let\MakeLowercase\MakeTextLowercase
 
 %\usepackage[style=long]{glossaries}
 %\usepackage{abntex2glossaries}
 
 \usepackage{cancel}         % permite representar o cancelamento de termos em texto ou equacoes
-\usepackage{xcolor} 	    % cores extendidas	
+
+% \usepackage{xcolor} 	    % já incluído em UFPR.sty ou abntex2
 \usepackage{smartdiagram}   % gera diagramas a partir de listas
 \usepackage{float} 		    % Para a figura ficar na posição correta
 \usepackage{textcomp} 		% supporte para fontes da Text Companion 
@@ -46,11 +55,59 @@
 \usepackage{adjustbox}
 \usepackage{rotating}
 \usepackage{array}
+\usepackage{listings}
+\usepackage[linesnumbered,ruled,vlined,portuguese]{algorithm2e}
+
+% \usepackage{xcolor}
+
+\SetKwInput{Entrada}{Entrada}
+\SetKwInput{Saida}{Saida}
+\SetKw{Se}{se}
+\SetKw{Entao}{então}
+\SetKw{Senao}{senão}
+\SetKw{FimSe}{fim se}
+\SetKw{Para}{para}
+\SetKw{De}{de}
+\SetKw{Ate}{até}
+\SetKw{FimPara}{fim para}
+\SetKw{Enquanto}{enquanto}
+\SetKw{FimEnquanto}{fim enquanto}
+\SetKw{Retorne}{retorne}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+    commentstyle=\color{green!60!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny,
+    captionpos=b,
+    showstringspaces=false,
+    keepspaces=true,
+    breakatwhitespace=false,
+    aboveskip=0.8em,
+    belowskip=0.8em
+}
 
 % ----------------------------------------------------------
 
 % Pacotes de citações BibLaTeX
-\usepackage[style=abnt,backref=true,backend=biber,citecounter=true,backrefstyle=three]{biblatex}
+\usepackage[style=abnt,backref=true,backend=biber,citecounter=true,backrefstyle=three,language=brazilian]{biblatex}
+
+% Forçar nomes de autores em maiúsculas e minúsculas (Capitalizado)
+\renewcommand{\mkbibnamefamily}[1]{#1}
+\renewcommand{\mkbibnamegiven}[1]{#1}
+\renewcommand{\mkbibnameprefix}[1]{#1}
+\renewcommand{\mkbibnamesuffix}[1]{#1}
+
+\AtBeginBibliography{
+  \renewcommand{\mkbibnamefamily}[1]{\MakeUppercase{#1}}
+  \renewcommand{\mkbibnamegiven}[1]{#1}
+  \renewcommand{\mkbibnameprefix}[1]{#1}
+  \renewcommand{\mkbibnamesuffix}[1]{#1}
+}
 
 \DefineBibliographyStrings{brazil}{
  backrefpage = {Citado \arabic{citecounter} vez na página},% originally "cited on page"
@@ -116,7 +173,7 @@
 	\expandafter\@secondoftwo
 	\fi
 	{%
-		\oldcontentsline{#1}{\MakeTextUppercase{#2}}%
+		\oldcontentsline{#1}{#2}%
 	}{%
 	\normalsize %ajusta tamanho da fonte na lista
 	\oldcontentsline{#1}{#2}%

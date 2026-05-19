@@ -93,28 +93,32 @@
     \end{resumo}
     
     % resumo em francês 
-    \ifthenelse{\equal{\Resume}{}}{}{
-        \begin{resumo}[RESUME]%Résumé
-        \begin{otherlanguage*}{french}
-        \Resume
-        %\vspace{\onelineskip}
-        \noindent      
-        \textbf{Mots clés}: \Motscles
-        \end{otherlanguage*}
-        \end{resumo}
-    } 
+    \ifdefined\Resume
+        \ifthenelse{\equal{\Resume}{}}{}{
+            \begin{resumo}[RÉSUMÉ]%Résumé
+            \begin{otherlanguage*}{french}
+            \Resume
+            %\vspace{\onelineskip}
+            \noindent      
+            \textbf{Mots clés}: \Motscles
+            \end{otherlanguage*}
+            \end{resumo}
+        }
+    \fi 
     
     % resumo em espanhol
-    \ifthenelse{\equal{\Resume}{}}{}{
-        \begin{resumo}[RESUMEN]
-        \begin{otherlanguage*}{spanish}
-        \Resumen 
-        %\vspace{\onelineskip}
-        \noindent    
-        \textbf{Palabras clave}: \Palabrasclave
-        \end{otherlanguage*}
-        \end{resumo}
-    }
+    \ifdefined\Resumen
+        \ifthenelse{\equal{\Resumen}{}}{}{
+            \begin{resumo}[RESUMEN]
+            \begin{otherlanguage*}{spanish}
+            \Resumen 
+            %\vspace{\onelineskip}
+            \noindent    
+            \textbf{Palabras clave}: \Palabrasclave
+            \end{otherlanguage*}
+            \end{resumo}
+        }
+    \fi
 }{}
 
 % ----------------------------------------------------------

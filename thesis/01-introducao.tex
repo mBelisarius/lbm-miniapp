@@ -1,6 +1,6 @@
 %---------------------------------------------------------------------------------------
 
-\chapter[Introdução]{Introdução}\label{ch:introducao}
+\chapter{Introdução}\label{ch:introducao}
 
 %---------------------------------------------------------------------------------------
 
@@ -56,11 +56,11 @@ Ao utilizar técnicas de regularização no operador de colisão, assim como fun
 \section{Problema}\label{sec:problema}
 
 Visto a necessidade da viabilização de simulações de alta fidelidade para escoamentos compressíveis, esse trabalho se propõe a estudar a escalabilidade de paralelização do Método de Lattice Boltzmann para essa categoria de escoamentos, utilizando técnicas de regularização iterativas e funções de distribuição otimizadas para essa tarefa.
-Para isso, mini-aplicativos com a mesma implementação do método LBM utilizando diversas tecnologias de computação de alta performance são desenvolvidos e comparados com o objetivo de avaliar não apenas o desempenho computacional de cada tecnologia e sua influência no método LBM, mas também o custo de desenvolvimento e a escalabilidade do código em arquiteturas heterogêneas.
+Para isso, miniaplicativos com a mesma implementação do método LBM utilizando diversas tecnologias de computação de alta performance são desenvolvidos e comparados com o objetivo de avaliar não apenas o desempenho computacional de cada tecnologia e sua influência no método LBM, mas também o custo de desenvolvimento e a escalabilidade do código em arquiteturas heterogêneas.
 
-Para obter resultados robustos e comparáveis, mas com rápido desenvolvimento, utiliza-se a abordagem de mini-aplicativos em vez de benchmarks de aplicação completa.
-Mini-aplicativos são versões simplificadas de código que preservam os padrões computacionais e de comunicação de códigos com modelos generalizados, mas em uma escala pequena e reprodutível.
-No contexto d método LBM, desenvolvem-se mini-apps que implementam a parte crítica de streaming e colisão do método utilizando diferentes tecnologias e filosofias de paralelização, permitindo avaliar desempenho e portabilidade relativa de cada abordagem em configurações de hardware variadas.
+Para obter resultados robustos e comparáveis, mas com rápido desenvolvimento, utiliza-se a abordagem de miniaplicativos em vez de \textit{benchmarks} de aplicação completa.
+Miniaplicativos são versões simplificadas de código que preservam os padrões computacionais e de comunicação de códigos com modelos generalizados, mas em uma escala pequena e reprodutível.
+No contexto do método LBM, desenvolvem-se miniaplicativos (\textit{mini-apps}) que implementam a parte crítica de \textit{streaming} e colisão do método utilizando diferentes tecnologias e filosofias de paralelização, permitindo avaliar desempenho e portabilidade relativa de cada abordagem em configurações de \textit{hardware} variadas.
 
 
 %---------------------------------------------------------------------------------------
@@ -90,7 +90,7 @@ Este trabalho está organizado da seguinte forma:
 \begin{itemize}
     \item O Capítulo 2 apresenta o referencial teórico sobre a formulação cinética do LBM, do operador de colisão BGK e variantes, e das extensões para compressibilidade, com base em \textcite{Chen1998, Guo2020, Tran2022, Rathnayake2024};
     \item O Capítulo 3 descreve as métricas de avaliação de desempenho GLUPS, \textit{speedup} e eficiência, a estratégia de escalonamento forte e fraco, e os critérios de comparação entre as tecnologias de paralelização;
-    \item O Capítulo 4 detalha o desenho do mini-\textit{app} utilizando o método LBM para escoamentos compressíveis e as versões com diferentes modelos de programação (sequencial, OpenMP, OpenACC, OpenCL, CUDA, Kokkos, RAJA e MPI), discutindo decisões de engenharia de desempenho e portabilidade;
+    \item O Capítulo 4 detalha o desenho do mini-\textit{app} utilizando o método LBM para escoamentos compressíveis e as versões com diferentes modelos de programação (sequencial, OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA e MPI), discutindo decisões de engenharia de desempenho e portabilidade;
     \item O Capítulo 5 apresenta os experimentos de desempenho e validação física no problema do tubo de choque, comparando os campos de densidade, pressão e velocidade com solução analítica de Sod e analisando a escalabilidade nas arquiteturas alvo;
     \item Por fim, o Capítulo 6 resume a pesquisa, limitações e oportunidades de pesquisa, incluindo extensões para regimes hipersônicos e malhas maiores em arquiteturas heterogêneas de próxima geração.
 \end{itemize}

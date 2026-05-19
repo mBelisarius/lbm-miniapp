@@ -40,7 +40,7 @@ Observa-se regime aproximadamente de primeira ordem, consistente com a presença
 O aumento da razão de pressões \(\Pi\) degrada a acurária dos resultados, sendo obtido uma razão máxima de \(\Pi=20\) antes de ocorrer divergência numérica irreversível na simulação.
 Para \(\rho\) e \(u\), o comportamento é análogo, com leve superconvergência em regiões suaves.
 
-\begin{figure}[h!]
+\begin{figure}[ht]
   \centering
   \includegraphics[width=0.8\linewidth]{fig/convergence.png}
   \caption{Convergência no tubo de choque de Sod: EQM em função do número de lattices \(N_x\) e razão de pressões \(\Pi=p_L^\star/p_R^\star\) comparada à solução de referência.}
@@ -50,7 +50,7 @@ Para \(\rho\) e \(u\), o comportamento é análogo, com leve superconvergência 
 \section{Escalabilidade em CPU multinúcleo}\label{sec:escalabilidade-em-cpu-multinucleo}
 
 A escalabilidade foi avaliada em um processador Intel Core 7--240H com seis núcleos de performance, utilizando 1 a 6 núcleos para malhas 1D com \(N_x=10^3\) e \(N_x=10^4\).
-Mantivemos o mesmo número de passos de tempo e configuração física para isolar efeitos de paralelização.
+O mesmo número de passos de tempo e configuração física foi mantido para isolar efeitos de paralelização.
 O tempo de execução \(T(p)\) foi normalizado pelo caso sequencial \(T(1)\).
 As métricas são:
 \[
@@ -63,7 +63,7 @@ Para \(N_x=10^3\), observamos escalabilidade quase linear, com eficiência acima
 Para \(N_x=10^4\), a sobrecarga de paralelização torna-se mais relevante, reduzindo \(E(p)\) especialmente acima de 5 núcleos, coerente com a pressão de memória e sincronizações de borda.
 O perfil indica que o kernel de colisão–streaming é bound por largura de banda de memória em regimes mais finos, enquanto o custo de comunicação (bordas/partições) limita ganhos para problemas menores.
 
-\begin{figure}[h!]
+\begin{figure}[ht]
   \centering
   \includegraphics[width=0.8\linewidth]{fig/scalability.png}
   \caption{Escalabilidade em CPU: aceleração \(S(p)\) para 1–6 núcleos no Intel Core 7--240H, com \(N_x=10^3\) e \(N_x=10^4\).}
