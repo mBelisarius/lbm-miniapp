@@ -11,8 +11,8 @@ Mesh:
     lx: 1.0
     ly: 1.0
     lz: 1.0
-    nx: 50000
-    ny: 1
+    nx: 10000
+    ny: 100
     nz: 1
 
 Control:
@@ -23,6 +23,6 @@ Control:
     printStep: 20
 
 Performance:
-    target: CPU     # Target device (CPU; GPU)
-    backend: Plain  # Backend to use (Plain; OpenMP; OpenACC; CUDA; OpenCL; Kokkos; RAJA; MPI)
+    target: GPU     # Target device (CPU; GPU)
+    backend: CUDA  # Backend to use (Plain; OpenMP; OpenACC; CUDA; OpenCL; Kokkos; RAJA; MPI)
     cores: 0        # Number of CPU cores (0 for auto)

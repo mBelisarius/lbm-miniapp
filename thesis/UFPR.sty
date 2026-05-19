@@ -268,8 +268,8 @@
 \newcommand{\insereFichaCatalografica}{ 
  \begin{fichacatalografica}%\color{blue}
 
- \IfFileExists{metadados/FichaC.pdf}
-    {\includepdf[pages=-]{metadados/FichaC}}
+ \IfFileExists{arquivos/FichaCatalografica.pdf}
+    {\includepdf[pages=-]{arquivos/FichaCatalografica}}
     {
 	\vspace*{\fill}					% Posição vertical
 	\hrule							% Linha horizontal
@@ -340,7 +340,7 @@
 \settocpreprocessor{chapter}{% 
   \let\tempf@rtoc\f@rtoc% 
   \def\f@rtoc{% 
-  \texorpdfstring{\bfseries\MakeTextUppercase{\tempf@rtoc}}{\tempf@rtoc}}% 
+  \texorpdfstring{\bfseries\tempf@rtoc}{\tempf@rtoc}}% 
 } 
 \makeatother 
 
@@ -360,6 +360,8 @@
 
 	\newenvironment{sortedList}{%
 		\DTLifdbexists{list}{\DTLcleardb{list}}{\DTLnewdb{list}}%
+		\DTLaddcolumn{list}{label}%
+		\DTLaddcolumn{list}{description}%
 	}
 	{
 		\DTLsort{label}{list}%
@@ -373,12 +375,12 @@
 	\newcommand\imprimirlistadesiglas{
 	
 		\begin{center}
-			{\ABNTEXchapterfont{LISTA DE ABREVIATURAS E DE 	SIGLAS}}
+			{\ABNTEXchapterfont{LISTA DE ABREVIATURAS E DE SIGLAS}}
 			\vspace*{1.1cm}
-			\begin{sortedList}
-				\fontfamily{cmss}\@starttoc{sig}
-			\end{sortedList}
 		\end{center}
+		\begin{sortedList}
+			\fontfamily{cmss}\@starttoc{sig}
+		\end{sortedList}
 	}
 
 \makeatother
@@ -399,8 +401,8 @@
 
 % Folha de Aprovação
 \newcommand{\insereAprovacao}{
-\IfFileExists{metadados/TermoA.pdf}
-    {\includepdf[pages=-]{metadados/TermoA.pdf}}{
+\IfFileExists{arquivos/TermoAprovacao.pdf}
+    {\includepdf[pages=-]{arquivos/TermoAprovacao.pdf}}{
     \begin{folhadeaprovacao}%\color{blue}
     
       \begin{center}
@@ -449,7 +451,7 @@
     pdfauthor={\@author},
     pdfsubject={\imprimirpreambulo},
     pdfcreator={LaTeX with abnTeX2},
-    pdfkeywords={abnt}{latex}{abntex}{abntex2}{trabalho acadêmico}, 
+    pdfkeywords={HPC}{Lattice Boltzmann}{escoamento compressível}{tubo de choque}, 
     colorlinks=true,       		% false: boxed links; true: colored links
     linkcolor=black,          	% color of internal links
     citecolor=black,        		% color of links to bibliography

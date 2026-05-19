@@ -1,0 +1,143 @@
+# Campaign definition for the results chapter of the thesis.
+#
+# Every path is either absolute or relative to the repository root.
+# The campaign is a cartesian product of the parameters of each study, so the
+# whole set of measurements can be reshaped by editing this file only.
+#
+# Test machine: AMD Ryzen 9 9900X (12 physical cores in two 6-core complexes,
+# 24 hardware threads with SMT, 32 GB DDR5) and NVIDIA GeForce RTX 5070 (12 GB,
+# of which 11 GB are budgeted for the solver).
+#
+# Memory per node, with ny = nx / 100 (nx^2 / 100 nodes):
+#   352 B on the device for CUDA, OpenACC, OpenCL and OpenMP offload;
+#   784 B for every CPU backend and for Kokkos and RAJA on the GPU, which also
+#   keep the streaming tables in device memory.
+# The largest mesh, nx = 30000 (9e6 nodes), takes 3.2 GB or 7.1 GB and fits the
+# 11 GB budget with any backend; nx = 100000 (1e8 nodes, 35 GB or 78 GB) does not.
+#
+# Cost: a run takes about 0.35 nx time steps (tmax = 0.2), i.e. about
+# 0.0035 nx^3 node updates, 9.4e10 at nx = 30000.
+
+executable: build/lbm-miniapp-main
+base_config: lbmini/config.yaml
+workdir: simulations-campaign
+
+figures:
+    path: thesis/fig
+    lang: br      # br (Português); en (English)
+    dpi: 200
+
+# Environment applied to every run, overriding the inherited one: one thread
+# per physical core, packed and pinned. The container images export
+# OMP_PLACES=threads and OMP_PROC_BIND=spread, which on the 9900X would place
+# two threads on the same physical core.
+environment:
+    OMP_PLACES: cores
+    OMP_PROC_BIND: close
+
+# Values applied to every run unless a study overrides them.
+defaults:
+    ny: 0             # Transversal nodes (see ny_ratio for an aspect-ratio driven mesh)
+    ny_ratio: 100       # If > 0, ny = max(1, nx // ny_ratio) and overrides ny
+    tmax: 0.2
+    printStep: 20     # Number of recordings after the initial state
+    viscosity: 1.0e-2 # Dynamic viscosity, in lattice units
+    prandtl: 0.71
+    gamma: 1.4
+    target: CPU
+    backend: Plain
+    cores: 0
+    repeats: 1
+    timeout: 0        # Per-run wall-clock limit in seconds (0 disables it)
+    warmup: false     # Discard one extra run before the measured repetitions
+
+# Launchers prepended to the executable, per backend.
+# The {cores} placeholder is replaced by the number of cores of the run.
+launchers:
+    MPI: [mpirun, -np, '{cores}', --bind-to, core, --map-by, core]
+
+# Per-backend executable overrides (different builds may be required).
+executables: {}
+
+studies:
+    # Accuracy studies drive the validation, convergence, pressure-ratio and viscosity results.
+    # The reference profiles are extracted from the convergence run selected in report.profiles.
+    convergence:
+        kind: accuracy
+        nx: [100, 1000, 10000]
+        plpr: [2.0, 5.0, 10.0, 20.0]
+
+    viscosity:
+        kind: accuracy
+        nx: [10000]
+        plpr: [10.0]
+        viscosity: [1.0e-1, 3.0e-2, 1.0e-2, 3.0e-3, 1.0e-3, 3.0e-4, 1.0e-4]
+
+    # Performance studies drive the scalability and technology comparisons.
+    # Only the initial and the final states are written (printStep: 1), and the
+    # runtime recorded with them covers the time marching alone.
+    cpu_scalability:
+        kind: performance
+        target: CPU
+        backends: [OpenMP]
+        nx: [100, 1000, 10000, 30000]
+        cores: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        printStep: 1
+        repeats: 3
+        warmup: true
+
+    cpu_technologies:
+        kind: performance
+        target: CPU
+        backends: [Plain, OpenMP, OpenACC, OpenCL, Kokkos, RAJA, MPI]
+        nx: [100, 1000, 10000, 30000]
+        cores: [12]
+        printStep: 1
+        repeats: 3
+        warmup: true
+
+    gpu_technologies:
+        kind: performance
+        target: GPU
+        backends: [CUDA, OpenACC, OpenCL, OpenMP, Kokkos, RAJA]
+        nx: [100, 1000, 10000, 30000]
+        printStep: 1
+        repeats: 3
+        warmup: true
+
+report:
+    profiles:
+        study: convergence
+        nx: 10000
+        plpr: 10.0
+        times: [0.0, 0.1, 0.2]
+    convergence:
+        study: convergence
+        reference_plpr: 10.0
+    pressure_ratio:
+        study: convergence
+    viscosity:
+        study: viscosity
+    cpu_scalability:
+        study: cpu_scalability
+    cpu_technologies:
+        study: cpu_technologies
+        baseline_backend: Plain
+    gpu_technologies:
+        study: gpu_technologies
+        baseline_study: cpu_technologies
+        baseline_backend: Plain
+
+# Source trees counted for the code complexity table.
+complexity:
+    baseline: Plain
+    sources:
+        Plain: [lbmini/Lbm/Plain]
+        OpenMP: [lbmini/Lbm/OpenMp]
+        OpenACC: [lbmini/Lbm/OpenAcc]
+        OpenCL: [lbmini/Lbm/OpenCl]
+        CUDA: [lbmini/Lbm/Cuda]
+        Kokkos: [lbmini/Lbm/Kokkos]
+        RAJA: [lbmini/Lbm/Raja]
+        MPI: [lbmini/Lbm/Mpi]
+    extensions: ['.hpp', '.cpp', '.cl', '.cu']

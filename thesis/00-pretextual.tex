@@ -79,7 +79,7 @@
     \ResumoTexto
     %\vspace{\onelineskip}
     \noindent 
-    \textbf{Palavras-chaves}: \PalavraschaveTexto
+    \textbf{Palavras-chave}: \PalavraschaveTexto
     \end{resumo}
     
     %% resumo em inglês
@@ -88,33 +88,37 @@
     \AbstractTexto
     %\vspace{\onelineskip}
     \noindent 
-    \textbf{Key-words}: \KeywordsTexto
+    \textbf{Keywords}: \KeywordsTexto
     \end{otherlanguage*}
     \end{resumo}
     
     % resumo em francês 
-    \ifthenelse{\equal{\Resume}{}}{}{
-        \begin{resumo}[RESUME]%Résumé
-        \begin{otherlanguage*}{french}
-        \Resume
-        %\vspace{\onelineskip}
-        \noindent      
-        \textbf{Mots clés}: \Motscles
-        \end{otherlanguage*}
-        \end{resumo}
-    } 
+    \ifdefined\Resume
+        \ifthenelse{\equal{\Resume}{}}{}{
+            \begin{resumo}[RÉSUMÉ]%Résumé
+            \begin{otherlanguage*}{french}
+            \Resume
+            %\vspace{\onelineskip}
+            \noindent      
+            \textbf{Mots clés}: \Motscles
+            \end{otherlanguage*}
+            \end{resumo}
+        }
+    \fi 
     
     % resumo em espanhol
-    \ifthenelse{\equal{\Resume}{}}{}{
-        \begin{resumo}[RESUMEN]
-        \begin{otherlanguage*}{spanish}
-        \Resumen 
-        %\vspace{\onelineskip}
-        \noindent    
-        \textbf{Palabras clave}: \Palabrasclave
-        \end{otherlanguage*}
-        \end{resumo}
-    }
+    \ifdefined\Resumen
+        \ifthenelse{\equal{\Resumen}{}}{}{
+            \begin{resumo}[RESUMEN]
+            \begin{otherlanguage*}{spanish}
+            \Resumen 
+            %\vspace{\onelineskip}
+            \noindent    
+            \textbf{Palabras clave}: \Palabrasclave
+            \end{otherlanguage*}
+            \end{resumo}
+        }
+    \fi
 }{}
 
 % ----------------------------------------------------------
@@ -123,6 +127,22 @@
 \ifthenelse{\equal{\terListaFiguras}{Sim}}{
     %\pdfbookmark[0]{\listfigurename}{lof}
     \listoffigures*
+    \cleardoublepage
+}{}
+
+% ----------------------------------------------------------
+
+% inserir lista de algoritmos
+\ifthenelse{\equal{\terListaAlgoritmos}{Sim}}{
+    \listofalgorithms
+    \cleardoublepage
+}{}
+
+% ----------------------------------------------------------
+
+% inserir lista de programas
+\ifthenelse{\equal{\terListaProgramas}{Sim}}{
+    \lstlistoflistings
     \cleardoublepage
 }{}
 
@@ -138,10 +158,15 @@
 % ----------------------------------------------------------
 
 % inserir lista de abreviaturas e siglas 
-% inserir lista de símbolos
 \ifthenelse{\equal{\terSiglasAbrev}{Sim}}{
     \imprimirlistadesiglas
     \cleardoublepage
+}{}
+
+% ----------------------------------------------------------
+
+% inserir lista de símbolos
+\ifthenelse{\equal{\terSimbolos}{Sim}}{
     \imprimirlistadesimbolos
     \cleardoublepage
 }{}

@@ -28,13 +28,17 @@ public:
   static constexpr Scalar Cs2 = Scalar{ 1.0 } / Scalar{ 3.0 };
 
   /// Discrete velocity component `dir` of direction `index` (integer -1/0/+1).
+#if defined(_OPENACC) && (defined(__NVCOMPILER) || defined(__NVHPC__))
   #pragma acc routine seq
+#endif
   static constexpr Index Velocity(Index index, Index dir) {
     return kVelocity_[index][dir];
   }
 
   /// Index of the direction opposite to `index` (bounce-back).
+#if defined(_OPENACC) && (defined(__NVCOMPILER) || defined(__NVHPC__))
   #pragma acc routine seq
+#endif
   static constexpr Index Opposite(Index index) {
     return kOpposite_[index];
   }
@@ -47,7 +51,9 @@ public:
    * critical inside a device `teams distribute parallel for` loop where we
    * want every lane uniform.
    */
+#if defined(_OPENACC) && (defined(__NVCOMPILER) || defined(__NVHPC__))
   #pragma acc routine seq
+#endif
   static constexpr Scalar Weights(Index idc, Scalar tem) {
     const Scalar wZero = Scalar{ 1.0 } - tem;
     const Scalar wNonZero = Scalar{ 0.5 } * tem;
@@ -61,7 +67,9 @@ public:
   }
 
   /// Shifted discrete velocity `c_i + U` cast to `Scalar`.
+#if defined(_OPENACC) && (defined(__NVCOMPILER) || defined(__NVHPC__))
   #pragma acc routine seq
+#endif
   static constexpr Scalar Cshift(Index idc, Index dir, Scalar Ushift) {
     return static_cast<Scalar>(kVelocity_[idc][dir]) + Ushift;
   }

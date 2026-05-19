@@ -1,0 +1,16 @@
+.git
+.github
+.idea
+.junie
+cmake-build-*
+build*
+*.sif
+*.tar.gz
+__pycache__
+*.pyc
+results/out*
+results/figures/*.png
+results/figures/*.pdf
+thesis/*.pdf
+thesis/*.aux
+thesis/*.log

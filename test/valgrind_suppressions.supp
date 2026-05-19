@@ -1,0 +1,518 @@
+# Valgrind memcheck suppressions for LBM Mini-App
+# Suppresses known runtime allocations and JIT compiler artifacts from vendor libraries:
+# - NVHPC OpenMP runtime and thread tables
+# - CUDA and NVIDIA display driver libraries
+# - Intel OneAPI OpenCL CPU runtime & embedded Clang/LLVM JIT compiler
+# - OpenCL ICD loaders and PoCL drivers
+# - glibc dynamic loader / TLS allocations
+
+# -----------------------------------------------------------------------------
+# NVHPC & OpenMP runtime thread tables
+# -----------------------------------------------------------------------------
+{
+   nvhpc_openmp_thread_info_tables
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:malloc
+   ...
+   fun:initThreadInfoTables
+}
+
+{
+   nvhpc_openmp_thread_id
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:malloc
+   ...
+   fun:initThreadId
+}
+
+{
+   nvhpc_openmp_hxi_init
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:malloc
+   ...
+   fun:hxiInitThreadId
+}
+
+{
+   nvhpc_openmp_external_thread
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:malloc
+   ...
+   fun:*ExternalThreadId*
+}
+
+{
+   nvhpc_openmp_libnvomp_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libnvomp*.so*
+}
+
+{
+   nvhpc_openmp_libnvomp_cond
+   Memcheck:Cond
+   ...
+   obj:*/libnvomp*.so*
+}
+
+{
+   nvhpc_openmp_libnvomp_value8
+   Memcheck:Value8
+   ...
+   obj:*/libnvomp*.so*
+}
+
+{
+   nvhpc_openmp_libgomp_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libgomp*.so*
+}
+
+{
+   nvhpc_openmp_libgomp_cond
+   Memcheck:Cond
+   ...
+   obj:*/libgomp*.so*
+}
+
+{
+   nvhpc_openmp_libgomp_value8
+   Memcheck:Value8
+   ...
+   obj:*/libgomp*.so*
+}
+
+# -----------------------------------------------------------------------------
+# NVIDIA Driver & CUDA Toolkit libraries
+# -----------------------------------------------------------------------------
+{
+   cuda_driver_lib_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libcuda*.so*
+}
+
+{
+   cuda_driver_cond
+   Memcheck:Cond
+   ...
+   obj:*/libcuda*.so*
+}
+
+{
+   cuda_driver_value8
+   Memcheck:Value8
+   ...
+   obj:*/libcuda*.so*
+}
+
+{
+   cuda_driver_value4
+   Memcheck:Value4
+   ...
+   obj:*/libcuda*.so*
+}
+
+{
+   cuda_driver_addr8
+   Memcheck:Addr8
+   ...
+   obj:*/libcuda*.so*
+}
+
+{
+   cudart_lib_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libcudart*.so*
+}
+
+{
+   cudart_cond
+   Memcheck:Cond
+   ...
+   obj:*/libcudart*.so*
+}
+
+{
+   cudart_value8
+   Memcheck:Value8
+   ...
+   obj:*/libcudart*.so*
+}
+
+{
+   nvidia_driver_libs_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libnvidia*.so*
+}
+
+{
+   nvidia_driver_cond
+   Memcheck:Cond
+   ...
+   obj:*/libnvidia*.so*
+}
+
+{
+   nvidia_driver_value8
+   Memcheck:Value8
+   ...
+   obj:*/libnvidia*.so*
+}
+
+{
+   nvidia_driver_value4
+   Memcheck:Value4
+   ...
+   obj:*/libnvidia*.so*
+}
+
+{
+   nvidia_driver_addr8
+   Memcheck:Addr8
+   ...
+   obj:*/libnvidia*.so*
+}
+
+# -----------------------------------------------------------------------------
+# Intel OneAPI OpenCL CPU Runtime & JIT Clang Compiler
+# -----------------------------------------------------------------------------
+{
+   intel_clang_cond
+   Memcheck:Cond
+   ...
+   obj:*/libcommon_clang*.so*
+}
+
+{
+   intel_clang_value8
+   Memcheck:Value8
+   ...
+   obj:*/libcommon_clang*.so*
+}
+
+{
+   intel_clang_value4
+   Memcheck:Value4
+   ...
+   obj:*/libcommon_clang*.so*
+}
+
+{
+   intel_clang_addr8
+   Memcheck:Addr8
+   ...
+   obj:*/libcommon_clang*.so*
+}
+
+{
+   intel_clang_addr4
+   Memcheck:Addr4
+   ...
+   obj:*/libcommon_clang*.so*
+}
+
+
+{
+   intel_clang_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libcommon_clang*.so*
+}
+
+{
+   intel_ocl_cond
+   Memcheck:Cond
+   ...
+   obj:*/libintelocl*.so*
+}
+
+{
+   intel_ocl_value8
+   Memcheck:Value8
+   ...
+   obj:*/libintelocl*.so*
+}
+
+{
+   intel_ocl_value4
+   Memcheck:Value4
+   ...
+   obj:*/libintelocl*.so*
+}
+
+{
+   intel_ocl_addr8
+   Memcheck:Addr8
+   ...
+   obj:*/libintelocl*.so*
+}
+
+{
+   intel_ocl_addr4
+   Memcheck:Addr4
+   ...
+   obj:*/libintelocl*.so*
+}
+
+
+{
+   intel_ocl_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libintelocl*.so*
+}
+
+{
+   intel_svml_cond
+   Memcheck:Cond
+   ...
+   obj:*/libocl_svml*.so*
+}
+
+{
+   intel_svml_value8
+   Memcheck:Value8
+   ...
+   obj:*/libocl_svml*.so*
+}
+
+{
+   intel_svml_value4
+   Memcheck:Value4
+   ...
+   obj:*/libocl_svml*.so*
+}
+
+{
+   intel_svml_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libocl_svml*.so*
+}
+
+{
+   intel_irng_cond
+   Memcheck:Cond
+   ...
+   obj:*/libirng*.so*
+}
+
+{
+   intel_irng_value8
+   Memcheck:Value8
+   ...
+   obj:*/libirng*.so*
+}
+
+{
+   intel_irng_value4
+   Memcheck:Value4
+   ...
+   obj:*/libirng*.so*
+}
+
+{
+   intel_irng_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libirng*.so*
+}
+
+{
+   intel_igc_cond
+   Memcheck:Cond
+   ...
+   obj:*/libigc*.so*
+}
+
+{
+   intel_igc_value
+   Memcheck:Value8
+   ...
+   obj:*/libigc*.so*
+}
+
+{
+   intel_igc_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libigc*.so*
+}
+
+{
+   intel_ze_cond
+   Memcheck:Cond
+   ...
+   obj:*/libze_*.so*
+}
+
+{
+   intel_ze_value
+   Memcheck:Value8
+   ...
+   obj:*/libze_*.so*
+}
+
+{
+   intel_ze_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libze_*.so*
+}
+
+# -----------------------------------------------------------------------------
+# OpenCL ICD Loaders and PoCL Runtime
+# -----------------------------------------------------------------------------
+{
+   opencl_icd_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libOpenCL*.so*
+}
+
+{
+   opencl_icd_cond
+   Memcheck:Cond
+   ...
+   obj:*/libOpenCL*.so*
+}
+
+{
+   opencl_icd_value8
+   Memcheck:Value8
+   ...
+   obj:*/libOpenCL*.so*
+}
+
+{
+   opencl_pocl_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libpocl*.so*
+}
+
+{
+   opencl_pocl_cond
+   Memcheck:Cond
+   ...
+   obj:*/libpocl*.so*
+}
+
+{
+   opencl_pocl_value8
+   Memcheck:Value8
+   ...
+   obj:*/libpocl*.so*
+}
+
+# -----------------------------------------------------------------------------
+# Dynamic Linker (glibc dlopen / TLS allocation)
+# -----------------------------------------------------------------------------
+{
+   glibc_dl_map_object_deps_malloc_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:malloc
+   ...
+   fun:_dl_map_object_deps
+}
+
+{
+   glibc_dl_open_worker_malloc_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:malloc
+   ...
+   fun:dl_open_worker*
+}
+
+{
+   glibc_dlopen_malloc_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:malloc
+   ...
+   fun:dlopen*
+}
+
+{
+   glibc_dlopen_calloc_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:calloc
+   ...
+   fun:dlopen*
+}
+
+{
+   glibc_dlopen_worker_calloc_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:calloc
+   ...
+   fun:dl_open_worker*
+}
+
+{
+   glibc_pthread_create_tls_allocate_dtv
+   Memcheck:Leak
+   match-leak-kinds: all
+   fun:calloc
+   ...
+   fun:allocate_dtv
+}
+
+{
+   glibc_pthread_create_dl_allocate_tls
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   fun:_dl_allocate_tls
+   fun:pthread_create*
+}
+
+# -----------------------------------------------------------------------------
+# MPI Runtimes (OpenMPI / HPC-X)
+# -----------------------------------------------------------------------------
+{
+   mpi_runtime_leaks
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libmpi*.so*
+}
+
+{
+   mpi_runtime_cond
+   Memcheck:Cond
+   ...
+   obj:*/libmpi*.so*
+}
+
+{
+   mpi_runtime_value8
+   Memcheck:Value8
+   ...
+   obj:*/libmpi*.so*
+}

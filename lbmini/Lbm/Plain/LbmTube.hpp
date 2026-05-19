@@ -8,8 +8,10 @@
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
+#include "Guards.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
+#include "Utils.hpp"
 
 namespace lbmini::plain {
 /**
@@ -67,6 +69,19 @@ public:
     const ControlData<Scalar>& control,
     const PerformanceData& performance
   );
+
+  // The solver caches raw pointers into its own buffers and, in the device
+  // backends, owns raw allocation handles; a copy would alias or double-free
+  // them. Solvers are heavy, unique objects held behind `ILbmTubeNd*`, so the
+  // operations are deleted rather than implemented, uniformly across every
+  // backend. See docs/memory-safety.md §5.2.
+  LbmTube(const LbmTube&) = delete;
+
+  LbmTube& operator=(const LbmTube&) = delete;
+
+  LbmTube(LbmTube&&) = delete;
+
+  LbmTube& operator=(LbmTube&&) = delete;
 
   /**
    * @name Macroscopic field getters
@@ -180,7 +195,12 @@ protected:
 
   /** @} */
 
-private:
+  // Deliberately `protected` rather than `private`: the memory-safety suite
+  // (`test/streaming_table_test.cpp`) derives from this class to assert that
+  // every precomputed gather index stays inside `[0, N_)`. The streaming
+  // kernel dereferences `streamIdx_` without any bounds check, so that table
+  // is the one place where a geometry mistake becomes an out-of-bounds read.
+protected:
   static constexpr Scalar kTiny_ = Scalar{ 1.0e-12 };
   static constexpr Scalar kMaxExp_ = Scalar{ 700.0 };
 
@@ -223,6 +243,12 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   const PerformanceData& performance
 )
   : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
+  // Everything below derives from these two extents, so they are checked
+  // before the first allocation: a zero extent yields an empty buffer the
+  // kernels still index, and a cell count beyond int32 wraps the streaming
+  // tables into negative (wild) indices.
+  ValidateMeshExtents(mesh.size[0], mesh.size[1], kQ_, "plain::LbmTube");
+
   nx_ = mesh.size[0];
   ny_ = mesh.size[1];
   N_ = nx_ * ny_;
@@ -406,7 +432,7 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
         const Scalar w11 = Scalar{ 1 } / std::pow(d11, idw);
         const Scalar wsum = w00 + w10 + w01 + w11;
 
-        if (!std::isfinite(wsum) || wsum < kTiny_) {
+        if (!IsFinite(wsum) || wsum < kTiny_) {
           // Degenerate fallback: nearest neighbor, bounce-back on x out-of-range.
           Index xN = static_cast<Index>(std::round(xSrc));
           Index yN = static_cast<Index>(std::round(ySrc));
@@ -437,6 +463,12 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
       }
     }
   }
+
+  // One-off proof that the gather table only addresses existing cells. This is
+  // what licenses `stream()` to dereference `streamIdx_` with no bounds check
+  // whatsoever: the cost is a single linear pass at construction, against
+  // thousands of time steps of unguarded, full-speed gathering.
+  VerifyIndexTable(streamIdx_, N_, "plain::LbmTube");
 }
 
 template<typename Scalar, typename LatticeType>
@@ -787,6 +819,13 @@ void LbmTube<Scalar, LatticeType>::stream() {
       const std::int32_t i1 = idxPlane[cell * 4 + 1];
       const std::int32_t i2 = idxPlane[cell * 4 + 2];
       const std::int32_t i3 = idxPlane[cell * 4 + 3];
+      // Debug-only: compiled out in NDEBUG (benchmark) builds, so the gather
+      // below keeps its exact release code. `buildStreamingTables()` has
+      // already proven the same property for the whole table.
+      LBMINI_ASSERT_INDEX(i0, N_);
+      LBMINI_ASSERT_INDEX(i1, N_);
+      LBMINI_ASSERT_INDEX(i2, N_);
+      LBMINI_ASSERT_INDEX(i3, N_);
       const Scalar w0 = wPlane[cell * 4 + 0];
       const Scalar w1 = wPlane[cell * 4 + 1];
       const Scalar w2 = wPlane[cell * 4 + 2];

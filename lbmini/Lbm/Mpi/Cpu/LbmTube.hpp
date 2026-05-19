@@ -9,8 +9,10 @@
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
+#include "Guards.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
+#include "Utils.hpp"
 
 namespace lbmini::mpi::cpu {
 /**
@@ -52,6 +54,14 @@ public:
     const ControlData<Scalar>& control,
     const PerformanceData& performance
   );
+
+  LbmTube(const LbmTube&) = delete;
+
+  LbmTube& operator=(const LbmTube&) = delete;
+
+  LbmTube(LbmTube&&) = delete;
+
+  LbmTube& operator=(LbmTube&&) = delete;
 
   /**
    * @name Macroscopic field getters
@@ -235,6 +245,8 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   const PerformanceData& performance
 )
   : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
+  ValidateMeshExtents(mesh.size[0], mesh.size[1], kQ_, "MPI global mesh");
+
   MPI_Comm_rank(MPI_COMM_WORLD, &rank_);
   MPI_Comm_size(MPI_COMM_WORLD, &numRanks_);
 
@@ -248,6 +260,7 @@ LbmTube<Scalar, LatticeType>::LbmTube(
 
   ghosts_ = 2;
   nx_ = localNxActive_ + 2 * ghosts_; // local padded dimension
+  ValidateMeshExtents(nx_, ny_, kQ_, "MPI local mesh with halos");
   N_ = nx_ * ny_;
   uSize_ = N_ * kDim_;
   distSize_ = N_ * kQ_;
@@ -463,18 +476,25 @@ template<typename Scalar, typename LatticeType>
 void LbmTube<Scalar, LatticeType>::Run(const typename LbmTube<Scalar, LatticeType>::Index steps, bool /*save*/) {
   for (typename LbmTube<Scalar, LatticeType>::Index t = 0; t < steps; ++t) {
     if (numRanks_ > 1) {
-      // 1. Compute collision on boundary active cells
-      collisionAndEquilibria(ghosts_, 2 * ghosts_);
-      collisionAndEquilibria(nx_ - 2 * ghosts_, nx_ - ghosts_);
+      if (localNxActive_ >= 2 * ghosts_) {
+        // 1. Compute collision on boundary active cells
+        collisionAndEquilibria(ghosts_, 2 * ghosts_);
+        collisionAndEquilibria(nx_ - 2 * ghosts_, nx_ - ghosts_);
 
-      // 2. Start non-blocking halo exchange of f_ and g_
-      startExchangeGhosts();
+        // 2. Start non-blocking halo exchange of f_ and g_
+        startExchangeGhosts();
 
-      // 3. Compute collision on inner domain while communication is in flight
-      collisionAndEquilibria(2 * ghosts_, nx_ - 2 * ghosts_);
+        // 3. Compute collision on inner domain while communication is in flight
+        collisionAndEquilibria(2 * ghosts_, nx_ - 2 * ghosts_);
 
-      // 4. Wait for communication to finish
-      finishExchangeGhosts();
+        // 4. Wait for communication to finish
+        finishExchangeGhosts();
+      } else {
+        // Domain too small to split into disjoint boundary and inner regions
+        collisionAndEquilibria(ghosts_, nx_ - ghosts_);
+        startExchangeGhosts();
+        finishExchangeGhosts();
+      }
     } else {
       // Single-rank execution: compute all active cells at once
       collisionAndEquilibria(ghosts_, nx_ - ghosts_);
@@ -518,8 +538,19 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
         const Index cell = cellIndex(i, j);
         const Index base = (idc * N_ + cell) * 4;
 
-        // Active domain only? Wait, we can evaluate for all i, but if streamIdx is out of bounds,
-        // we map it to our own ghost zones!
+        // Halo/ghost padding cells are overwritten by communication and are not streamed into
+        if (i < ghosts_ || i >= nx_ - ghosts_) {
+          streamIdx_[base + 0] = static_cast<std::int32_t>(cell);
+          streamIdx_[base + 1] = static_cast<std::int32_t>(cell);
+          streamIdx_[base + 2] = static_cast<std::int32_t>(cell);
+          streamIdx_[base + 3] = static_cast<std::int32_t>(cell);
+          streamW_[base + 0] = Scalar{ 1 };
+          streamW_[base + 1] = Scalar{ 0 };
+          streamW_[base + 2] = Scalar{ 0 };
+          streamW_[base + 3] = Scalar{ 0 };
+          continue;
+        }
+
         const Scalar globalX = static_cast<Scalar>(offsetX_ + i - ghosts_);
         const Scalar xSrc = globalX - cix;
         const Scalar ySrc = static_cast<Scalar>(j) - ciy;
@@ -578,7 +609,7 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
         const Scalar w11 = Scalar{ 1 } / std::pow(d11, idw);
         const Scalar wsum = w00 + w10 + w01 + w11;
 
-        if (!std::isfinite(wsum) || wsum < kTiny_) {
+        if (!IsFinite(wsum) || wsum < kTiny_) {
           // Degenerate fallback: nearest neighbor, bounce-back on x out-of-range.
           Index xN = static_cast<Index>(std::round(xSrc));
           Index yN = static_cast<Index>(std::round(ySrc));
@@ -587,7 +618,10 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
             cell2 = cell;
           } else {
             Index lxN = xN - offsetX_ + ghosts_;
-            cell2 = lxN * ny_ + wrapY(yN);
+            if (lxN < 0 || lxN >= nx_)
+              cell2 = cell;
+            else
+              cell2 = lxN * ny_ + wrapY(yN);
           }
           streamIdx_[base + 0] = static_cast<std::int32_t>(cell2);
           streamIdx_[base + 1] = streamIdx_[base + 2] = streamIdx_[base + 3] = static_cast<std::int32_t>(cell2);
@@ -607,6 +641,7 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
       }
     }
   }
+  VerifyIndexTable(streamIdx_, N_, "MPI local streaming table");
 }
 
 template<typename Scalar, typename LatticeType>

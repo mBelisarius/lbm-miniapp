@@ -3,14 +3,19 @@
 #include <cstdlib>
 #include <iostream>
 
+#include "Guards.hpp"
+#ifdef USE_OPENCL
 #include "Lbm/OpenCl/Cpu/LatticeD2Q9.hpp"
 #include "Lbm/OpenCl/Cpu/LbmTube.hpp"
 #include "Lbm/OpenCl/Gpu/LatticeD2Q9.hpp"
 #include "Lbm/OpenCl/Gpu/LbmTube.hpp"
+#endif
 #include "Lbm/OpenMp/Cpu/LatticeD2Q9.hpp"
 #include "Lbm/OpenMp/Cpu/LbmTube.hpp"
+#if defined(_OPENMP) && (defined(__NVCOMPILER) || defined(__NVHPC__))
 #include "Lbm/OpenMp/Gpu/LatticeD2Q9.hpp"
 #include "Lbm/OpenMp/Gpu/LbmTube.hpp"
+#endif
 
 #ifdef _OPENACC
 #include "Lbm/OpenAcc/Cpu/LatticeD2Q9.hpp"
@@ -33,9 +38,23 @@
 #include "Lbm/Mpi/Cpu/LbmTube.hpp"
 #endif
 
-#ifdef __CUDACC__
+#ifdef USE_CUDA
 #include "Lbm/Cuda/Gpu/LatticeD2Q9.hpp"
 #include "Lbm/Cuda/Gpu/LbmTube.hpp"
+#endif
+
+#ifdef USE_KOKKOS
+#include "Lbm/Kokkos/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/Kokkos/Cpu/LbmTube.hpp"
+#include "Lbm/Kokkos/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/Kokkos/Gpu/LbmTube.hpp"
+#endif
+
+#ifdef USE_RAJA
+#include "Lbm/Raja/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/Raja/Cpu/LbmTube.hpp"
+#include "Lbm/Raja/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/Raja/Gpu/LbmTube.hpp"
 #endif
 
 #ifdef _OPENMP
@@ -46,6 +65,21 @@
 #endif
 
 namespace lbmini {
+namespace {
+void SetProcessEnvironment(const char* name, const std::string& value, const bool overwrite) {
+  if (!overwrite && std::getenv(name) != nullptr)
+    return;
+
+  #ifdef _WIN32
+  const int result = _putenv_s(name, value.c_str());
+  #else
+  const int result = setenv(name, value.c_str(), overwrite ? 1 : 0);
+  #endif
+  if (result != 0)
+    throw std::runtime_error(std::string("Failed to set process environment variable ") + name + ".");
+}
+} // namespace
+
 template<typename Scalar>
 std::unique_ptr<Executor<Scalar>> Executor<Scalar>::singleton_ = nullptr;
 
@@ -72,6 +106,11 @@ Executor<Scalar>* Executor<Scalar>::GetExecutor(
   }
 
   return singleton_.get();
+}
+
+template<typename Scalar>
+void Executor<Scalar>::Reset() {
+  singleton_.reset();
 }
 
 template<typename Scalar>
@@ -103,19 +142,27 @@ Executor<Scalar>::Executor(
   }
   #endif
 
-  // Hardware concurrency setup
-  if (performance.cores > 0) {
-    #if defined(_OPENMP)
-    omp_set_num_threads(performance.cores);
-    #endif
-    std::string coresStr = std::to_string(performance.cores);
-    setenv("ACC_NUM_CORES", coresStr.c_str(), 1);
-    setenv("POCL_MAX_PTHREAD_COUNT", coresStr.c_str(), 1);
-  } else {
-    std::string perfCoresStr = std::to_string(lbmini::CountPerformanceCores());
-    setenv("ACC_NUM_CORES", perfCoresStr.c_str(), 1);
-    setenv("POCL_MAX_PTHREAD_COUNT", perfCoresStr.c_str(), 1);
-  }
+  // Rejected here, before a single buffer is allocated: every backend derives
+  // its buffer sizes and its flat indices from these extents, so a degenerate
+  // or oversized mesh has to fail at the same place whichever one is selected.
+  ValidateMeshExtents(mesh.size[0], mesh.size[1], ILatticeT::Speeds(), "Executor");
+
+  // Hardware concurrency setup.
+  // Environment variables and the OpenMP thread count are process-global, so
+  // they belong to the single owner of the process. Writing them from a solver
+  // constructor would silently reconfigure instances that already exist and
+  // would race with any other thread reading the environment.
+  const Index cores = (performance.cores > 0) ? performance.cores : static_cast<Index>(lbmini::CountPerformanceCores());
+  const std::string coresStr = std::to_string(cores);
+  #if defined(_OPENMP)
+  omp_set_num_threads(static_cast<int>(cores));
+  #endif
+  SetProcessEnvironment("ACC_NUM_CORES", coresStr, true);
+  SetProcessEnvironment("POCL_MAX_PTHREAD_COUNT", coresStr, true);
+  // Thread affinity: set once, and never overridden if the user (or a job
+  // scheduler) already chose a placement policy.
+  SetProcessEnvironment("OMP_PLACES", "cores", false);
+  SetProcessEnvironment("OMP_PROC_BIND", "close", false);
 
   switch (performance.backend) {
     case lbmini::BackendEnum::Plain: {
@@ -124,7 +171,7 @@ Executor<Scalar>::Executor(
       }
       using LbmLattice = lbmini::plain::LatticeD2Q9<Scalar>;
       using LbmTube = lbmini::plain::LbmTube<Scalar, LbmLattice>;
-      lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+      lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
       break;
     }
     case lbmini::BackendEnum::OpenMP: {
@@ -134,10 +181,11 @@ Executor<Scalar>::Executor(
           omp_set_default_device(0);
           using LbmLattice = lbmini::openmp::cpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openmp::cpu::LbmTube<Scalar, LbmLattice>;
-          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
           break;
         }
         case lbmini::TargetEnum::GPU: {
+          #if defined(_OPENMP) && (defined(__NVCOMPILER) || defined(__NVHPC__))
           if (omp_get_num_devices() < 1) {
             std::cerr << "No OpenMP target devices available." << std::endl;
             lbmTube_.reset(nullptr);
@@ -146,8 +194,11 @@ Executor<Scalar>::Executor(
           omp_set_default_device(0);
           using LbmLattice = lbmini::openmp::gpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openmp::gpu::LbmTube<Scalar, LbmLattice>;
-          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
           break;
+          #else
+          throw std::runtime_error("OpenMP GPU target is only supported with NVIDIA HPC SDK (nvc++).");
+          #endif
         }
         default:
           throw std::runtime_error("Invalid target for OpenMP backend.");
@@ -164,14 +215,14 @@ Executor<Scalar>::Executor(
           acc_set_device_type(acc_device_host);
           using LbmLattice = lbmini::openacc::cpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openacc::cpu::LbmTube<Scalar, LbmLattice>;
-          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
           break;
         }
         case lbmini::TargetEnum::GPU: {
           acc_set_device_type(acc_device_default);
           using LbmLattice = lbmini::openacc::gpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::openacc::gpu::LbmTube<Scalar, LbmLattice>;
-          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
           break;
         }
         default:
@@ -183,22 +234,26 @@ Executor<Scalar>::Executor(
       break;
     }
     case lbmini::BackendEnum::OpenCL: {
+      #ifdef USE_OPENCL
       switch (performance.target) {
         case lbmini::TargetEnum::CPU: {
           using LbmLattice = lbmini::opencl::cpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::opencl::cpu::LbmTube<Scalar, LbmLattice>;
-          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
           break;
         }
         case lbmini::TargetEnum::GPU: {
           using LbmLattice = lbmini::opencl::gpu::LatticeD2Q9<Scalar>;
           using LbmTube = lbmini::opencl::gpu::LbmTube<Scalar, LbmLattice>;
-          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
           break;
         }
         default:
           throw std::runtime_error("Invalid target for OpenCL backend.");
       }
+      #else
+      throw std::runtime_error("OpenCL backend not enabled.");
+      #endif
       break;
     }
     case lbmini::BackendEnum::MPI: {
@@ -227,22 +282,88 @@ Executor<Scalar>::Executor(
       }
       using LbmLattice = lbmini::mpi::cpu::LatticeD2Q9<Scalar>;
       using LbmTube = lbmini::mpi::cpu::LbmTube<Scalar, LbmLattice>;
-      lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+      lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
       #else
       throw std::runtime_error("MPI backend not enabled.");
       #endif
       break;
     }
     case lbmini::BackendEnum::CUDA: {
-      #ifdef __CUDACC__
+      #ifdef USE_CUDA
       if (performance.target != lbmini::TargetEnum::GPU) {
         throw std::runtime_error("CUDA backend only supports GPU target.");
       }
       using LbmLattice = lbmini::cuda::gpu::LatticeD2Q9<Scalar>;
       using LbmTube = lbmini::cuda::gpu::LbmTube<Scalar, LbmLattice>;
-      lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+      lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
       #else
-      throw std::runtime_error("CUDA backend not enabled (compile with nvcc).");
+      throw std::runtime_error("CUDA backend not enabled.");
+      #endif
+      break;
+    }
+    case lbmini::BackendEnum::Kokkos: {
+      #ifdef USE_KOKKOS
+      switch (performance.target) {
+        case lbmini::TargetEnum::CPU: {
+          using LbmLattice = lbmini::kokkos::cpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::kokkos::cpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
+          break;
+        }
+        case lbmini::TargetEnum::GPU: {
+          // Without a device backend the Kokkos GPU execution space *is* the
+          // host one: the run would complete and be reported as a GPU run while
+          // never touching a device. Refusing it keeps the measurement honest.
+          if (!lbmini::kokkos::gpu::kHasDeviceBackend) {
+            throw std::runtime_error(
+              "Kokkos GPU target is unavailable: Kokkos was built without a device "
+              "backend (CUDA/HIP/SYCL). Rebuild with -DENABLE_KOKKOS_CUDA=ON or "
+              "select the CPU target."
+            );
+          }
+          using LbmLattice = lbmini::kokkos::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::kokkos::gpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
+          break;
+        }
+        default:
+          throw std::runtime_error("Invalid target for Kokkos backend.");
+      }
+      #else
+      throw std::runtime_error("Kokkos backend not enabled.");
+      #endif
+      break;
+    }
+    case lbmini::BackendEnum::RAJA: {
+      #ifdef USE_RAJA
+      switch (performance.target) {
+        case lbmini::TargetEnum::CPU: {
+          using LbmLattice = lbmini::raja::cpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::raja::cpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
+          break;
+        }
+        case lbmini::TargetEnum::GPU: {
+          // Same reasoning as for Kokkos above: without a device backend the
+          // RAJA GPU policy degrades to a host policy, so a "GPU" run would
+          // silently execute on the CPU.
+          if (!lbmini::raja::gpu::kHasDeviceBackend) {
+            throw std::runtime_error(
+              "RAJA GPU target is unavailable: RAJA was built without a device "
+              "backend (CUDA/HIP). Rebuild with -DENABLE_RAJA_CUDA=ON or select "
+              "the CPU target."
+            );
+          }
+          using LbmLattice = lbmini::raja::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::raja::gpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
+          break;
+        }
+        default:
+          throw std::runtime_error("Invalid target for RAJA backend.");
+      }
+      #else
+      throw std::runtime_error("RAJA backend not enabled.");
       #endif
       break;
     }
@@ -256,6 +377,8 @@ Executor<Scalar>::Executor(
 
 template<typename Scalar>
 Executor<Scalar>::~Executor() {
+  asyncWriter_.reset();
+  lbmTube_.reset();
   #ifdef USE_MPI
   if (mpiInitializedByUs_) {
     int finalized;
@@ -274,39 +397,51 @@ void Executor<Scalar>::OutputData(
   double elapsed_seconds,
   int rank
 ) {
-  const auto rho = lbmTube_->Rho();
-  const auto p = lbmTube_->P();
-  const auto u = lbmTube_->U();
+  // The getters of the distributed backend gather the global fields with
+  // collective calls, so every rank has to take part; only rank 0 writes.
+  auto rho = lbmTube_->Rho();
+  auto p = lbmTube_->P();
+  auto u = lbmTube_->U();
 
   if (rank != 0)
     return;
 
-  std::ofstream file(std::filesystem::path(outDir) / ("data_" + std::to_string(step) + ".csv"));
-  file << "runtime,x,y,ux,uy,density,pressure\n";
-
-  const Scalar dx = (mesh_.nx() > 1) ? mesh_.lx() / static_cast<Scalar>(mesh_.nx() - 1) : mesh_.lx();
-  const Scalar dy = (mesh_.ny() > 1) ? mesh_.ly() / static_cast<Scalar>(mesh_.ny() - 1) : mesh_.ly();
-
-  for (Index i = 0; i < mesh_.nx(); ++i) {
-    const Scalar x_coord = 0.5 * dx + dx * i;
-    for (Index j = 0; j < mesh_.ny(); ++j) {
-      const Scalar y_coord = 0.5 * dy + dy * j;
-
-      file << elapsed_seconds << ","
-        << x_coord << ","
-        << y_coord << ","
-        << u(i, j, 0) << ","
-        << u(i, j, 1) << ","
-        << rho(i, j) << ","
-        << p(i, j) << "\n";
-    }
+  if (!asyncWriter_) {
+    asyncWriter_ = std::make_unique<AsyncWriter<Scalar>>(fluid_, mesh_);
   }
 
-  file.close();
+  asyncWriter_->Enqueue(OutputSnapshot<Scalar>{
+    step,
+    outDir,
+    elapsed_seconds,
+    std::move(rho),
+    std::move(p),
+    std::move(u)
+  });
+}
+
+template<typename Scalar>
+void Executor<Scalar>::SynchronizeRanks() const {
+  #ifdef USE_MPI
+  if (performance_.backend != lbmini::BackendEnum::MPI)
+    return;
+  int initialized = 0;
+  int finalized = 0;
+  MPI_Initialized(&initialized);
+  MPI_Finalized(&finalized);
+  if (initialized && !finalized)
+    MPI_Barrier(MPI_COMM_WORLD);
+  #endif
 }
 
 template<typename Scalar>
 void Executor<Scalar>::Run(const std::string& outpath) {
+  // The constructor leaves `lbmTube_` empty when the requested target is not
+  // available (no OpenMP device, unknown backend). Dereferencing it here would
+  // be a null deref in the middle of a benchmark campaign.
+  if (!lbmTube_)
+    throw std::runtime_error("No solver was created for the requested backend/target combination.");
+
   lbmTube_->Init();
 
   int rank = lbmTube_->Rank();
@@ -321,27 +456,60 @@ void Executor<Scalar>::Run(const std::string& outpath) {
   const Scalar dt = dx * (uLuRef / uPhysRef);
   const Index kSteps = static_cast<Index>(control_.tmax / dt);
 
-  const auto startRunTime = std::chrono::high_resolution_clock::now();
+  // A `tmax` shorter than a single lattice time step used to be accepted in
+  // silence: the loop below then ran zero iterations, the step-0 snapshot was
+  // written, and the process printed "Simulation completed" without a single
+  // kernel launch, halo exchange or streaming step. That is a benchmark of
+  // nothing - and, worse, a memory check of nothing: whatever tool wraps such
+  // a run reports success on a solver that never executed. `dt` is derived
+  // (`dx * uLuRef / uPhysRef`), so this is not a value a user can validate by
+  // reading the configuration file, which is why it is checked here.
+  if (kSteps < 1)
+    throw std::runtime_error(
+      "Control.tmax (" + std::to_string(control_.tmax) +
+      ") is shorter than one lattice time step (dt = " + std::to_string(dt) +
+      "), so this run would advance zero steps and measure nothing. Increase "
+      "tmax, or refine the mesh - dt scales with lx / nx."
+    );
+
+  // Only the time marching is timed. Gathering the fields, copying them back
+  // from the device and writing the snapshots happen between the timed
+  // intervals, and the asynchronous writer is drained before each interval so
+  // that it competes neither for cores nor for memory bandwidth. Each snapshot
+  // carries the time-marching time accumulated up to its step.
+  using Clock = std::chrono::steady_clock;
+  const auto startRunTime = Clock::now();
+  double computeSeconds = 0.0;
 
   const Index stepsPerOutput = std::max(kSteps / control_.printStep, Index(1));
   for (Index i = 0; i < kSteps;) {
     const Index stepsPerChunk = std::min(stepsPerOutput, kSteps - i);
-    lbmTube_->Run(stepsPerChunk, true);
-    i += stepsPerChunk;
 
-    const auto current_time = std::chrono::high_resolution_clock::now();
-    const std::chrono::duration<double> elapsed_seconds = current_time - startRunTime;
+    if (asyncWriter_) {
+      asyncWriter_->WaitAll();
+    }
+    SynchronizeRanks();
+    const auto chunkStart = Clock::now();
+    lbmTube_->Run(stepsPerChunk, true);
+    SynchronizeRanks();
+    const std::chrono::duration<double> chunkSeconds = Clock::now() - chunkStart;
+    computeSeconds += chunkSeconds.count();
+    i += stepsPerChunk;
 
     if (rank == 0) {
       std::cout << "Time step: " << i << std::endl;
     }
-    OutputData(i, outpath, elapsed_seconds.count(), rank);
+    OutputData(i, outpath, computeSeconds, rank);
   }
 
-  const auto end_time = std::chrono::high_resolution_clock::now();
-  const std::chrono::duration<double> elapsed_time = end_time - startRunTime;
+  if (asyncWriter_) {
+    asyncWriter_->WaitAll();
+  }
+
+  const std::chrono::duration<double> elapsed_time = Clock::now() - startRunTime;
   if (rank == 0) {
-    std::cout << "Simulation completed. Total run time: " << elapsed_time.count() << " s" << std::endl;
+    std::cout << "Simulation completed. Time-marching time: " << computeSeconds
+              << " s. Total run time: " << elapsed_time.count() << " s" << std::endl;
   }
 }
 

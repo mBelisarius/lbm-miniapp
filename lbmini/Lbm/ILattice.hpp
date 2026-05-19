@@ -16,9 +16,9 @@ public:
 
   virtual ~ILattice() = default;
 
-  static constexpr Index Dim() { return Dim_; }
+  EIGEN_DEVICE_FUNC static constexpr Index Dim() { return Dim_; }
 
-  static constexpr Index Speeds() { return Speeds_; }
+  EIGEN_DEVICE_FUNC static constexpr Index Speeds() { return Speeds_; }
 
   static constexpr Index Velocity(Index index, Index dir);
 

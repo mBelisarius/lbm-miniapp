@@ -11,6 +11,7 @@
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
+#include "Guards.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
 
@@ -94,7 +95,10 @@ constexpr int kD2Q9Cy[9] = { 0, 0, 0, 1, -1, 1, -1, -1, 1 };
  *
  * **Host-side pointer swap ping-pong.** Zero device work per step.
  *
- * **One host thread.** Host only orchestrates GPU launches.
+ * **One host thread.** The host only orchestrates GPU launches: there is no
+ * host-side `#pragma omp parallel` region here, so the host thread count is
+ * irrelevant to this backend and is left to `lbmini::Executor`, the single
+ * owner of that process-global setting.
  *
  * ### Possible future improvements
  *  - `Scalar = float` by default: FP32 `__expf`/`__logf` are 8× faster than
@@ -117,6 +121,20 @@ public:
     const ControlData<Scalar>& control,
     const PerformanceData& performance
   );
+
+  // The solver owns raw `omp_target_alloc` device pointers and the
+  // `fCur_`/`fAlt_` aliases into them; a copy would alias those handles and
+  // the second destructor would `omp_target_free` them twice. Solvers are
+  // heavy, unique objects held behind `ILbmTubeNd*`, so the operations are
+  // deleted rather than implemented, uniformly across every backend.
+  // See docs/memory-safety.md §5.2.
+  LbmTube(const LbmTube&) = delete;
+
+  LbmTube& operator=(const LbmTube&) = delete;
+
+  LbmTube(LbmTube&&) = delete;
+
+  LbmTube& operator=(LbmTube&&) = delete;
 
   ~LbmTube() override;
 
@@ -228,8 +246,17 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   const PerformanceData& performance
 )
   : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
-  // Single host thread orchestrates GPU launches; all compute is on device.
-  omp_set_num_threads(1);
+  // Everything below derives from these two extents, so they are checked
+  // before the first device allocation: a zero extent yields an empty
+  // allocation the kernels still index, `ny_ == 0` makes the streaming
+  // `y % ny` a division by zero, and a cell count beyond int32 wraps the
+  // 32-bit flat indices used inside the kernels into negative (wild) offsets.
+  ValidateMeshExtents(mesh.size[0], mesh.size[1], kQ_, "openmp::gpu::LbmTube");
+
+  // The host thread count is process-global state configured once by
+  // `lbmini::Executor`. This backend needs no host-side parallel region — all
+  // compute happens in `target` regions — so it must not reconfigure the
+  // runtime for solvers that are already live in the process.
 
   nx_ = mesh.size[0];
   ny_ = mesh.size[1];
@@ -263,6 +290,24 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   if (!rhoDev_ || !pDev_ || !temDev_ || !uDev_ || !fDev_ || !gDev_ || !fauxDev_ || !gauxDev_ || !lastGxDev_) {
     std::cerr << "[openmp::gpu::LbmTube] omp_target_alloc failed on device " << dev_
       << " (num_devices=" << omp_get_num_devices() << ", N=" << N_ << "). Check available VRAM." << std::endl;
+    if (rhoDev_)
+      omp_target_free(rhoDev_, dev_);
+    if (pDev_)
+      omp_target_free(pDev_, dev_);
+    if (temDev_)
+      omp_target_free(temDev_, dev_);
+    if (uDev_)
+      omp_target_free(uDev_, dev_);
+    if (fDev_)
+      omp_target_free(fDev_, dev_);
+    if (gDev_)
+      omp_target_free(gDev_, dev_);
+    if (fauxDev_)
+      omp_target_free(fauxDev_, dev_);
+    if (gauxDev_)
+      omp_target_free(gauxDev_, dev_);
+    if (lastGxDev_)
+      omp_target_free(lastGxDev_, dev_);
     throw std::runtime_error("omp_target_alloc returned nullptr");
   }
 
@@ -365,7 +410,7 @@ template<typename Scalar, typename LatticeType>
 void LbmTube<Scalar, LatticeType>::Init() {
   for (Index i = 0; i < nx_; ++i) {
     for (Index j = 0; j < ny_; ++j) {
-      const Index cell = cellIndex(static_cast<int>(i), static_cast<int>(j));
+      const Index cell = cellIndex(i, j);
       uHost_[0 * N_ + cell] = Scalar{ 0 };
       uHost_[1 * N_ + cell] = Scalar{ 0 };
       if (i < nx_ / 2) {

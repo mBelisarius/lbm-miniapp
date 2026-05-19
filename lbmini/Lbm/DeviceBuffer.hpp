@@ -3,8 +3,13 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 #include <new>
 #include <vector>
+
+#ifdef _WIN32
+#include <malloc.h>
+#endif
 
 /**
  * @def LBMINI_UNROLL(N)
@@ -23,7 +28,9 @@
 #define LBMINI_UNROLL_STR(X)  LBMINI_UNROLL_STR_(X)
 #if defined(__NVCOMPILER)
 #define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(unroll(N)))
-#elif defined(__clang__) || defined(__CUDACC__)
+#elif defined(__CUDACC__) || defined(__NVCC__)
+#define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(unroll N))
+#elif defined(__clang__)
 #define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(unroll N))
 #elif defined(__GNUC__)
 #define LBMINI_UNROLL(N) _Pragma(LBMINI_UNROLL_STR(GCC unroll N))
@@ -62,16 +69,33 @@ struct AlignedAllocator {
   [[nodiscard]] static T* allocate(std::size_t n) {
     if (n == 0)
       return nullptr;
+
+    static_assert(Align >= alignof(T) && (Align & (Align - 1)) == 0,
+                  "allocator alignment must be a power of two suitable for T");
+    constexpr std::size_t kMax = std::numeric_limits<std::size_t>::max();
+    if (n > kMax / sizeof(T))
+      throw std::bad_array_new_length();
+
     const std::size_t bytes = n * sizeof(T);
+    if (bytes > kMax - (Align - 1))
+      throw std::bad_array_new_length();
     const std::size_t rounded = ((bytes + Align - 1) / Align) * Align;
+    #ifdef _WIN32
+    void* p = _aligned_malloc(rounded, Align);
+    #else
     void* p = std::aligned_alloc(Align, rounded);
+    #endif
     if (!p)
       throw std::bad_alloc();
     return static_cast<T*>(p);
   }
 
   static void deallocate(T* p, std::size_t) noexcept {
+    #ifdef _WIN32
+    _aligned_free(p);
+    #else
     std::free(p);
+    #endif
   }
 };
 

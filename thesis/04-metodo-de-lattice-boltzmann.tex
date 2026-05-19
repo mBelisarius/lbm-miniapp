@@ -1,0 +1,967 @@
+%---------------------------------------------------------------------------------------
+
+\chapter{Método de Lattice Boltzmann}\label{ch:metodo-de-lattice-boltzmann}
+
+%---------------------------------------------------------------------------------------
+
+% Lista de abreviaturas e de siglas
+\criarsigla{DBE}{\textit{Discrete Boltzmann Equation}}
+\criarsigla{ELBM}{\textit{Entropic Lattice Boltzmann Method}}
+\criarsigla{EOS}{\textit{Equation of State}}
+\criarsigla{HRR}{\textit{Hybrid Recursive Regularization}}
+\criarsigla{LU}{\textit{Lattice Units}}
+\criarsigla{MRT}{\textit{Multiple Relaxation Time}}
+\criarsigla{RR}{\textit{Recursive Regularization}}
+\criarsigla{TRT}{\textit{Two Relaxation Time}}
+\criarsigla{WENO}{\textit{Weighted Essentially Non-Oscillatory}}
+
+%---------------------------------------------------------------------------------------
+
+% Lista de simbolos
+
+%---------------------------------------------------------------------------------------
+
+O método de Lattice Boltzmann parte de uma premissa distinta da adotada pelos métodos macroscópicos usuais.
+Em lugar de discretizar diretamente as equações de conservação, discretiza-se a equação de Boltzmann, e o comportamento hidrodinâmico resulta da dinâmica das funções de distribuição sobre uma rede regular de velocidades.
+A construção apoia-se em dois fundamentos teóricos.
+A quadratura de Gauss-Hermite reduz o espaço contínuo de velocidades a um conjunto finito de direções, e a análise multiescala de Chapman-Enskog demonstra a recuperação das equações de Navier-Stokes no limite hidrodinâmico.
+
+O regime compressível térmico, objeto deste trabalho, exige extensões dessa formulação básica.
+Na presença de ondas de choque e de variações acentuadas de temperatura, o operador de colisão de tempo de relaxação único e a distribuição de equilíbrio truncada em segunda ordem tornam-se insuficientes.
+Por conseguinte, recorre-se a operadores de múltiplos tempos de relaxação, a técnicas de regularização e a uma segunda função de distribuição dedicada à energia.
+Este capítulo reconstitui a fundamentação teórica na extensão necessária para justificar cada decisão incorporada ao miniaplicativo, cuja tradução em código é tratada no Capítulo~\ref{ch:implementacao-computacional}.
+
+%---------------------------------------------------------------------------------------
+
+\section{Formulação Clássica do Método de Lattice Boltzmann}\label{sec:lbm-deducao}
+
+A formulação atualmente consolidada do LBM pode ser obtida por dois caminhos distintos, que conduzem à mesma equação de evolução.
+O primeiro, historicamente original, tem origem nos autômatos de gás de rede (LGA), nos quais o estado de cada nó é descrito por variáveis booleanas de ocupação $n_i \in \{0, 1\}$, atualizadas por
+\begin{equation}\label{eq:lga}
+    n_i(\mathbf{x} + \mathbf{c}_i, t + 1) = n_i(\mathbf{x}, t) + \Omega_i(n(\mathbf{x}, t))
+\end{equation}
+onde $\Omega_i$ representa as regras de colisão entre partículas \parencite{Chen1998}.
+A substituição das variáveis booleanas por suas médias de conjunto (\textit{ensemble average}), $f_i = \langle n_i \rangle$, elimina o ruído estatístico que inviabilizava o LGA em escoamentos de interesse prático e preserva a estrutura local do algoritmo, dando origem ao LBM.
+O segundo caminho, posterior e mais geral, parte da teoria cinética e chega à rede por discretização sucessiva do espaço de velocidades, do espaço e do tempo.
+Por conferir ao método sua fundamentação cinética, é essa discretização direta da equação de Boltzmann que se desenvolve a seguir.
+
+Na ausência de forças externas, a equação cinética pode ser simplificada pelo modelo de relaxação de \textcite{Bhatnagar1954}, conhecido como operador de colisão BGK, que substitui o termo integral de colisão por uma relaxação linear em direção ao equilíbrio termodinâmico local:
+\begin{equation}
+    \frac{\partial f}{\partial t} + \boldsymbol{\xi} \cdot \nabla f = -\frac{1}{\tau}(f - f^{eq})
+\end{equation}
+em que $\tau$ é o tempo de relaxação, que determina a taxa de retorno ao equilíbrio, e $f^{eq}$ é a distribuição de equilíbrio local de Maxwell-Boltzmann, dada por:
+\begin{equation}
+    f^{eq}(\mathbf{x}, \boldsymbol{\xi}, t) = \frac{\rho}{(2\pi RT)^{D/2}} \exp\left( -\frac{(\boldsymbol{\xi} - \mathbf{u})^2}{2RT} \right)
+\end{equation}
+sendo $R$ a constante específica do gás, $T$ a temperatura e $D$ a dimensão do espaço.
+
+Antes da discretização, convém adimensionalizar a equação cinética pelas escalas macroscópicas do escoamento, a saber, o comprimento característico $L$, a velocidade de referência $U$ e uma massa específica de referência $\rho_0$, adotando-se ainda $\sqrt{RT_0}$ como escala das velocidades microscópicas.
+Na forma adimensional, o tempo de relaxação aparece apenas na combinação $\tau \sqrt{RT_0}/L$, proporcional ao número de Knudsen $Kn$, definido como a razão entre o percurso livre médio das partículas e o comprimento característico do escoamento.
+O regime hidrodinâmico corresponde a $Kn \ll 1$, condição na qual as colisões são suficientemente frequentes para manter a distribuição próxima do equilíbrio local.
+Essa proximidade autoriza tanto o truncamento descrito a seguir quanto a análise multiescala da Seção~\ref{sec:lbm-chapman-enskog}.
+
+Para transpor a formulação contínua ao âmbito numérico, o espaço de velocidades $\boldsymbol{\xi}$ deve ser restrito a um conjunto finito de velocidades discretas $\mathbf{c}_i$.
+A redução é possível porque o significado hidrodinâmico não reside na função $f$ em si, e sim em um pequeno número de seus momentos, associados à massa específica, à quantidade de movimento e à energia.
+Conforme demonstrado por \textcite{Shan2006}, essa observação conduz à projeção da função de distribuição em uma base de polinômios tensoriais ortogonais de Hermite:
+\begin{equation}\label{eq:expansao-hermite}
+    f(\mathbf{x}, \boldsymbol{\xi}, t) = \varpi(\boldsymbol{\xi}) \sum_{n=0}^{\infty} \frac{1}{n!} \mathbf{a}^{(n)}(\mathbf{x}, t) : \boldsymbol{\mathcal{H}}^{(n)}(\boldsymbol{\xi})
+\end{equation}
+onde $\varpi(\boldsymbol{\xi}) = (2\pi)^{-D/2} \exp(-|\boldsymbol{\xi}|^2/2)$ é a função peso gaussiana, $\boldsymbol{\mathcal{H}}^{(n)}$ é o polinômio tensorial de Hermite de ordem $n$, o símbolo $:$ denota a contração completa entre tensores de mesma ordem e $\mathbf{a}^{(n)} = \int f \boldsymbol{\mathcal{H}}^{(n)} d\boldsymbol{\xi}$ são os coeficientes da expansão.
+Os polinômios de Hermite são ortogonais em relação ao peso gaussiano, e a distribuição de equilíbrio é uma gaussiana deslocada.
+Por isso, os coeficientes $\mathbf{a}^{(n)}$ correspondem a combinações lineares dos momentos da distribuição até a ordem $n$.
+Aplicada ao equilíbrio, a expansão fornece $a^{(0)} = \rho$, $\mathbf{a}^{(1)} = \rho \mathbf{u}$ e $\mathbf{a}^{(2)} = \rho \left[ \mathbf{u}\mathbf{u} + (T - 1)\mathbf{I} \right]$, o que indica que a retenção dos três primeiros termos é suficiente para representar a massa específica, a quantidade de movimento e o tensor de pressão.
+
+O truncamento da \eqref{eq:expansao-hermite} em uma ordem finita $\mathcal{N}$ torna a discretização possível, mas apenas os momentos até essa ordem são reproduzidos com exatidão.
+Com $\mathcal{N} = 2$, recuperam-se as equações de Navier-Stokes isotérmicas.
+A descrição consistente do transporte de energia e dos efeitos térmicos exige $\mathcal{N} \ge 3$, requisito que reaparece adiante como uma das razões da inadequação do modelo clássico ao regime compressível.
+
+Truncada a expansão, todo momento de interesse assume a forma $\int \varpi(\boldsymbol{\xi}) P(\boldsymbol{\xi}) d\boldsymbol{\xi}$, com $P$ polinomial.
+Essa integral pode ser calculada exatamente por uma quadratura de Gauss-Hermite de ordem suficiente:
+\begin{equation}\label{eq:quadratura-gauss-hermite}
+    \int \varpi(\boldsymbol{\xi}) P(\boldsymbol{\xi}) d\boldsymbol{\xi} = \sum_{i=0}^{Q-1} w_i P(\mathbf{c}_i)
+\end{equation}
+onde os $Q$ pontos da quadratura $\mathbf{c}_i$ tornam-se as velocidades discretas da rede e os $w_i$, seus pesos.
+Em uma dimensão, a regra de três pontos emprega as raízes do polinômio de Hermite de terceira ordem, $\xi \in \{-\sqrt{3},\, 0,\, +\sqrt{3}\}$, com pesos $\{1/6,\, 2/3,\, 1/6\}$, e integra exatamente polinômios de grau até cinco.
+Seu produto tensorial em $D$ dimensões gera $3^D$ pontos, que correspondem aos conjuntos D2Q9 em duas dimensões e D3Q27 em três, com pesos dados pelo produto dos pesos unidimensionais.
+Reescalando a unidade de velocidade de modo que os pontos de quadratura coincidam com os nós vizinhos da malha, ou seja, $\mathbf{c}_i = c\, \mathbf{v}_i$ com $\mathbf{v}_i$ de componentes em $\{-1, 0, +1\}$ e $c = \Delta x / \Delta t$, obtém-se a velocidade do som na rede $c_s = c/\sqrt{3}$.
+Os pesos resultantes são $w_0 = (2/3)^2 = 4/9$, $w_i = (2/3)(1/6) = 1/9$ para as direções axiais e $w_i = (1/6)^2 = 1/36$ para as diagonais.
+A \autoref{fig:lbm-quadratura} ilustra essa construção.
+Os pesos usuais do LBM não resultam, portanto, de uma escolha empírica: são os pesos de uma quadratura de Gauss-Hermite, o que garante a reprodução exata dos momentos hidrodinâmicos do equilíbrio até a ordem admitida pela quadratura.
+
+\begin{figure}[H]
+    \centering
+    \caption{Obtenção do conjunto D2Q9 pelo produto tensorial da regra de Gauss-Hermite de três pontos, com os pesos resultantes em cada direção discreta.}
+    \label{fig:lbm-quadratura}
+    \includegraphics[width=\linewidth]{fig/lbm-quadrature-d2q9.png}
+    \fonte{O autor (2026), com base em \textcite{Shan2006}.}
+\end{figure}
+
+Dois aspectos dessa construção antecipam o desenvolvimento posterior.
+A quadratura de três pontos, exata até grau cinco, atende à exigência de exatidão até grau $2\mathcal{N}$ da expansão de segunda ordem, mas não à da expansão de terceira ordem.
+Em decorrência, o momento de terceira ordem do equilíbrio não é reproduzido integralmente sobre a rede, o que introduz um erro de ordem $\mathcal{O}(u^3)$ no tensor de tensões viscosas.
+Além disso, os pesos obtidos acima pressupõem temperatura constante e igual à de referência da gaussiana, $T = c_s^2 = 1/3$ em unidades da rede, hipótese embutida na normalização dessa gaussiana.
+Quando a temperatura varia de ponto a ponto, como ocorre em escoamentos compressíveis, a mesma construção conduz a pesos dependentes da temperatura, conforme desenvolvido na Seção~\ref{sec:lbm-dupla-distribuicao}.
+
+Correspondentemente, a função contínua $f$ é convertida em um conjunto de funções de distribuição direcionais $f_i(\mathbf{x}, t) = w_i f(\mathbf{x}, \mathbf{c}_i, t) / \varpi(\mathbf{c}_i)$, nas quais o peso de quadratura é absorvido, de modo que os momentos macroscópicos se reduzem a simples somatórios sobre as direções.
+Essas populações obedecem à equação de Boltzmann discreta (\textit{Discrete Boltzmann Equation}, DBE):
+\begin{equation}\label{eq:boltzmann-discreta}
+    \frac{\partial f_i}{\partial t} + \mathbf{c}_i \cdot \nabla f_i = -\frac{1}{\tau}(f_i - f_i^{eq})
+\end{equation}
+
+O passo seguinte consiste em integrar a \autoref{eq:boltzmann-discreta} ao longo de suas linhas características no espaço e no tempo.
+Para um intervalo de tempo $\Delta t$, e considerando que a posição avança de $\mathbf{c}_i \Delta t$, a integração temporal exata assume a forma:
+\begin{equation}
+    f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) - f_i(\mathbf{x}, t) = -\int_{0}^{\Delta t} \frac{1}{\tau} \left[ f_i(\mathbf{x} + \mathbf{c}_i s, t + s) - f_i^{eq}(\mathbf{x} + \mathbf{c}_i s, t + s) \right] ds
+\end{equation}
+A avaliação exata do lado direito dessa integral exigiria conhecer o integrando ao longo de todo o intervalo, o que conduziria a esquemas implícitos e computacionalmente custosos.
+Admitindo que $\Delta t$ seja pequeno em relação às escalas de variação do escoamento, e lembrando que a escolha $c = \Delta x / \Delta t$ corresponde a número de Courant unitário, a integral pode ser aproximada pelo método de Euler explícito de primeira ordem, no qual o integrando é avaliado no instante inicial $t$.
+Essa aproximação conduz à equação de Lattice Boltzmann clássica:
+\begin{equation}
+    f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i(\mathbf{x}, t) - \frac{\Delta t}{\tau} [ f_i(\mathbf{x}, t) - f_i^{eq}(\mathbf{x}, t) ]
+\end{equation}
+Alternativamente, com vistas a elevar a ordem de precisão temporal e a preservar a estabilidade, pode-se aplicar a regra do trapézio e, em seguida, uma mudança de variáveis que define uma função de distribuição modificada.
+Essa formulação também resulta em uma forma explícita do método, com a viscosidade renormalizada por $\Delta t/2$ \parencite{He1997}.
+Em todos os casos, o procedimento preserva a subdivisão do algoritmo em duas etapas distintas: a colisão, puramente local, e a propagação (\textit{streaming}), estritamente conservativa.
+
+A dedução precedente estabelece a equação de evolução das populações, mas não fixa o conjunto de velocidades discretas nem a forma explícita da distribuição de equilíbrio adotada no modelo isotérmico.
+O modelo bidimensional de nove velocidades, denominado D2Q9, é a formulação mais difundida para escoamentos incompressíveis isotérmicos, como nos trabalhos de \textcite{Qian1992} e \textcite{Chen1998}.
+Nessa configuração, as componentes do vetor velocidade discreta $\mathbf{c}_i$ são definidas sobre uma rede quadrada:
+\begin{equation}
+    \mathbf{c}_i = \begin{cases} 
+      (0;\ 0), & i=0 \\ 
+      (\pm 1;\ 0)c, \; (0;\ \pm 1)c, & i=1,2,3,4 \\ 
+      (\pm 1;\ \pm 1)c, & i=5,6,7,8 
+    \end{cases}
+\end{equation}
+onde a constante $c = \Delta x / \Delta t$ representa a velocidade característica da rede, usualmente adotada como unitária no sistema de unidades da rede.
+A correspondência estatística com a função de distribuição contínua é assegurada por pesos de quadratura isotrópicos $w_i$, escolhidos de modo a anular termos espúrios no tensor de tensões macroscópico.
+Esses pesos, que coincidem com os obtidos pela quadratura de Gauss-Hermite, valem $w_0 = 4/9$ para a direção de repouso, $w_{1,2,3,4} = 1/9$ para as direções axiais e $w_{5,6,7,8} = 1/36$ para as direções diagonais.
+
+Para simulações tridimensionais, o modelo D3Q19 é frequentemente preferido por equilibrar precisão e custo computacional.
+As dezenove velocidades discretas compreendem o vetor nulo, seis direções axiais $(\pm 1;\ 0;\ 0)c$, $(0;\ \pm 1;\ 0)c$ e $(0;\ 0;\ \pm 1)c$ e doze direções diagonais nas faces $(\pm 1;\ \pm 1;\ 0)c$, $(\pm 1;\ 0;\ \pm 1)c$ e $(0;\ \pm 1;\ \pm 1)c$.
+Os pesos correspondentes são $w_0 = 1/3$ para o repouso, $w_{1..6} = 1/18$ para as direções axiais e $w_{7..18} = 1/36$ para as diagonais.
+A \autoref{fig:lbm-redes} apresenta a disposição espacial das velocidades discretas dos modelos D2Q9 e D3Q19.
+
+\begin{figure}[H]
+    \centering
+    \caption{Conjuntos de velocidades discretas empregados no LBM: (a) modelo bidimensional D2Q9, com nove direções, e (b) modelo tridimensional D3Q19, com dezenove direções.}
+    \label{fig:lbm-redes}
+    \includegraphics[width=\linewidth]{fig/lbm-velocity-sets.png}
+    \fonte{Adaptado de \textcite{Kruger2017}.}
+\end{figure}
+
+A escolha do conjunto de velocidades condiciona diretamente o custo de memória e a capacidade de representar momentos de ordem superior, conforme comparado na \autoref{tab:lbm-comparacao-redes}.
+Redes de maior conectividade, como a D3Q27, oferecem maior estabilidade e precisão em ordens superiores de Hermite, com o custo de um aumento considerável no armazenamento e no processamento por nó da malha.
+
+\begin{table}[H]
+    \centering
+    \caption{Comparação entre conjuntos de velocidades discretas usuais no LBM}
+    \label{tab:lbm-comparacao-redes}
+    \begin{tabular}{ccccc}
+        \toprule
+        Modelo & Dimensões & Velocidades & Isotropia (ordem) & Memória por nó (escalares) \\
+        \midrule
+        D1Q3   & 1         & 3           & 5                 & 3                          \\
+        D2Q9   & 2         & 9           & 5                 & 9                          \\
+        D3Q19  & 3         & 19          & 5                 & 19                         \\
+        D3Q27  & 3         & 27          & 5                 & 27                         \\
+        \bottomrule
+    \end{tabular}
+    \fonte{O autor (2026), com base em \textcite{Qian1992} e \textcite{Kruger2017}.}
+    \nota{A isotropia refere-se à maior ordem até a qual os momentos dos pesos $w_i$ são isotrópicos.}
+\end{table}
+
+Para recuperar o comportamento incompressível, a distribuição contínua de Maxwell-Boltzmann é truncada por expansão de Taylor, retendo-se os termos até segunda ordem no número de Mach local, $Ma = |\mathbf{u}|/c_s$.
+A distribuição discreta de equilíbrio resultante é:
+\begin{equation}\label{eq:feq-d2q9}
+    f_i^{eq} = w_i \rho \left[ 1 + \frac{\mathbf{c}_i \cdot \mathbf{u}}{c_s^2} + \frac{(\mathbf{c}_i \cdot \mathbf{u})^2}{2c_s^4} - \frac{\mathbf{u} \cdot \mathbf{u}}{2c_s^2} \right]
+\end{equation}
+onde a velocidade do som na rede, $c_s$, é constante para redes quadradas e vale $c_s = c/\sqrt{3}$ \parencite{Rathnayake2024}.
+Os termos entre colchetes correspondem às contribuições de ordem zero, um e dois da expansão de Hermite da \eqref{eq:expansao-hermite}, com a de segunda ordem formada pelos dois últimos termos.
+A \eqref{eq:feq-d2q9} é, portanto, o truncamento em $\mathcal{N} = 2$ discutido acima.
+
+As grandezas macroscópicas, a massa específica $\rho$ e o vetor velocidade $\mathbf{u}$, são recuperadas por somatórios dos momentos das funções de distribuição em cada nó da malha:
+\begin{equation}
+    \rho = \sum_{i=0}^8 f_i, \qquad \rho \mathbf{u} = \sum_{i=0}^8 f_i \mathbf{c}_i
+\end{equation}
+No LBM padrão, a pressão dispensa a solução de uma equação de Poisson, necessária nas formulações de Navier-Stokes baseadas em métodos de projeção, e é avaliada localmente por uma equação de estado (\textit{Equation of State}, EOS) linear:
+\begin{equation}
+    p = c_s^2 \rho
+\end{equation}
+Nessa formulação, os resolvedores baseados no LBM representam, em condições isotérmicas, um meio fracamente compressível.
+O erro associado a essa compressibilidade artificial é de ordem $\mathcal{O}(Ma^2)$.
+Por conseguinte, os resultados hidrodinâmicos do modelo aproximam-se do limite incompressível apenas quando o escoamento apresenta número de Mach reduzido ($Ma < 0{,}3$), o que estabelece o campo de aplicação clássico do método em sua forma básica \parencite{Chen1998}.
+
+Com o conjunto de velocidades discretas, a distribuição de equilíbrio e a equação de evolução definidos, a estrutura computacional do método está determinada, e dela decorre a aptidão do LBM à paralelização massiva.
+O ciclo básico compreende quatro etapas: inicialização, colisão, propagação e aplicação das condições de contorno.
+O ALGORITMO~\ref{alg:lbm-ciclo} descreve o fluxo lógico de um passo de tempo, e a \autoref{fig:lbm-colisao-propagacao} ilustra seu comportamento sobre a rede.
+
+\begin{algorithm}[H]
+\caption{Ciclo de execução de um passo de tempo no LBM}\label{alg:lbm-ciclo}
+\Entrada{Distribuições $f_i(\mathbf{x}, t)$}
+\Saida{Distribuições atualizadas $f_i(\mathbf{x}, t + \Delta t)$}
+\Para{cada nó $\mathbf{x}$ da malha}{
+    Calcular momentos macroscópicos: $\rho = \sum f_i$ e $\mathbf{u} = \frac{1}{\rho} \sum f_i \mathbf{c}_i$\;
+    Calcular a distribuição de equilíbrio $f_i^{eq}(\rho, \mathbf{u})$\;
+    \tcp{Colisão}
+    $f_i^{coll}(\mathbf{x}, t) = f_i(\mathbf{x}, t) - \frac{\Delta t}{\tau} (f_i(\mathbf{x}, t) - f_i^{eq}(\mathbf{x}, t))$\;
+}
+\Para{cada nó $\mathbf{x}$ da malha}{
+    \tcp{Propagação}
+    $f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i^{coll}(\mathbf{x}, t)$\;
+}
+Aplicar condições de contorno\;
+\Retorne{ $f_i(\mathbf{x}, t + \Delta t)$ }
+\end{algorithm}
+\fonte{Adaptado de \textcite{Chen1998}.}
+
+\begin{figure}[H]
+    \centering
+    \caption{Etapas de colisão local e de propagação para os nós vizinhos em uma rede bidimensional D2Q9, com as populações do nó central em setas espessas: durante a colisão, no próprio nó, e após a propagação, nos oito nós vizinhos.}
+    \label{fig:lbm-colisao-propagacao}
+    \includegraphics[width=0.85\linewidth]{fig/lbm-collision-streaming.png}
+    \fonte{Adaptado de \textcite{Yoo2022}.}
+\end{figure}
+
+A separação em dois percursos da malha decorre de uma dependência de dados, e não de uma imposição do método: a propagação de um nó requer as populações pós-colisão de seus vizinhos.
+A colisão é inteiramente local e a propagação alcança apenas os vizinhos imediatos, de modo que nenhuma etapa exige reduções globais nem a solução de sistemas lineares acoplados sobre o domínio.
+Essa característica distingue o método dos resolvedores baseados em projeção de pressão e fundamenta a comparação entre tecnologias de paralelização conduzida nos capítulos seguintes.
+
+%---------------------------------------------------------------------------------------
+
+\section{Análise Multiescala de Chapman-Enskog}\label{sec:lbm-chapman-enskog}
+
+A transição formal da escala cinética para a escala hidrodinâmica é estabelecida pela análise de Chapman-Enskog, desenvolvida originalmente por \textcite{Chapman1916} e por \textcite{Enskog1917} para o cálculo dos coeficientes de transporte de gases diluídos e sistematizada em \textcite{Chapman1970}.
+A técnica permite derivar as equações de conservação de massa e de quantidade de movimento a partir da equação de Lattice Boltzmann, tratando as variáveis macroscópicas como variações lentas em relação aos processos de colisão microscópicos.
+Para isso, expandem-se a função de distribuição e as derivadas espaço-temporais em potências de um parâmetro de escala $\epsilon$, proporcional ao número de Knudsen \parencite{Chen1998, Rathnayake2024}.
+
+Inicia-se pela expansão perturbativa da função de distribuição em torno do estado de equilíbrio local $f_i^{(0)} = f_i^{eq}$:
+\begin{equation}
+    f_i = f_i^{(0)} + \epsilon f_i^{(1)} + \epsilon^2 f_i^{(2)} + \mathcal{O}(\epsilon^3)
+\end{equation}
+Impõem-se também as condições de solubilidade, segundo as quais as correções de não equilíbrio não contribuem para os momentos conservados pelo operador de colisão, a massa específica e a quantidade de movimento, de modo que as variáveis macroscópicas ficam determinadas apenas pelo equilíbrio \parencite{Kruger2017}:
+\begin{equation}
+    \sum_i f_i^{(k)} = 0, \quad \sum_i f_i^{(k)} \mathbf{c}_i = 0, \quad k \ge 1
+\end{equation}
+
+A análise multiescala introduz escalas distintas de tempo e de espaço, associadas à advecção e à dissipação viscosa, e as derivadas parciais são expandidas como:
+\begin{equation}
+    \frac{\partial}{\partial t} = \epsilon \frac{\partial}{\partial t_1} + \epsilon^2 \frac{\partial}{\partial t_2}, \quad \nabla = \epsilon \nabla_1
+\end{equation}
+Expandindo a equação de Lattice Boltzmann em série de Taylor até segunda ordem e substituindo as expansões de $f_i$ e das derivadas, agrupam-se os termos em potências sucessivas de $\epsilon$.
+
+Na ordem $\epsilon^0$, a equação é identicamente satisfeita pelo estado de equilíbrio.
+Na ordem $\epsilon^1$, obtém-se:
+\begin{equation}
+    \left( \frac{\partial}{\partial t_1} + \mathbf{c}_i \cdot \nabla_1 \right) f_i^{(0)} = -\frac{1}{\tau} f_i^{(1)}
+\end{equation}
+Os momentos de ordem zero e um dessa equação, combinados com as propriedades de conservação, fornecem as equações de Euler para fluidos invíscidos:
+\begin{equation}
+    \frac{\partial \rho}{\partial t_1} + \nabla_1 \cdot (\rho \mathbf{u}) = 0
+\end{equation}
+\begin{equation}
+    \frac{\partial (\rho \mathbf{u})}{\partial t_1} + \nabla_1 \cdot \boldsymbol{\Pi}^{(0)} = 0
+\end{equation}
+onde o tensor de fluxo de quantidade de movimento no equilíbrio é $\boldsymbol{\Pi}^{(0)} = \sum_i \mathbf{c}_i \mathbf{c}_i f_i^{(0)} = \rho \mathbf{u}\mathbf{u} + p\mathbf{I}$.
+Da equação de ordem $\epsilon^1$ obtém-se ainda a correção de primeira ordem $f_i^{(1)}$, expressa em função do gradiente da distribuição de equilíbrio:
+\begin{equation}\label{eq:fi1-solucao}
+    f_i^{(1)} = -\tau \left( \frac{\partial f_i^{(0)}}{\partial t_1} + \mathbf{c}_i \cdot \nabla_1 f_i^{(0)} \right)
+\end{equation}
+
+Na ordem $\epsilon^2$, a equação resultante incorpora os efeitos de transporte viscoso:
+\begin{equation}
+    \frac{\partial f_i^{(0)}}{\partial t_2} + \left( \frac{\partial}{\partial t_1} + \mathbf{c}_i \cdot \nabla_1 \right) f_i^{(1)} + \frac{\Delta t}{2} \left( \frac{\partial}{\partial t_1} + \mathbf{c}_i \cdot \nabla_1 \right)^2 f_i^{(0)} = -\frac{1}{\tau} f_i^{(2)}
+\end{equation}
+O momento de segunda ordem da \eqref{eq:fi1-solucao} fornece a contribuição de não equilíbrio ao tensor de fluxo de quantidade de movimento:
+\begin{equation}\label{eq:pi1}
+    \boldsymbol{\Pi}^{(1)} = \sum_i \mathbf{c}_i \mathbf{c}_i f_i^{(1)} = -\tau \left( \frac{\partial \boldsymbol{\Pi}^{(0)}}{\partial t_1} + \nabla_1 \cdot \mathbf{Q}^{(0)} \right)
+\end{equation}
+onde $\mathbf{Q}^{(0)} = \sum_i \mathbf{c}_i \mathbf{c}_i \mathbf{c}_i f_i^{(0)}$ é o momento de terceira ordem do equilíbrio.
+Substituindo $\boldsymbol{\Pi}^{(0)} = \rho \mathbf{u}\mathbf{u} + \rho c_s^2 \mathbf{I}$, empregando as equações de Euler para eliminar as derivadas temporais e desprezando os termos de ordem $\mathcal{O}(u^3)$, obtém-se
+\begin{equation}\label{eq:pi1-final}
+    \boldsymbol{\Pi}^{(1)} = -\rho c_s^2 \tau \left[ \nabla_1 \mathbf{u} + (\nabla_1 \mathbf{u})^{\mathsf{T}} \right]
+\end{equation}
+expressão que reproduz a forma newtoniana do tensor de tensões viscosas.
+O tensor de fluxo efetivo é $\boldsymbol{\Pi} = \boldsymbol{\Pi}^{(0)} + \epsilon \left( 1 - \frac{\Delta t}{2\tau} \right) \boldsymbol{\Pi}^{(1)}$, e o fator entre parênteses provém do termo de segunda ordem da expansão de Taylor.
+Com ele, a equação de quantidade de movimento assume a forma
+\begin{equation}
+    \frac{\partial (\rho \mathbf{u})}{\partial t} + \nabla \cdot (\rho \mathbf{u}\mathbf{u}) = -\nabla p + \nabla \cdot \boldsymbol{\sigma}, \qquad \boldsymbol{\sigma} = \rho \nu \left[ \nabla \mathbf{u} + (\nabla \mathbf{u})^{\mathsf{T}} \right]
+\end{equation}
+da qual se observa que a viscosidade cinemática $\nu$ decorre da defasagem entre o equilíbrio e o não equilíbrio:
+\begin{equation}\label{eq:viscosidade-tau}
+    \nu = c_s^2 \left( \tau - \frac{\Delta t}{2} \right)
+\end{equation}
+O termo $-\Delta t/2$ não pertence à física do problema, mas à discretização: decorre da integração da colisão ao longo do passo de tempo, e sua incorporação eleva a precisão do método à segunda ordem no espaço e no tempo.
+A \eqref{eq:viscosidade-tau} também explicita o limite de estabilidade do esquema: viscosidades positivas exigem $\tau > \Delta t / 2$, e valores de $\tau$ próximos desse limite conduzem a um regime de sobrerrelaxação no qual o esquema se torna marginalmente estável.
+A derivação demonstra que o LBM resolve as equações de Navier-Stokes no limite de baixo número de Mach.
+
+%---------------------------------------------------------------------------------------
+
+\section{Mapeamento de Unidades e Adimensionalização}\label{sec:lbm-unidades}
+
+As simulações em LBM são conduzidas em um sistema de unidades próprio, denominado unidades da rede (\textit{lattice units}, LU).
+Nesse sistema, a distância entre nós da malha ($\Delta x$), o passo de tempo ($\Delta t$) e a massa específica de referência ($\rho_0$) são normalizados para a unidade.
+O mapeamento entre o problema físico e a rede é realizado mediante a igualdade de números adimensionais, em especial o número de Reynolds ($Re = U L / \nu$) e o número de Mach ($Ma = U / c_s$).
+
+O procedimento de conversão inicia-se pela definição dos parâmetros físicos do problema, a saber, o comprimento característico $L$, a velocidade de referência $U$ e a viscosidade cinemática $\nu$.
+Em seguida, selecionam-se os parâmetros da rede, isto é, o número de nós $N$ que representam a escala $L$ e a velocidade característica na rede $u_{lb}$.
+Em aplicações incompressíveis, essa velocidade é mantida abaixo de $0{,}1$ para limitar o erro de compressibilidade.
+Quando a compressibilidade é o próprio objeto da simulação, como aqui, ela é igualada ao número de Mach multiplicado pela velocidade do som da rede.
+Determinam-se então os fatores de conversão de comprimento, $C_L = L/N$, e de velocidade, $C_U = U/u_{lb}$, dos quais decorre o fator de conversão de tempo $C_t = C_L / C_U$.
+A viscosidade cinemática na rede resulta de $\nu_{lb} = \nu\, C_t / C_L^2$, expressão que se reduz a $\nu_{lb} = u_{lb} N / Re$, e o tempo de relaxação é obtido por $\tau = \nu_{lb} / c_s^2 + 0{,}5$.
+
+Considera-se um exemplo numérico dimensional para um tubo de choque de comprimento $L = 1{,}0$ m preenchido com ar a $T_0 = 300$ K, cuja massa específica é $\rho_0 = 1{,}2$ kg\,m$^{-3}$ e cuja viscosidade dinâmica é $\mu = 1{,}8 \times 10^{-5}$ Pa\,s.
+Essa viscosidade dinâmica corresponde a uma viscosidade cinemática $\nu = 1{,}5 \times 10^{-5}$ m$^2$\,s$^{-1}$, e os demais parâmetros são $\gamma = 1{,}4$, $R = 287$ J\,kg$^{-1}$\,K$^{-1}$ e $Pr = 0{,}71$.
+A velocidade do som nesse estado é $a_0 = \sqrt{\gamma R T_0} \approx 347$ m\,s$^{-1}$, e a velocidade de referência correspondente a $Ma = 0{,}25$ é $U = 0{,}25\, a_0 \approx 87$ m\,s$^{-1}$.
+O número de Reynolds do problema físico é, portanto, $Re = U L / \nu \approx 5{,}8 \times 10^{6}$, valor característico de escoamentos compressíveis em escala de laboratório.
+Adotando-se uma rede com $N = 10^{4}$ nós longitudinais no tubo e uma velocidade na rede $u_{lb} = Ma\, c_s = 0{,}25/\sqrt{3} \approx 0{,}144$, que preserva o número de Mach, a viscosidade na rede resulta em $\nu_{lb} = u_{lb} N / Re \approx 2{,}5 \times 10^{-4}$.
+Para o modelo D2Q9, com $c_s^2 = 1/3$, o tempo de relaxação correspondente é $\tau = 3\, \nu_{lb} + 0{,}5 \approx 0{,}5007$.
+Esse valor, embora admissível, situa-se próximo do limite inferior de estabilidade $\tau = 0{,}5$ estabelecido pela \eqref{eq:viscosidade-tau}.
+O resultado ilustra a dificuldade característica das simulações compressíveis em elevado número de Reynolds: reproduzir simultaneamente $Re$ e $Ma$ exige tempos de relaxação quase críticos, e sua viabilidade depende dos mecanismos de estabilização discutidos nas seções seguintes.
+O refinamento da malha atenua essa restrição, pois $\nu_{lb}$ cresce proporcionalmente a $N$, mas eleva na mesma proporção o número de passos de tempo necessários para cobrir o intervalo físico simulado.
+Esse compromisso caracteriza o mapeamento de unidades no LBM, de modo que a escolha adequada dos parâmetros é determinante para evitar erros de simulação e assegurar a conversão dos resultados para unidades físicas com precisão \parencite{Rathnayake2024}.
+
+Convém distinguir esse exemplo da configuração empregada na validação.
+O problema do tubo de choque de Sod é definido em grandezas adimensionais, com $\rho_L = 1{,}0$, $p_L = 1{,}0$ e comprimento unitário, e a viscosidade dinâmica $\mu = 1{,}0 \times 10^{-2}$ é especificada diretamente em unidades da rede, e não a partir de um valor físico.
+Fixa-se, assim, o tempo de relaxação dado pela \eqref{eq:tempos-relaxacao}, que nos estados iniciais vale $0{,}53$ à esquerda e $0{,}80$ à direita, qualquer que seja a malha, ao passo que a viscosidade cinemática física, $\nu = (\mu/\rho)\,\Delta x^2/\Delta t$, decresce proporcionalmente ao espaçamento.
+Como o passo de tempo é escolhido de modo que a velocidade do som adiabática da rede, $\sqrt{\gamma c_s^2}$, corresponda à do estado à esquerda, $a_L = \sqrt{\gamma p_L/\rho_L}$, tem-se $\Delta x/\Delta t = \sqrt{3}$ e, no estado à esquerda, $\nu \approx 1{,}7 \times 10^{-2}/N_x$.
+O número de Reynolds baseado nessa velocidade do som e no comprimento do domínio, $Re = a_L L_x/\nu \approx 68\, N_x$, cresce, portanto, linearmente com o refinamento, de cerca de $7 \times 10^{3}$ em $N_x = 10^{2}$ a $7 \times 10^{5}$ em $N_x = 10^{4}$.
+Com isso, o refinamento aproxima a simulação do limite invíscido das equações de Euler, que é o da solução analítica de referência.
+Essa escolha mantém o tempo de relaxação afastado do limite de estabilidade em todas as malhas, sem alterar o custo por nó nem o padrão de acesso à memória, que constituem o objeto da comparação entre tecnologias de paralelização.
+
+%---------------------------------------------------------------------------------------
+
+\section{Limitações do Modelo Clássico em Regime Compressível}\label{sec:lbm-limitacoes-classico}
+
+A análise da seção anterior é válida sob hipóteses restritivas, e o rompimento dessas hipóteses motiva a formulação adotada neste trabalho.
+Examinam-se a seguir quatro limitações do modelo clássico, cada uma associada a uma decisão específica do resolvedor implementado.
+
+A equação de estado do modelo isotérmico impõe $p = c_s^2 \rho$, com $c_s$ fixado pela rede, o que equivale a uma velocidade do som constante e independente do estado termodinâmico local.
+Em um escoamento compressível, ao contrário, a velocidade do som varia com a temperatura segundo $a = \sqrt{\gamma R T}$, e essa variação determina a formação e a velocidade de propagação das ondas de choque.
+Um resolvedor que mantenha $c_s$ constante não pode representar a razão entre calores específicos $\gamma$ de forma independente e, portanto, não reproduz corretamente as relações de Rankine-Hugoniot.
+
+Quanto à invariância de Galileu, a quadratura de três pontos por eixo garante exatidão apenas até os momentos de segunda ordem do equilíbrio no espaço multidimensional, de modo que o momento de terceira ordem contém um erro de ordem $\mathcal{O}(u^3)$.
+Esse erro, desprezível quando $Ma \ll 1$, cresce rapidamente com a velocidade e manifesta-se como uma dependência espúria dos resultados em relação ao referencial adotado, o que compromete a captura de estruturas convectadas em alta velocidade.
+
+No que se refere ao número de Prandtl, a limitação decorre do emprego de um único tempo de relaxação, que vincula a viscosidade e a difusividade térmica ao mesmo parâmetro $\tau$ e fixa $Pr = 1$.
+O valor característico para diversos fluidos, como o ar ($Pr = 0{,}71$) adotado neste trabalho, não pode ser imposto sem a introdução de um segundo parâmetro de relaxação, independente do primeiro.
+
+Por fim, as populações podem perder a positividade.
+A distribuição de equilíbrio truncada da \eqref{eq:feq-d2q9} é um polinômio, e polinômios não são positivos por construção.
+Para velocidades locais elevadas, o termo quadrático negativo $-\mathbf{u} \cdot \mathbf{u} / (2c_s^2)$ pode tornar negativas algumas populações, em particular a de repouso e as associadas às direções ortogonais ao escoamento, situação desprovida de sentido físico que, na prática, provoca a divergência da simulação.
+Tendo em vista que as descontinuidades das ondas de choque e das condições iniciais do tubo de choque geram precisamente essas condições de velocidade e de gradiente, a perda de positividade constitui o modo de falha mais frequente do LBM clássico em regime compressível.
+
+Cada limitação indica uma modificação necessária.
+Para que a velocidade do som dependa da temperatura e a razão de calores específicos seja arbitrária, faz-se necessário tratar a temperatura como variável independente, resolvida por uma segunda função de distribuição.
+A invariância de Galileu em alta velocidade requer que o conjunto de velocidades discretas seja deslocado para a vizinhança da velocidade do escoamento, o que motiva o emprego de redes deslocadas.
+Um número de Prandtl arbitrário depende de um segundo parâmetro de relaxação.
+No tocante à positividade, o equilíbrio deve deixar de ser um polinômio truncado, o que se obtém seja pela forma exponencial resultante da minimização de um funcional de entropia, seja por uma forma fatorada cujos fatores permaneçam positivos na faixa de operação.
+Antes de examinar os instrumentos que atendem a essas exigências, convém situar as diferentes vias pelas quais o LBM foi estendido ao regime compressível, o que justifica a formulação adotada neste trabalho e delimita o alcance dos resultados obtidos.
+
+%---------------------------------------------------------------------------------------
+
+\section{Adaptações do LBM ao Regime Compressível}\label{sec:lbm-adaptacoes-compressivel}
+
+As propostas da literatura para superar as limitações da seção anterior podem ser agrupadas em quatro famílias, distinguidas pela forma como recuperam os momentos de ordem superior que a rede clássica não suporta.
+A \autoref{tab:lbm-comparacao-compressivel} compara essas famílias segundo os critérios mais relevantes para um estudo de escalabilidade: a memória por nó, o alcance da propagação, a possibilidade de ajustar de forma independente o número de Prandtl e a razão de calores específicos, e o custo dominante por atualização.
+Nessa tabela, o termo estêncil designa o conjunto de nós vizinhos cujos valores são necessários para atualizar um nó.
+
+\begin{table}[H]
+    \centering
+    \caption{Comparação entre as famílias de adaptação do LBM ao regime compressível}
+    \label{tab:lbm-comparacao-compressivel}
+    \small
+    \begin{tabular}{p{2.8cm}p{1.7cm}p{2.4cm}p{1.3cm}p{3.0cm}}
+        \toprule
+        Abordagem & Populações por nó & Alcance da propagação & $Pr$ e $\gamma$ livres & Custo dominante \\
+        \midrule
+        LBM clássico isotérmico & $Q$    & vizinhos imediatos & não  & cópia entre vizinhos \\
+        Redes multivelocidade   & $2Q$ a $4Q$ & dois a três espaçamentos & sim & memória e zonas de troca \\
+        Esquemas híbridos       & $Q + 1$ & estêncil de diferenças finitas & sim & estêncil não local \\
+        Dupla distribuição      & $2Q$   & vizinhos imediatos & sim & iteração local e interpolação \\
+        Referenciais adaptativos & $2Q$  & vizinhos imediatos & sim & transformação entre referenciais \\
+        \bottomrule
+    \end{tabular}
+    \fonte{O autor (2026), com base em \textcite{Feng2019} e \textcite{Frapolli2015}.}
+\end{table}
+
+A primeira família recorre a redes multivelocidade de alta ordem.
+Como a insuficiência do modelo clássico decorre do truncamento da quadratura, uma solução direta consiste em elevar a ordem da quadratura de Gauss-Hermite, o que produz conjuntos como o D2Q17 e o D2Q37, com velocidades discretas de módulo superior à unidade \parencite{Shan2006}.
+Com momentos exatos até a quarta ou a quinta ordem, uma única função de distribuição passa a reproduzir a equação de energia e a equação de estado dos gases ideais.
+A associação dessas redes ao operador entrópico permite ainda alcançar regimes supersônicos com razão de calores específicos ajustável \parencite{Frapolli2015}.
+O custo, entretanto, é duplo: a memória por nó cresce proporcionalmente ao número de velocidades, e a propagação deixa de envolver apenas os vizinhos imediatos, passando a alcançar nós a dois ou três espaçamentos de distância.
+Essa perda de localidade compromete a propriedade que torna o LBM atraente em computação de alto desempenho, pois amplia as zonas de troca na decomposição de domínio e complica o tratamento das fronteiras.
+
+Na segunda família, de esquemas híbridos, a rede de baixa conectividade é preservada para a massa e a quantidade de movimento.
+A equação de energia, ou de entropia, é resolvida por diferenças finitas ou por volumes finitos, com regularização dos momentos e um sensor de choque para controlar a dissipação \parencite{Feng2019, Guo2020}.
+\textcite{Qiu2020} empregaram uma construção semelhante, em que a própria equação de Boltzmann discreta de um modelo de dupla distribuição é resolvida por esquemas de diferenças finitas, na simulação da interação entre onda de choque e camada limite em tubo de choque.
+A economia de memória é evidente, uma vez que a energia é representada por um único campo escalar em lugar de um conjunto de populações.
+Em contrapartida, coexistem dois esquemas numéricos no mesmo resolvedor.
+O estêncil de diferenças finitas introduz operações não locais, com padrão de acesso distinto ao da propagação, o que exige \textit{kernels} de cálculo específicos e reduz a uniformidade da implementação entre as tecnologias de paralelização.
+
+A terceira família, adotada neste trabalho e desenvolvida na Seção~\ref{sec:lbm-dupla-distribuicao}, atribui à energia um conjunto próprio de populações sobre a mesma rede da massa e da quantidade de movimento.
+A limitação da invariância de Galileu é tratada pelo deslocamento do conjunto de velocidades, e não pelo aumento de sua cardinalidade \parencite{Tran2022}.
+A memória por nó dobra em relação ao modelo clássico, valor sensivelmente inferior à quadruplicação imposta pelo D2Q37, e todas as operações permanecem locais ou restritas aos vizinhos imediatos, mesmo com a propagação interpolada que o deslocamento exige.
+Por outro lado, a solução iterativa que determina o equilíbrio térmico e as tabelas de interpolação aumentam o número de operações e o volume de dados por atualização.
+Além disso, a positividade dos pesos da quadratura restringe a temperatura da rede a um intervalo limitado, o que reduz a faixa de variação térmica admissível em uma única simulação.
+
+A quarta família generaliza o deslocamento ao permitir que cada nó possua seu próprio referencial e sua própria escala de temperatura, procedimento conhecido como partículas sob demanda \parencite{Dorschner2018}.
+Em princípio, o método alcança números de Mach arbitrários, pois a velocidade peculiar é mantida pequena em toda parte.
+Todavia, exige transformar as populações entre referenciais vizinhos a cada propagação, o que reintroduz interpolações e acopla nós adjacentes por operações não triviais.
+A formulação empregada neste trabalho pode ser interpretada como um caso particular dessa construção, no qual o referencial é único e fixado \textit{a priori}.
+Essa escolha preserva a simplicidade do laço de propagação, mas exige que a velocidade de referência seja representativa de todo o domínio.
+
+A leitura conjunta das famílias reunidas na \autoref{tab:lbm-comparacao-compressivel} esclarece a escolha adotada.
+Como o objeto deste trabalho é a comparação entre tecnologias de paralelização, e não a busca do modelo físico mais preciso, o critério decisivo é que a formulação preserve a estrutura de cálculo característica do LBM.
+Essa estrutura consiste em colisão local seguida de propagação para vizinhos imediatos, com o mesmo número de operações em todas as células.
+A dupla distribuição com rede deslocada é, entre as alternativas examinadas, a que melhor satisfaz esse critério, pois mantém um único esquema numérico, dispensa estênceis estendidos e concentra o custo adicional em operações aritméticas locais.
+Tal concentração é, ademais, de interesse próprio para o estudo, pois eleva a intensidade aritmética do \textit{kernel} de cálculo em relação ao LBM isotérmico.
+Com isso, o resolvedor afasta-se, ainda que parcialmente, da condição de limitação estrita pela largura de banda de memória, o que torna a comparação entre tecnologias mais informativa.
+
+Um limite comum a todas as famílias examinadas merece registro.
+A simulação de regimes hipersônicos exige considerar efeitos de alta temperatura, como a excitação de modos vibracionais e a dissociação molecular, que a hipótese de gás caloricamente perfeito não contempla.
+O modelo de gás ideal é frequentemente adotado como primeira aproximação, e é o adotado neste trabalho, mas \textcite{Guo2020} observam que escoamentos rarefeitos, hipersônicos ou de plasmas reativos demandam redes de ordem superior ou métodos cinéticos com seleção otimizada de velocidades discretas.
+Esses regimes situam-se, portanto, fora do alcance das formulações sobre redes padrão aqui consideradas.
+
+%---------------------------------------------------------------------------------------
+
+\section{Operadores de Colisão e Estabilidade Numérica}\label{sec:lbm-colisao}
+
+Embora o modelo BGK seja amplamente utilizado em razão de sua simplicidade, apresenta limitações intrínsecas, como o número de Prandtl fixo ($Pr = 1$ na formulação padrão) e a ocorrência de instabilidades em regimes de alta velocidade ou de baixa viscosidade.
+A origem dessas instabilidades reside no fato de que um único tempo de relaxação impõe a mesma taxa de amortecimento a todos os momentos da função de distribuição.
+Os momentos de ordem superior, que não possuem contrapartida hidrodinâmica e apenas acumulam erro de truncamento, são relaxados com a mesma intensidade que o tensor de tensões, do qual depende a viscosidade física.
+Em consequência, reduzir a viscosidade para atingir números de Reynolds elevados implica reduzir também o amortecimento das componentes espúrias.
+Conforme discutido por \textcite{Chen1998}, desenvolveram-se operadores de colisão mais estáveis a fim de superar essas deficiências, entre eles o de múltiplos tempos de relaxação (\textit{Multiple Relaxation Time}, MRT) e o entrópico (\textit{Entropic Lattice Boltzmann Method}, ELBM).
+
+A escolha do operador de colisão não altera o conjunto de velocidades discretas nem os momentos que ele é capaz de representar.
+Assim, nem a equação de estado isotérmica nem o erro de invariância de Galileu podem ser corrigidos por essa via: ambos decorrem da quadratura, e não da forma como as populações relaxam.
+O operador determina a estabilidade do esquema e o número de graus de liberdade disponíveis para o ajuste dos coeficientes de transporte.
+O MRT atua diretamente sobre a instabilidade associada aos momentos sem contrapartida hidrodinâmica e, ao dispor de taxas independentes, oferece o segundo parâmetro de relaxação exigido pelo número de Prandtl arbitrário, ainda que somente em modelos que já disponham de uma equação de energia.
+O ELBM, por sua vez, aborda a perda de positividade, que constitui o modo de falha mais frequente em alta velocidade.
+As duas limitações restantes exigem modificações na própria representação cinética, tratadas na Seção~\ref{sec:lbm-dupla-distribuicao}.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Múltiplos Tempos de Relaxação}\label{subsec:lbm-mrt}
+
+No modelo MRT, proposto por \textcite{dHumieres1992}, a colisão ocorre no espaço de momentos, e não no espaço das funções de distribuição.
+Uma matriz de transformação $\mathbf{M}$ mapeia as funções de distribuição em um conjunto de momentos, $\mathbf{m} = \mathbf{M}\mathbf{f}$, e a colisão consiste em uma relaxação linear desses momentos em direção a seus estados de equilíbrio:
+\begin{equation}\label{eq:colisao-mrt}
+    \mathbf{f}^* = \mathbf{f} - \mathbf{M}^{-1}\mathbf{S}[\mathbf{M}\mathbf{f} - \mathbf{m}^{eq}]
+\end{equation}
+onde $\mathbf{S} = \operatorname{diag}(s_0, s_1, \ldots, s_{Q-1})$ é uma matriz diagonal que contém as taxas de relaxação individuais de cada momento.
+Para a rede D2Q9, o vetor de momentos usualmente adotado é
+\begin{equation}\label{eq:momentos-d2q9}
+    \mathbf{m} = \left( \rho,\ e,\ \varepsilon,\ j_x,\ q_x,\ j_y,\ q_y,\ p_{xx},\ p_{xy} \right)^{\mathsf{T}}
+\end{equation}
+no qual $\rho$ é a massa específica, $e$ é a energia, $\varepsilon$ é o quadrado da energia, $\mathbf{j} = \rho \mathbf{u}$ é a quantidade de movimento, $q_x$ e $q_y$ são as componentes do fluxo de energia e $p_{xx}$ e $p_{xy}$ são as componentes independentes do tensor de tensões viscosas.
+Os momentos de equilíbrio correspondentes, escritos em unidades da rede com massa específica de referência unitária, são
+\begin{equation}\label{eq:momentos-equilibrio-d2q9}
+    \begin{aligned}
+        e^{eq} &= -2\rho + 3 \left( j_x^2 + j_y^2 \right), &\qquad \varepsilon^{eq} &= \rho - 3 \left( j_x^2 + j_y^2 \right), \\
+        q_x^{eq} &= -j_x, &\qquad q_y^{eq} &= -j_y, \\
+        p_{xx}^{eq} &= j_x^2 - j_y^2, &\qquad p_{xy}^{eq} &= j_x j_y
+    \end{aligned}
+\end{equation}
+conforme a construção de \textcite{Lallemand2000}.
+As taxas dos momentos conservados, a massa específica e a quantidade de movimento, são irrelevantes, pois as respectivas parcelas de não equilíbrio são nulas por construção.
+Já as taxas do tensor de tensões, associadas a $p_{xx}$ e a $p_{xy}$, determinam a viscosidade de cisalhamento por meio de $\nu = c_s^2 (1/s_\nu - 1/2) \Delta t$, expressão análoga à \eqref{eq:viscosidade-tau}.
+A taxa associada a $e$ determina a viscosidade volumétrica, que no operador BGK permanece vinculada a um múltiplo fixo da viscosidade de cisalhamento.
+Os momentos restantes, $\varepsilon$, $q_x$ e $q_y$, são chamados momentos fantasma por não possuírem significado hidrodinâmico.
+Suas taxas permanecem livres e podem ser escolhidas de modo a maximizar a margem de estabilidade, conforme a análise de dispersão e de dissipação de \textcite{Lallemand2000}.
+Essa liberdade caracteriza o MRT: os momentos fantasma são amortecidos com taxas próximas da unidade, o que os anula em poucos passos de tempo, enquanto o tensor de tensões relaxa lentamente, como exige a viscosidade física reduzida dos escoamentos em elevado número de Reynolds.
+Atribuindo-se um mesmo valor $s_i = \Delta t/\tau$ a todas as taxas, a \eqref{eq:colisao-mrt} reduz-se ao operador BGK, o que indica que este é um caso particular do MRT.
+
+Essa flexibilidade permite ajustar de forma independente a viscosidade de cisalhamento e a viscosidade volumétrica, o que melhora a estabilidade e a precisão em escoamentos complexos.
+Como as escalas de relaxação ficam desacopladas, os momentos de ordem superior, associados a tensões não físicas, podem ser relaxados mais rapidamente, o que estabiliza o resolvedor em números de Reynolds elevados.
+\textcite{Benzi1992} apontam que essa abordagem é especialmente relevante em simulações de turbulência, nas quais a dissipação em pequenas escalas deve ser cuidadosamente controlada.
+Uma variante econômica é o operador de dois tempos de relaxação (\textit{Two Relaxation Time}, TRT), que distingue apenas as partes simétrica e antissimétrica das populações em relação à inversão das direções discretas, com taxas $s_+$ e $s_-$.
+O produto $\Lambda = (1/s_+ - 1/2)(1/s_- - 1/2)$ controla a posição efetiva das paredes sólidas e a precisão das condições de contorno, o que confere ao TRT boa parte do ganho de estabilidade do MRT com uma fração de seu custo.
+
+O MRT, todavia, impõe um custo computacional adicional.
+A transformação direta e a inversa da \eqref{eq:colisao-mrt} correspondem, em princípio, a dois produtos matriz-vetor de custo $\mathcal{O}(Q^2)$ por nó e por passo de tempo, além do armazenamento das matrizes $\mathbf{M}$ e $\mathbf{M}^{-1}$.
+Implementações eficientes exploram o fato de que as entradas dessas matrizes são inteiras e pequenas, e substituem os produtos por expressões algébricas escritas termo a termo, sem laços.
+Essa estratégia reduz o número de operações, mas eleva a pressão sobre os registradores, aspecto crítico em aceleradores de \textit{hardware}, nos quais o número de registradores por fluxo de execução limita diretamente a ocupação dos multiprocessadores.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Operador Entrópico}\label{subsec:lbm-elbm}
+
+O ELBM parte de uma exigência mais forte do que a escolha das taxas de relaxação: que o operador de colisão respeite, já no nível discreto, o teorema H de Boltzmann.
+A partir da definição do funcional
+\begin{equation}\label{eq:funcional-h-continuo}
+    H(t) = \int f \ln f \, \mathrm{d}\boldsymbol{\xi}
+\end{equation}
+demonstra-se, pela simetria do termo integral de colisão em relação à permuta entre os estados anterior e posterior à colisão binária, que a evolução governada pela equação de Boltzmann satisfaz
+\begin{equation}\label{eq:teorema-h}
+    \frac{\mathrm{d}H}{\mathrm{d}t} \le 0
+\end{equation}
+com igualdade se e somente se $f$ coincidir com a distribuição de Maxwell-Boltzmann local \parencite{Chapman1970}.
+Como $H$ é, a menos de constante multiplicativa negativa, a entropia por unidade de volume, a \eqref{eq:teorema-h} é a expressão cinética da segunda lei da termodinâmica.
+As colisões conduzem o gás ao equilíbrio de forma monótona e irreversível, e o equilíbrio é o único estado estacionário admissível.
+Do ponto de vista numérico, o resultado fornece uma função de Lyapunov para a dinâmica, isto é, uma grandeza que não pode crescer e cujo mínimo é o equilíbrio, o que exclui a amplificação indefinida de perturbações.
+O modelo BGK com a distribuição de equilíbrio truncada não herda essa propriedade: o polinômio da \eqref{eq:feq-d2q9} não minimiza um funcional de entropia sob as restrições de conservação, e a colisão não garante a monotonicidade desse funcional.
+O ELBM propõe-se a preencher essa lacuna, construindo a colisão de modo que um análogo discreto da \eqref{eq:teorema-h} seja satisfeito em cada nó e em cada passo de tempo.
+
+Para tanto, define-se o funcional de entropia discreta
+\begin{equation}\label{eq:funcional-h}
+    H(\mathbf{f}) = \sum_i f_i \ln \left( \frac{f_i}{w_i} \right)
+\end{equation}
+cuja monotonicidade ao longo da evolução assegura a estabilidade do esquema \parencite{Karlin1999}.
+A distribuição de equilíbrio deixa de ser um polinômio truncado e passa a ser o minimizador de $H$ sujeito às restrições de conservação de massa e de quantidade de movimento, o que garante sua positividade e a consistência termodinâmica do modelo.
+Para as redes cujas componentes de velocidade pertencem a $\{-1, 0, +1\}$, esse minimizador admite forma fechada de produto sobre as direções coordenadas \parencite{Ansumali2002}:
+\begin{equation}\label{eq:feq-entropico}
+    f_i^{eq} = \rho\, w_i \prod_{\alpha=1}^{D} \left( 2 - \sqrt{1 + 3 u_\alpha^2} \right) \left( \frac{2 u_\alpha + \sqrt{1 + 3 u_\alpha^2}}{1 - u_\alpha} \right)^{v_{i\alpha}}
+\end{equation}
+A expansão dessa expressão em potências da velocidade reproduz, até segunda ordem, o polinômio truncado da \eqref{eq:feq-d2q9}, o que indica que o equilíbrio clássico corresponde à sua aproximação de baixo número de Mach.
+A diferença decisiva manifesta-se fora dessa vizinhança: por ser um produto de fatores estritamente positivos, a \eqref{eq:feq-entropico} nunca produz populações negativas, ao contrário do polinômio.
+Essa propriedade reaparece na \eqref{eq:feq-produto} da formulação compressível adotada neste trabalho, agora com a temperatura local como parâmetro adicional.
+
+A colisão entrópica assume a forma
+\begin{equation}\label{eq:colisao-entropica}
+    f_i^{col} = f_i + \alpha \beta \left( f_i^{eq} - f_i \right), \qquad \beta = \frac{\Delta t}{2\tau + \Delta t}
+\end{equation}
+em que $\beta$ é fixado pela viscosidade desejada e o parâmetro $\alpha$ é determinado, em cada nó e a cada passo de tempo, pela condição de que a colisão não aumente a entropia discreta, ou seja, $H(\mathbf{f} + \alpha (\mathbf{f}^{eq} - \mathbf{f})) = H(\mathbf{f})$.
+O valor $\alpha = 2$ corresponde à reflexão exata da distribuição em torno do equilíbrio e recupera a colisão BGK.
+Em regiões de forte não equilíbrio, a raiz da condição entrópica fornece $\alpha < 2$, o que limita o passo da colisão e preserva a positividade das populações.
+O mecanismo equivale, portanto, a uma viscosidade adicional que se ativa apenas onde a solução se afasta do equilíbrio, ideia que reaparece, sob outra forma, na relaxação modulada descrita na Seção~\ref{subsec:lbm-sensor}.
+\textcite{Frapolli2015} demonstraram que essa construção, associada a redes multivelocidade, estende o LBM a escoamentos compressíveis supersônicos com razão de calores específicos ajustável.
+O custo, entretanto, recai sobre a determinação de $\alpha$, obtida por um procedimento de busca de raiz que envolve logaritmos e cujo número de iterações varia de nó a nó.
+Esse comportamento introduz divergência entre fluxos de execução e prejudica o desempenho em arquiteturas de paralelismo massivo.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Comparação entre os Operadores}\label{subsec:lbm-comparacao-operadores}
+
+A \autoref{tab:lbm-operadores} compara os operadores discutidos segundo o número de parâmetros livres, o mecanismo pelo qual obtêm estabilidade e o custo adicional que impõem a cada nó da malha.
+Os dois últimos critérios interessam de perto a este trabalho, pois determinam o número de operações por atualização e a uniformidade do fluxo de execução, da qual depende o desempenho em aceleradores.
+
+\begin{table}[H]
+    \centering
+    \caption{Comparação entre operadores de colisão quanto a parâmetros livres, mecanismo de estabilização e custo adicional por nó}
+    \label{tab:lbm-operadores}
+    \begin{tabular}{lcp{4.0cm}p{3.6cm}}
+        \toprule
+        Operador & Parâmetros livres & Mecanismo de estabilização & Custo adicional por nó \\
+        \midrule
+        BGK              & $1$          & nenhum                                          & nulo                                   \\
+        TRT              & $2$          & separação entre partes simétrica e antissimétrica & poucas operações adicionais            \\
+        MRT              & até $Q$      & amortecimento dos momentos fantasma             & dois produtos matriz-vetor             \\
+        ELBM             & $1$ e $\alpha$ & teorema H discreto                            & busca de raiz com logaritmos           \\
+        Regularização    & $1$          & descarte dos momentos não suportados            & projeções em polinômios de Hermite     \\
+        Presente trabalho & $2$         & equilíbrio entrópico e relaxação modulada       & iteração de Newton-Raphson local       \\
+        \bottomrule
+    \end{tabular}
+    \fonte{O autor (2026), com base em \textcite{dHumieres1992} e \textcite{Karlin1999}.}
+\end{table}
+
+O miniaplicativo desenvolvido não emprega o MRT nem a busca do parâmetro entrópico.
+Adota-se o operador BGK para a distribuição de massa e de quantidade de movimento, com fator de relaxação modulado localmente pelo indicador de não equilíbrio da Seção~\ref{subsec:lbm-sensor}.
+Para a distribuição de energia, emprega-se um operador de quase equilíbrio, no qual um segundo fator de relaxação, associado à condutividade térmica, permite ajustar o número de Prandtl.
+O equilíbrio da energia é construído por maximização de entropia, conforme a Seção~\ref{subsec:lbm-equilibrio-g}, o que transfere ao resolvedor a garantia de positividade do equilíbrio característica do ELBM, sem exigir a solução da condição entrópica em cada nó.
+A escolha é deliberada e decorre do objeto de estudo: como o interesse recai sobre a comparação entre tecnologias de paralelização, privilegiam-se operadores cujo número de operações por nó seja previsível e cujo fluxo de execução seja idêntico em todas as células.
+Com esse critério, as diferenças de desempenho observadas no Capítulo~\ref{ch:resultados} podem ser atribuídas ao modelo de execução, e não a desequilíbrios de carga introduzidos pelo próprio operador de colisão.
+
+%---------------------------------------------------------------------------------------
+
+\section{Regularização de Momentos}\label{sec:lbm-regularizacao}
+
+Em regimes de escoamento compressível, a estabilidade do LBM é frequentemente comprometida por erros de truncamento na quadratura de Hermite.
+A origem do problema está na assimetria entre o que a rede representa no equilíbrio e o que ela carrega fora dele.
+A distribuição de equilíbrio da \eqref{eq:feq-d2q9} pertence, por construção, ao espaço gerado pelos polinômios de Hermite de ordem até dois.
+Já a parcela de não equilíbrio $f_i^{neq} = f_i - f_i^{eq}$, produzida a cada passo de tempo pela propagação, ocupa todo o espaço de dimensão $Q$ das populações.
+Das nove componentes de $f_i^{neq}$ na rede D2Q9, três são nulas, pois correspondem aos momentos conservados (massa específica e quantidade de movimento).
+As seis restantes dividem-se em duas famílias: as três do tensor $\boldsymbol{\Pi}^{(1)}$, que possuem significado hidrodinâmico, e as três dos momentos fantasma já mencionados.
+Esses momentos fantasma são relaxados pela colisão BGK com a mesma taxa lenta atribuída à viscosidade e, por conseguinte, acumulam-se em regiões de gradiente acentuado.
+A \autoref{fig:lbm-regularizacao} representa essa decomposição do espaço de momentos.
+
+\begin{figure}[H]
+    \centering
+    \caption{Decomposição do espaço de momentos da rede D2Q9 e efeito da regularização sobre a parcela de não equilíbrio: (a) antes da regularização, com o vetor de não equilíbrio decomposto nas parcelas hidrodinâmica e fantasma, e (b) após a regularização, com apenas a parcela hidrodinâmica preservada.}
+    \label{fig:lbm-regularizacao}
+    \includegraphics[width=0.9\linewidth]{fig/lbm-regularization-moment-space.png}
+    \fonte{O autor (2026), com base em \textcite{Latt2006} e \textcite{Kruger2017}.}
+\end{figure}
+
+A regularização consiste em descartar essas componentes antes da colisão, substituindo $f_i^{neq}$ por sua projeção no espaço de polinômios de Hermite efetivamente suportado pela rede \parencite{Latt2006}.
+O procedimento começa pela medição dos coeficientes de não equilíbrio,
+\begin{equation}\label{eq:coeficientes-neq}
+    \mathbf{a}_{neq}^{(n)} = \sum_i f_i^{neq}\, \boldsymbol{\mathcal{H}}^{(n)}(\mathbf{c}_i)
+\end{equation}
+e prossegue com a reconstrução da parcela de não equilíbrio apenas a partir dos coeficientes retidos:
+\begin{equation}\label{eq:regularizacao}
+    f_i^{neq, reg} = w_i \sum_{n=2}^{\mathcal{N}} \frac{1}{n!\, c_s^{2n}}\, \mathbf{a}_{neq}^{(n)} : \boldsymbol{\mathcal{H}}^{(n)}(\mathbf{c}_i)
+\end{equation}
+Retendo-se apenas o termo de segunda ordem, para o qual $\mathbf{a}_{neq}^{(2)} = \boldsymbol{\Pi}^{(1)}$, a \eqref{eq:regularizacao} reduz-se a
+\begin{equation}\label{eq:regularizacao-segunda-ordem}
+    f_i^{neq, reg} = \frac{w_i}{2 c_s^4}\, \Pi_{\alpha\beta}^{(1)} \left( c_{i\alpha} c_{i\beta} - c_s^2 \delta_{\alpha\beta} \right)
+\end{equation}
+e a colisão passa a ser escrita na forma $f_i^{col} = f_i^{eq} + (1 - \Delta t/\tau)\, f_i^{neq, reg}$.
+O efeito é imediato: as componentes fantasma são anuladas a cada passo de tempo, em vez de amortecidas lentamente, e a estabilidade deixa de depender do valor de $\tau$ na mesma medida.
+
+A regularização recursiva (\textit{Recursive Regularization}, RR) estende a soma da \eqref{eq:regularizacao} a ordens superiores sem a necessidade de medi-las nas populações, o que seria impossível com exatidão em uma rede de baixa conectividade.
+Os coeficientes de ordem mais alta são obtidos recursivamente a partir dos de ordem inferior e da velocidade macroscópica \parencite{Coreixas2017}:
+\begin{equation}\label{eq:regularizacao-recursiva}
+    a_{neq, \alpha\beta\gamma}^{(3)} = u_\alpha a_{neq, \beta\gamma}^{(2)} + u_\beta a_{neq, \alpha\gamma}^{(2)} + u_\gamma a_{neq, \alpha\beta}^{(2)}
+\end{equation}
+relação que decorre da própria estrutura da expansão de Chapman-Enskog e que se prolonga, de forma análoga, às ordens seguintes.
+Como todos os coeficientes passam a derivar de $\boldsymbol{\Pi}^{(1)}$, o esquema recupera parte dos termos de ordem $\mathcal{O}(u^3)$ perdidos no truncamento e atenua o erro de invariância de Galileu discutido na Seção~\ref{sec:lbm-limitacoes-classico}.
+A quadratura permanece a mesma, de modo que o erro não é eliminado \parencite{Guo2020}.
+
+Na versão híbrida (\textit{Hybrid Recursive Regularization}, HRR), a medição de $\boldsymbol{\Pi}^{(1)}$ nas próprias populações, pouco confiável junto às descontinuidades, é substituída por uma combinação com a taxa de deformação avaliada por diferenças finitas:
+\begin{equation}\label{eq:hrr}
+    \mathbf{a}_{neq}^{(2)} = \varsigma\, \boldsymbol{\Pi}^{(1)} - (1 - \varsigma)\, \rho\, c_s^2 \tau \left[ \nabla \mathbf{u} + (\nabla \mathbf{u})^{\mathsf{T}} \right], \qquad 0 \le \varsigma \le 1
+\end{equation}
+onde o parâmetro $\varsigma$ pondera as duas estimativas e controla, na prática, a dissipação adicional introduzida.
+Essa técnica, empregada por \textcite{Feng2019} e por \textcite{Guo2020}, permite o uso de redes de baixa conectividade, como D2Q9 ou D3Q19, em números de Mach elevados, para os quais tradicionalmente seriam exigidas redes de ordem superior.
+O custo é o mesmo dos esquemas híbridos discutidos na Seção~\ref{sec:lbm-adaptacoes-compressivel}: a introdução de um estêncil de diferenças finitas cujo padrão de acesso difere do da propagação.
+
+As regularizações RR e HRR relacionam-se ao MRT no sentido de que ambas operam sobre os momentos do escoamento, mas a regularização impõe uma estrutura polinomial estrita, que reforça a consistência com a expansão de Hermite original.
+Enquanto o MRT atribui taxas de relaxação distintas a momentos que continuam presentes na distribuição, a regularização descarta os momentos não suportados pela rede.
+Essa característica a torna mais econômica em memória, por dispensar as matrizes de transformação, e mais previsível quanto ao fluxo de execução, propriedade relevante para implementações voltadas a aceleradores de \textit{hardware}.
+
+Em escoamentos com descontinuidades mais severas, como os hipersônicos, torna-se necessária estabilização adicional.
+Além da regularização, a propagação exata pode ser substituída por esquemas de diferenças finitas aplicados à equação de Boltzmann discreta, como o de Lax-Wendroff ou interpolações a montante (\textit{upwind}) de alta resolução, entre elas a reconstrução essencialmente não oscilatória ponderada (\textit{Weighted Essentially Non-Oscillatory}, WENO).
+Esses esquemas introduzem uma dissipação numérica controlada que inibe as oscilações de Gibbs nas proximidades dos choques.
+\textcite{Qiu2020} investigaram a influência do esquema de discretização espacial sobre a estabilidade e a dissipação numérica na interação entre onda de choque e camada limite.
+
+O miniaplicativo desenvolvido não emprega a projeção de Hermite dessas formulações.
+A estabilidade é obtida por dois mecanismos distintos, ambos empregados por \textcite{Tran2022} e detalhados na Seção~\ref{sec:lbm-dupla-distribuicao}: a construção iterativa de um equilíbrio térmico de forma exponencial, positivo por construção, e uma relaxação cujo valor local depende do afastamento medido em relação ao equilíbrio.
+O efeito pretendido é o mesmo das técnicas de regularização, conter as oscilações de Gibbs nas proximidades das descontinuidades.
+O custo por nó, porém, concentra-se em uma solução iterativa local, e não em produtos matriciais, o que altera o perfil de acesso à memória discutido no Capítulo~\ref{ch:implementacao-computacional}.
+
+%---------------------------------------------------------------------------------------
+
+\section{Dupla Distribuição e Redes Deslocadas}\label{sec:lbm-dupla-distribuicao}
+
+A formulação apresentada nesta seção é a implementada no miniaplicativo e responde, uma a uma, às quatro limitações enumeradas na Seção~\ref{sec:lbm-limitacoes-classico}.
+Foi proposta por \textcite{Tran2022} para escoamentos compressíveis em elevado número de Reynolds e posteriormente detalhada e estendida por \textcite{Rathnayake2024} para o regime supersônico.
+Compõe-se de quatro elementos: a dupla função de distribuição (\textit{Double Distribution Function}, DDF), as redes deslocadas (\textit{shifted lattices}), o equilíbrio térmico obtido por maximização de entropia e a relaxação dependente do não equilíbrio local.
+A correspondência entre esses elementos e as limitações que os motivam está representada na \autoref{tab:lbm-limitacoes-solucoes}.
+
+\begin{table}[H]
+    \centering
+    \caption{Correspondência entre as limitações do modelo clássico e os elementos da formulação adotada}
+    \label{tab:lbm-limitacoes-solucoes}
+    \begin{tabular}{p{4.2cm}p{4.6cm}p{3.2cm}}
+        \toprule
+        Limitação do modelo clássico & Elemento que a resolve \\
+        \midrule
+        Equação de estado isotérmica & Segunda distribuição para a energia \\
+        Erro de invariância de Galileu & Rede deslocada pela velocidade de referência \\
+        Número de Prandtl fixo & Segundo fator de relaxação com quase equilíbrio \\
+        Perda de positividade & Equilíbrios de forma exponencial e fatorada \\
+        \bottomrule
+    \end{tabular}
+    \fonte{O autor (2026), com base em \textcite{Tran2022}.}
+\end{table}
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Equações de Evolução das Duas Distribuições}\label{subsec:lbm-ddf-evolucao}
+
+O primeiro passo consiste em desacoplar a energia da massa e da quantidade de movimento, atribuindo-lhes conjuntos distintos de populações.
+O conjunto $f_i$ transporta a massa específica e a quantidade de movimento, e o conjunto $g_i$ transporta a energia total.
+Suas equações de evolução, na forma proposta por \textcite{Tran2022}, são
+\begin{equation}\label{eq:ddf-f}
+    f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i(\mathbf{x}, t) + \omega \left[ f_i^{eq}(\mathbf{x}, t) - f_i(\mathbf{x}, t) \right]
+\end{equation}
+\begin{equation}\label{eq:ddf-g}
+    g_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = g_i(\mathbf{x}, t) + \omega \left[ g_i^{eq}(\mathbf{x}, t) - g_i(\mathbf{x}, t) \right] + (\omega - \omega_T) \left[ g_i^{*}(\mathbf{x}, t) - g_i^{eq}(\mathbf{x}, t) \right]
+\end{equation}
+onde $\omega = \Delta t/\tau$ e $\omega_T = \Delta t/\tau_T$ são os fatores de relaxação associados à quantidade de movimento e à energia, e $g_i^{*}$ é uma distribuição de quase equilíbrio detalhada na Seção~\ref{subsec:lbm-transporte}.
+A \eqref{eq:ddf-f} preserva a estrutura da equação de Lattice Boltzmann clássica.
+Na \eqref{eq:ddf-g}, o termo adicional é o que permite atribuir a $\omega_T$ um valor independente de $\omega$ sem violar a conservação da energia total, o que resolve a limitação do número de Prandtl fixo.
+
+As grandezas macroscópicas são recuperadas pelos momentos
+\begin{equation}\label{eq:ddf-momentos}
+    \rho = \sum_i f_i, \qquad \rho \mathbf{u} = \sum_i \mathbf{c}_i f_i, \qquad 2 \rho E = \sum_i g_i
+\end{equation}
+com a energia total por unidade de massa dada por $E = c_v T + |\mathbf{u}|^2/2$, onde $c_v = R/(\gamma - 1)$ é o calor específico a volume constante.
+A temperatura local resulta, portanto, da inversão direta dessa relação,
+\begin{equation}\label{eq:temperatura-local}
+    T = \frac{1}{c_v} \left( \frac{1}{2\rho} \sum_i g_i - \frac{|\mathbf{u}|^2}{2} \right)
+\end{equation}
+e a pressão passa a ser calculada pela equação de estado dos gases ideais, $p = \rho R T$, e não mais pela relação isotérmica $p = c_s^2 \rho$.
+Com isso, a velocidade do som local passa a ser $a = \sqrt{\gamma R T}$ e varia de nó a nó, condição necessária para representar corretamente a propagação das ondas de choque.
+
+A razão de calores específicos merece consideração à parte, por ser o parâmetro que o modelo clássico não consegue ajustar.
+Na formulação de dupla distribuição, $\gamma$ não é imposta pela rede, e sim pelo calor específico com que a temperatura é convertida em energia interna, pois $c_v = R/(\gamma - 1)$ equivale a atribuir ao gás um número de graus de liberdade igual a $2 c_v / R$.
+A rede fornece apenas os graus de liberdade translacionais associados às $D$ direções do espaço.
+Os demais, representativos dos modos internos da molécula, são contabilizados na própria definição de $E$ e não exigem populações adicionais.
+Por isso, o mesmo conjunto de nove velocidades atende tanto ao gás monoatômico quanto ao ar, para o qual se adota $\gamma = 1{,}4$ neste trabalho.
+O número de Mach local, empregado adiante na análise dos resultados, é $Ma = |\mathbf{u}| / a$, com $a$ avaliado no estado termodinâmico de cada nó, e não mais em relação à velocidade do som fixa da rede.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Redes Deslocadas e Propagação Interpolada}\label{subsec:lbm-redes-deslocadas}
+
+Em redes deslocadas, o conjunto de velocidades discretas é transladado por uma velocidade de referência constante $\mathbf{U}_{ref}$:
+\begin{equation}\label{eq:rede-deslocada}
+    \mathbf{c}_i = \mathbf{v}_i + \mathbf{U}_{ref}
+\end{equation}
+onde $\mathbf{v}_i$ designa as velocidades da rede padrão, de componentes em $\{-1, 0, +1\}$.
+O efeito dessa translação é substituir a velocidade macroscópica $\mathbf{u}$ pela velocidade peculiar $\tilde{\mathbf{u}} = \mathbf{u} - \mathbf{U}_{ref}$ nas expressões de equilíbrio.
+Como os erros de truncamento e a perda de positividade escalam com potências dessa velocidade, a escolha de $\mathbf{U}_{ref}$ próxima da velocidade média do escoamento reduz simultaneamente o erro de invariância de Galileu e o risco de populações negativas.
+Em termos geométricos, o deslocamento centra a quadratura na região do espaço de velocidades em que a função de distribuição se concentra, como ilustra a \autoref{fig:lbm-rede-deslocada}.
+No miniaplicativo, $\mathbf{U}_{ref}$ é um parâmetro de entrada, fixado, para o tubo de choque de Sod, no valor da \autoref{tab:parametros-simulacao}, que corresponde à velocidade média do escoamento no intervalo simulado.
+
+\begin{figure}[H]
+    \centering
+    \caption{Comparação entre (a) uma rede padrão centrada na origem, em que a direção 0 é o ponto central, e (b) uma rede deslocada pela velocidade de referência $\mathbf{U}_{ref}$, que otimiza a representação da função de distribuição em escoamentos de alta velocidade e em que a direção 0 é a seta espessa de comprimento $U_{ref}$.}
+    \label{fig:lbm-rede-deslocada}
+    \includegraphics[width=0.9\linewidth]{fig/lbm-shifted-lattice.png}
+    \fonte{Adaptado de \textcite{Rathnayake2024}.}
+\end{figure}
+
+O ganho obtido com o deslocamento pode ser estimado.
+O erro de invariância de Galileu de uma rede de três pontos por eixo passa a ser de ordem $\mathcal{O}(\tilde{u}^3)$, e não mais $\mathcal{O}(u^3)$, pois é a velocidade relativa, e não a absoluta, que comparece nas expressões de equilíbrio.
+Um escoamento uniformemente convectivo com velocidade igual à de referência é, portanto, representado exatamente, e o erro remanescente mede apenas o afastamento local em relação ao referencial adotado.
+Decorre disso o critério de escolha: o ganho é tanto maior quanto mais estreita for a faixa de velocidades presentes no domínio, e a melhor escolha é a que centra o referencial nessa faixa.
+A limitação do procedimento reside no mesmo aspecto, pois um único referencial não serve igualmente bem a regiões com velocidades muito distintas, situação que motivou os referenciais adaptativos mencionados na Seção~\ref{sec:lbm-adaptacoes-compressivel}.
+No tubo de choque, a faixa de velocidades é estreita o bastante para que um referencial único seja adequado, o que torna o problema favorável à formulação adotada.
+
+O deslocamento acarreta uma consequência algorítmica relevante.
+Como $\mathbf{U}_{ref}$ não é, em geral, um número inteiro, o ponto de origem da característica, $\mathbf{x} - \mathbf{c}_i \Delta t$, deixa de coincidir com um nó da malha, e a propagação, que no LBM clássico é uma simples cópia de valores entre vizinhos, passa a exigir interpolação.
+Adota-se a ponderação pelo inverso da distância (\textit{Inverse Distance Weighting}, IDW) sobre os $2^D$ nós que cercam o ponto de origem:
+\begin{equation}\label{eq:propagacao-idw}
+    f_i(\mathbf{x}, t + \Delta t) = \sum_{k=1}^{2^D} \varphi_k\, f_i^{col}(\mathbf{x}_k, t), \qquad \varphi_k = \frac{d_k^{-q}}{\sum_{m=1}^{2^D} d_m^{-q}}
+\end{equation}
+onde $\mathbf{x}_k$ são os nós que cercam o ponto de origem, $d_k$ é a distância entre esse ponto e o nó $k$, $q$ é o expoente da ponderação e $f_i^{col}$ designa as populações após a colisão.
+Quando o ponto de origem coincide com um nó, atribui-se peso unitário a esse nó e nulo aos demais, o que recupera a propagação exata do LBM clássico.
+A \autoref{fig:lbm-propagacao-idw} representa esse procedimento para um deslocamento na direção $x$, com $0 < U_{ref} < 0{,}5$: os nós $a'$ e $b'$ da rede em movimento distam, respectivamente, $1 - U_{ref}$ e $U_{ref}$ do nó $b$ da rede estacionária.
+Com $q = 1$, a população interpolada em $b$ é $f_i^{-} = (1 - U_{ref})\, f'_{ib} + U_{ref}\, f'_{ia}$, em que $f'_{ia}$ e $f'_{ib}$ são as populações nos nós $a'$ e $b'$.
+Como os pesos $\varphi_k$ dependem apenas da geometria da malha e de $\mathbf{U}_{ref}$, ambos invariantes ao longo da simulação, eles são calculados uma única vez e armazenados em tabelas, decisão de implementação retomada no Capítulo~\ref{ch:implementacao-computacional}.
+A interpolação introduz difusão numérica, que se soma à dissipação física e contribui para explicar a espessura observada das frentes de choque, discutida no Capítulo~\ref{ch:resultados}.
+
+\begin{figure}[H]
+    \centering
+    \caption{Rede em movimento (linhas pontilhadas e nós quadrados) e rede estacionária (linhas contínuas e nós circulares) em um instante de tempo, com $0 < U_{ref} < 0{,}5$: os nós da rede em movimento não coincidem com os da malha, e a população interpolada $f_i^{-}$ no nó $b$ resulta da ponderação pelo inverso da distância das populações $f'_{ia}$ e $f'_{ib}$ dos nós vizinhos $a'$ e $b'$.}
+    \label{fig:lbm-propagacao-idw}
+    \includegraphics[width=0.8\linewidth]{fig/lbm-moving-frame-idw.png}
+    \fonte{Adaptado de \textcite{Rathnayake2024}.}
+\end{figure}
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Pesos Dependentes da Temperatura e Equilíbrio de Massa}\label{subsec:lbm-equilibrio-f}
+
+Retomando a construção da Seção~\ref{sec:lbm-deducao}, mas admitindo agora que a temperatura varie de ponto a ponto, os pesos da quadratura deixam de ser constantes e passam a acompanhar o estado térmico local.
+Para uma rede cujas componentes pertencem a $\{-1, 0, +1\}$, os pesos assumem a forma de produto sobre as direções coordenadas:
+\begin{equation}\label{eq:pesos-temperatura}
+    W_i(T) = \prod_{\alpha=1}^{D} w(v_{i\alpha}, T), \qquad w(0, T) = 1 - T, \qquad w(\pm 1, T) = \frac{T}{2}
+\end{equation}
+Esses pesos satisfazem, por construção, as condições de isotropia $\sum_i W_i = 1$, $\sum_i W_i v_{i\alpha} = 0$ e $\sum_i W_i v_{i\alpha} v_{i\beta} = T \delta_{\alpha\beta}$, sendo $\delta_{\alpha\beta}$ o delta de Kronecker.
+A última dessas relações explicita o significado da temperatura em unidades da rede: ela corresponde à variância do conjunto de velocidades discretas.
+Substituindo $T = 1/3$ na \eqref{eq:pesos-temperatura}, obtém-se $w(0) = 2/3$ e $w(\pm 1) = 1/6$, cujos produtos reproduzem exatamente os pesos $4/9$, $1/9$ e $1/36$ do modelo clássico.
+O modelo isotérmico é, assim, o caso particular desta formulação em que a temperatura da rede é congelada no valor $c_s^2$.
+A positividade dos pesos restringe a temperatura em unidades da rede ao intervalo $0 < T < 1$, o que define, na prática, a faixa de variação térmica admissível e a escala de temperatura adotada no mapeamento de unidades.
+
+A distribuição de equilíbrio de massa e de quantidade de movimento é construída como um produto de fatores independentes por direção coordenada:
+\begin{equation}\label{eq:feq-produto}
+    f_i^{eq} = \rho \prod_{\alpha=1}^{D} \Phi(v_{i\alpha}, \tilde{u}_\alpha, T)
+\end{equation}
+com $\tilde{u}_\alpha = u_\alpha - U_{ref,\alpha}$ e
+\begin{equation}\label{eq:feq-fatores}
+    \Phi(0) = 1 - \left( \tilde{u}_\alpha^2 + T \right), \qquad
+    \Phi(\pm 1) = \frac{\pm \tilde{u}_\alpha + \tilde{u}_\alpha^2 + T}{2}
+\end{equation}
+A verificação direta dos momentos demonstra que essa forma satisfaz $\sum_i f_i^{eq} = \rho$, $\sum_i \mathbf{c}_i f_i^{eq} = \rho \mathbf{u}$ e $\sum_i \mathbf{c}_i \mathbf{c}_i f_i^{eq} = \rho \mathbf{u}\mathbf{u} + \rho T \mathbf{I}$, o que recupera o tensor de pressão correto com a pressão termodinâmica $p = \rho T$ em unidades da rede.
+A forma fatorada reproduz, em cada fator, exatamente os momentos unidimensionais que a rede é capaz de representar, de modo que o erro remanescente na invariância de Galileu é de ordem $\mathcal{O}(Ma^4)$, contra $\mathcal{O}(Ma^3)$ do polinômio truncado da \eqref{eq:feq-d2q9} \parencite{Tran2022}.
+Do ponto de vista computacional, o custo cresce com $\mathcal{O}(D)$ por direção, e não com o número de termos de uma expansão polinomial, o que resulta em um \textit{kernel} de cálculo compacto e sem desvios condicionais.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Equilíbrio de Energia por Maximização de Entropia}\label{subsec:lbm-equilibrio-g}
+
+A distribuição de equilíbrio da energia não admite uma forma fatorada análoga.
+Em vez de postular um polinômio, que reintroduziria o problema da positividade, determina-se $g_i^{eq}$ como a distribuição que extremiza a entropia discreta
+\begin{equation}\label{eq:entropia-discreta}
+    \mathcal{S} = \sum_i g_i \ln \left( \frac{g_i}{W_i(T)} \right)
+\end{equation}
+sujeita às restrições de conservação da energia total e do fluxo de energia:
+\begin{equation}\label{eq:restricoes-energia}
+    \sum_i g_i^{eq} = 2 \rho E, \qquad \sum_i \mathbf{c}_i g_i^{eq} = 2 \rho \mathbf{u} \left( E + T \right)
+\end{equation}
+A segunda restrição requer atenção: o fluxo de energia de um gás ideal inclui, além do transporte convectivo da energia total, o trabalho das forças de pressão, representado pelo termo $\rho \mathbf{u} T$.
+Impondo as restrições por multiplicadores de Lagrange, a solução do problema variacional assume forma exponencial:
+\begin{equation}\label{eq:geq-entropico}
+    g_i^{eq} = \rho\, W_i(T) \exp \left( \chi + \boldsymbol{\lambda} \cdot \mathbf{c}_i \right)
+\end{equation}
+onde $\chi$ é o multiplicador associado à energia total e $\boldsymbol{\lambda}$ o vetor de multiplicadores associados ao fluxo de energia.
+Por ser uma exponencial multiplicada por pesos positivos, $g_i^{eq}$ é positiva para quaisquer valores dos multiplicadores, o que elimina, por construção, o principal modo de falha do LBM clássico em alta velocidade.
+Em contrapartida, perde-se a forma fechada: os multiplicadores não possuem expressão analítica e precisam ser determinados numericamente em cada nó e a cada passo de tempo.
+
+Para resolver o problema, introduz-se a notação $e_i(\boldsymbol{\lambda}) = W_i(T) \exp(\boldsymbol{\lambda} \cdot \mathbf{c}_i)$ e a soma de normalização $Z(\boldsymbol{\lambda}) = \sum_i e_i$.
+A primeira restrição da \eqref{eq:restricoes-energia} determina $\chi$ de forma explícita, pois basta escalar a distribuição para que sua soma coincida com $2\rho E$.
+Resta um sistema de $D$ equações não lineares nas $D$ componentes de $\boldsymbol{\lambda}$, cujo resíduo é
+\begin{equation}\label{eq:residuo-newton}
+    r_\alpha(\boldsymbol{\lambda}) = \frac{1}{Z} \sum_i c_{i\alpha} e_i - \frac{u_\alpha (E + T)}{E} = 0
+\end{equation}
+A matriz jacobiana desse sistema possui interpretação estatística direta:
+\begin{equation}\label{eq:jacobiana-newton}
+    J_{\alpha\beta} = \frac{\partial r_\alpha}{\partial \lambda_\beta} = \frac{1}{Z} \sum_i c_{i\alpha} c_{i\beta} e_i - \left( \frac{1}{Z} \sum_i c_{i\alpha} e_i \right) \left( \frac{1}{Z} \sum_i c_{i\beta} e_i \right)
+\end{equation}
+isto é, a matriz de covariância das velocidades discretas sob a distribuição normalizada $e_i / Z$.
+Por essa razão, $\mathbf{J}$ é simétrica e semidefinida positiva.
+Ela é definida positiva sempre que as velocidades discretas de peso não nulo geram todo o espaço, condição satisfeita no intervalo $0 < T < 1$, no qual todos os pesos são positivos.
+Dessa forma, a invertibilidade da matriz e a existência da correção de Newton ficam asseguradas.
+A iteração assume a forma
+\begin{equation}\label{eq:atualizacao-newton}
+    \boldsymbol{\lambda}^{(k+1)} = \boldsymbol{\lambda}^{(k)} - \alpha_k\, \mathbf{J}^{-1} \mathbf{r}\!\left( \boldsymbol{\lambda}^{(k)} \right)
+\end{equation}
+onde $\alpha_k$ é um fator de amortecimento que decresce a cada iteração, adotado no miniaplicativo como $\alpha_k = 2^{-k}$, o que evita passos excessivos nas células situadas sobre as descontinuidades.
+O ALGORITMO~\ref{alg:lbm-newton} resume o procedimento.
+
+\begin{algorithm}[H]
+\caption{Determinação dos multiplicadores de Lagrange do equilíbrio térmico}\label{alg:lbm-newton}
+\Entrada{Massa específica $\rho$, velocidade $\mathbf{u}$, temperatura $T$ e multiplicadores $\boldsymbol{\lambda}$ do passo anterior}
+\Saida{Distribuição de equilíbrio de energia $g_i^{eq}$}
+$\alpha \gets 1$\;
+\Para{$k = 0$ até $k_{max} - 1$}{
+    Avaliar $e_i = W_i(T) \exp(\boldsymbol{\lambda} \cdot \mathbf{c}_i)$ e $Z = \sum_i e_i$\;
+    Montar o resíduo $\mathbf{r}$ pela \eqref{eq:residuo-newton} e a jacobiana $\mathbf{J}$ pela \eqref{eq:jacobiana-newton}\;
+    $\boldsymbol{\lambda} \gets \boldsymbol{\lambda} - \alpha\, \mathbf{J}^{-1} \mathbf{r}$\;
+    $\alpha \gets \alpha / 2$\;
+}
+Reavaliar $e_i$ e $Z$ com o valor final de $\boldsymbol{\lambda}$\;
+$g_i^{eq} \gets \dfrac{2 \rho E}{Z}\, e_i$\;
+\Retorne{$g_i^{eq}$}
+\end{algorithm}
+\fonte{Adaptado de \textcite{Tran2022}.}
+
+A convergência é rápida porque a jacobiana é, em geral, bem condicionada e a solução varia pouco entre passos de tempo consecutivos, o que permite iniciar a iteração a partir do resultado anterior.
+No estado inicial, em que o campo de velocidades é nulo, o equilíbrio de energia é inicializado com a distribuição proporcional aos próprios pesos, $g_i^{eq} = 2\rho E\, W_i(T) / \sum_j W_j(T)$, que satisfaz a restrição de energia total e corresponde a $\boldsymbol{\lambda} = \mathbf{0}$.
+Essa escolha é a solução exata do sistema apenas na rede não deslocada.
+Com $\mathbf{U}_{ref} \neq \mathbf{0}$, o primeiro momento dessa distribuição não se anula, e a discrepância no fluxo de energia é eliminada pelas iterações de Newton dos primeiros passos de tempo, o que se soma ao transitório inicial mencionado na Seção~\ref{subsec:solucao-numerica-utilizando-o-metodo-lbm}.
+Por ser executada em cada nó da malha e a cada passo de tempo, essa iteração impõe exigências específicas ao código, como o critério de parada, a estimativa inicial e a proteção contra transbordamento numérico, tratadas na Seção~\ref{sec:implementacao-computacional-sequencial}.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Coeficientes de Transporte e Número de Prandtl}\label{subsec:lbm-transporte}
+
+Os fatores de relaxação da \eqref{eq:ddf-f} e da \eqref{eq:ddf-g} vinculam-se aos coeficientes de transporte do fluido pelas relações
+\begin{equation}\label{eq:coeficientes-transporte}
+    \mu = \left( \frac{1}{\omega} - \frac{1}{2} \right) \rho T \Delta t, \qquad
+    \kappa = c_p \left( \frac{1}{\omega_T} - \frac{1}{2} \right) \rho T \Delta t
+\end{equation}
+onde $\mu$ é a viscosidade dinâmica, $\kappa$ a condutividade térmica e $c_p$ o calor específico a pressão constante.
+Invertendo essas expressões em unidades da rede, nas quais $\Delta t = 1$, obtêm-se os tempos de relaxação efetivamente calculados a cada nó,
+\begin{equation}\label{eq:tempos-relaxacao}
+    \tau = \frac{\mu}{\rho T} + \frac{1}{2}, \qquad
+    \tau_T = \frac{\kappa}{\rho c_p T} + \frac{1}{2}
+\end{equation}
+que reproduzem a estrutura da \eqref{eq:viscosidade-tau}, agora com a temperatura local no lugar da velocidade do som constante.
+O número de Prandtl resulta da razão entre ambos,
+\begin{equation}\label{eq:prandtl}
+    Pr = \frac{c_p \mu}{\kappa} = \frac{1/\omega - 1/2}{1/\omega_T - 1/2}
+\end{equation}
+e pode, portanto, assumir qualquer valor positivo.
+
+Resta especificar a distribuição de quase equilíbrio $g_i^{*}$ que comparece na \eqref{eq:ddf-g}.
+Sua função é corrigir o fluxo de calor de não equilíbrio, que de outro modo seria relaxado com a taxa da quantidade de movimento e não com a da energia.
+Adota-se
+\begin{equation}\label{eq:quase-equilibrio}
+    g_i^{*} - g_i^{eq} = \frac{W_i(T)}{T} \left( \mathbf{c}_i \cdot \mathbf{L} \right), \qquad
+    L_\alpha = 2 \sum_j \left( \mathbf{u} \cdot \mathbf{v}_j \right) v_{j\alpha} \left( f_j - f_j^{eq} \right)
+\end{equation}
+onde o vetor $\mathbf{L}$ é a contração da parcela de não equilíbrio do tensor de tensões com a velocidade macroscópica, ou seja, o trabalho das tensões viscosas que alimenta o fluxo de energia.
+A correção anula-se quando o escoamento se encontra em equilíbrio local ou quando $\omega_T = \omega$; neste último caso, a \eqref{eq:ddf-g} retorna à forma BGK simples e o número de Prandtl volta à unidade.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Estabilização por Relaxação Dependente do Não Equilíbrio Local}\label{subsec:lbm-sensor}
+
+A positividade das populações e o desacoplamento térmico ainda não são suficientes para conter as oscilações que se formam junto às descontinuidades.
+O mecanismo adicional empregado por \textcite{Tran2022}, que o adotam de trabalhos anteriores sobre escoamentos supersônicos, consiste em medir localmente o afastamento em relação ao equilíbrio e ajustar a relaxação em função dessa medida.
+O indicador empregado é um número de Knudsen local, definido como o desvio relativo médio das populações:
+\begin{equation}\label{eq:knudsen-local}
+    Kn_{loc} = \frac{1}{Q} \sum_{i=0}^{Q-1} \frac{\left| f_i - f_i^{eq} \right|}{f_i^{eq}}
+\end{equation}
+Em regiões suaves do escoamento, $Kn_{loc}$ é pequeno, enquanto nas proximidades de um choque ele se aproxima da unidade ou a supera.
+O fator de relaxação efetivamente aplicado é então $\omega_L = \omega / \sigma(Kn_{loc})$, com $\sigma$ definido por partes conforme a \autoref{tab:lbm-sensor}, e limitado ao intervalo $1 \le \omega_L < 2$, cujo limite superior assegura viscosidade positiva e cujo limite inferior corresponde à substituição integral das populações pelo equilíbrio.
+
+\begin{table}[H]
+    \centering
+    \caption{Fator de correção da relaxação em função do número de Knudsen local}
+    \label{tab:lbm-sensor}
+    \begin{tabular}{lcl}
+        \toprule
+        Faixa de $Kn_{loc}$        & $\sigma$ & Regime correspondente        \\
+        \midrule
+        $Kn_{loc} < 0{,}01$          & $1$      & Escoamento suave             \\
+        $0{,}01 \le Kn_{loc} < 0{,}1$  & $1{,}05$   & Gradientes moderados         \\
+        $0{,}1 \le Kn_{loc} < 1$     & $1{,}35$   & Vizinhança da descontinuidade \\
+        $Kn_{loc} \ge 1$           & $\omega$ & Interior da frente de choque \\
+        \bottomrule
+    \end{tabular}
+    \fonte{Adaptado de \textcite{Tran2022}.}
+\end{table}
+
+O comportamento pretendido é o de um mecanismo seletivo.
+Onde a solução é suave, $\sigma = 1$ e a colisão permanece inalterada, de modo que a viscosidade física não é contaminada por dissipação artificial.
+Onde há uma descontinuidade, $\sigma$ cresce, $\omega_L$ diminui e a relaxação torna-se menos rígida, o que equivale a uma viscosidade localmente maior e amortece as oscilações de Gibbs.
+No limite $Kn_{loc} \ge 1$, a escolha $\sigma = \omega$ conduz a $\omega_L = 1$, ou seja, a colisão substitui integralmente as populações pelo equilíbrio.
+Isso corresponde a um tempo de relaxação $\tau = \Delta t$ e à maior viscosidade admitida pelo esquema, que é o comportamento mais dissipativo possível.
+
+Em conjunto, esses elementos respondem às quatro limitações identificadas.
+A dupla distribuição fornece a temperatura como variável independente e a equação de estado dos gases ideais, as redes deslocadas reduzem o erro de invariância de Galileu, o segundo tempo de relaxação libera o número de Prandtl e o equilíbrio exponencial assegura a positividade.
+Com isso, o resolvedor pode operar em regimes de elevado número de Mach, fora do alcance do LBM clássico, com o custo de uma solução iterativa local em cada nó e de uma propagação interpolada.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Ciclo de Cálculo Resultante}\label{subsec:lbm-ciclo-compressivel}
+
+O ciclo efetivamente implementado difere do ALGORITMO~\ref{alg:lbm-ciclo} em três aspectos, todos decorrentes dos elementos introduzidos nesta seção.
+O cálculo dos equilíbrios deixa de ser uma avaliação polinomial direta e passa a incluir uma solução iterativa, a propagação se dá pela interpolação \eqref{eq:propagacao-idw} e a atualização das grandezas macroscópicas passa a fornecer também a temperatura e a pressão.
+O ALGORITMO~\ref{alg:lbm-ciclo-compressivel} apresenta essa versão, cujas etapas correspondem uma a uma aos \textit{kernels} de cálculo descritos no Capítulo~\ref{ch:implementacao-computacional}.
+
+\begin{algorithm}[H]
+\caption{Ciclo de execução de um passo de tempo na formulação compressível}\label{alg:lbm-ciclo-compressivel}
+\Entrada{Distribuições $f_i, g_i$ e campos macroscópicos $\rho, \mathbf{u}, T$ no instante $t$}
+\Saida{Distribuições e campos macroscópicos no instante $t + \Delta t$}
+\Para{cada nó $\mathbf{x}$ da malha}{
+    Avaliar $W_i(T)$ pela \eqref{eq:pesos-temperatura} e $f_i^{eq}$ pela \eqref{eq:feq-produto}\;
+    Obter $g_i^{eq}$ pelo ALGORITMO~\ref{alg:lbm-newton}\;
+    Calcular $Kn_{loc}$ pela \eqref{eq:knudsen-local} e o fator $\omega_L$ correspondente\;
+    Calcular $\tau$ e $\tau_T$ pela \eqref{eq:tempos-relaxacao} e a correção $g_i^{*} - g_i^{eq}$ pela \eqref{eq:quase-equilibrio}\;
+    \tcp{Colisão}
+    Relaxar $f_i$ e $g_i$ segundo a \eqref{eq:ddf-f} e a \eqref{eq:ddf-g}\;
+}
+\Para{cada nó $\mathbf{x}$ da malha}{
+    \tcp{Propagação}
+    Reunir $f_i$ e $g_i$ dos quatro nós de origem com os pesos da \eqref{eq:propagacao-idw}\;
+}
+\Para{cada nó $\mathbf{x}$ da malha}{
+    \tcp{Grandezas macroscópicas}
+    Calcular $\rho$, $\mathbf{u}$ e $T$ pela \eqref{eq:ddf-momentos} e pela \eqref{eq:temperatura-local}, e $p = \rho R T$\;
+}
+\Retorne{$f_i$, $g_i$, $\rho$, $\mathbf{u}$, $T$ e $p$}
+\end{algorithm}
+\fonte{O autor (2026), com base em \textcite{Tran2022} e \textcite{Rathnayake2024}.}
+
+O ALGORITMO~\ref{alg:lbm-ciclo-compressivel} separa o ciclo em três percursos da malha, por clareza de exposição.
+Essa separação decorre da dependência de dados já identificada no modelo clássico, agora estendida à coleta interpolada, que exige a colisão concluída em toda a vizinhança antes de ter início.
+Por outro lado, o cálculo das grandezas macroscópicas é estritamente local e pode ser fundido à propagação, assim como a avaliação dos equilíbrios pode ser fundida à colisão, o que reduz o número de leituras e escritas na memória principal.
+O número de percursos efetivamente realizados, o custo por nó, o volume de dados movimentado e a intensidade aritmética resultante são tratados na Seção~\ref{sec:custo-computacional}, junto com as decisões de implementação a que essas grandezas se referem.
+Vale destacar que a formulação compressível preserva as duas propriedades que tornam o LBM adequado ao paralelismo massivo: a colisão permanece inteiramente local, sem dependência entre nós, e a propagação alcança apenas os vizinhos imediatos, ainda que por meio de pesos de interpolação.
+
+%---------------------------------------------------------------------------------------
+
+\section{Tratamento de Condições de Contorno}\label{sec:lbm-contorno-hipersonico}
+
+O tratamento de condições de contorno no LBM exige a determinação das funções de distribuição que entram no domínio a partir das fronteiras, de modo que as leis de conservação e o comportamento hidrodinâmico sejam preservados.
+Entre as técnicas mais comuns está a reflexão de partículas (\textit{bounce-back}), utilizada para impor a condição de não escorregamento em paredes sólidas, na qual as distribuições que atingem a parede são refletidas de volta para o domínio.
+Essa técnica é valorizada por sua simplicidade e por sua capacidade de tratar geometrias complexas sem perda de massa \parencite{Kruger2017}.
+Destacam-se também as condições de contorno de equilíbrio e de não equilíbrio, nas quais as distribuições na fronteira são impostas combinando os valores de equilíbrio correspondentes às variáveis macroscópicas desejadas com correções de não equilíbrio.
+Nesse grupo, o método proposto por \textcite{Zou1997} é amplamente utilizado para prescrever perfis de velocidade ou de pressão com precisão de segunda ordem.
+Por fim, o método \textit{anti-bounce-back} é empregado para impor a pressão em fronteiras abertas, como as de entrada e de saída do domínio computacional \parencite{Kruger2017}.
+
+No caso do tubo de choque simulado neste trabalho, a geometria dispensa paredes sólidas e o tratamento reduz-se a duas condições.
+Nas extremidades do tubo, aplica-se a condição de gradiente nulo, implementada pela limitação do índice do nó de origem ao intervalo válido da malha, o que equivale a estender indefinidamente o estado da célula de borda.
+Isso é compatível com o fato de as ondas não alcançarem as extremidades no intervalo de tempo simulado.
+Na direção transversal, adota-se periodicidade, o que reproduz um escoamento invariante nessa direção e torna cada linha da malha comparável à solução analítica unidimensional.
+Ambas as condições são incorporadas às próprias tabelas de propagação, de modo que a etapa de propagação permanece livre de desvios condicionais, propriedade relevante para as implementações em aceleradores de \textit{hardware}.
+
+A condição de gradiente nulo nas extremidades e a periodicidade na direção transversal delimitam, assim, um problema em que o tratamento das fronteiras não interfere na dinâmica das ondas durante o intervalo simulado.
+Dessa forma, a comparação entre tecnologias de paralelização fica isolada de qualquer efeito associado ao contorno.

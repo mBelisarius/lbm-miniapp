@@ -2,10 +2,15 @@
 #define LBMINI_OPENCL_CPU_LBMTUBE_HPP_
 
 #define CL_HPP_TARGET_OPENCL_VERSION 200
+#include <fstream>
 #include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
 #include <CL/cl2.hpp>
 #include <unsupported/Eigen/CXX11/Tensor>
 #include "Data.hpp"
+#include "Guards.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
 #include "Lbm/OpenCl/Cpu/LatticeD2Q9.hpp"
@@ -40,22 +45,13 @@ typedef cl_int (CL_API_CALL *pfn_clEnqueueCommandBufferKHR)(cl_uint, cl_command_
 
 typedef cl_int (CL_API_CALL *pfn_clReleaseCommandBufferKHR)(cl_command_buffer_khr_ptr);
 
-#include "Lbm/CountCores.hpp"
-
 namespace lbmini::opencl::cpu {
-
-// POCL (Portable Computing Language) uses a library constructor to read environment
-// variables like POCL_MAX_PTHREAD_COUNT upon library load.
-// Standard setenv() calls in main() execute too late. This constructor runs beforehand.
-#ifdef __linux__
-__attribute__((constructor))
-static void InitPoclEnvironment() {
-  std::string perfCoresStr = std::to_string(lbmini::CountPerformanceCores());
-  setenv("POCL_MAX_PTHREAD_COUNT", perfCoresStr.c_str(), 0);
-  // Explicitly restrict process affinity to P-cores instead of relying on POCL_AFFINITY
-  lbmini::SetProcessToPerformanceCores();
-}
-#endif
+// POCL reads POCL_MAX_PTHREAD_COUNT and the process affinity is chosen once per
+// process, in `lbmini::Executor`, before any solver exists: the ICD only parses
+// those options when the platform is first queried, which happens below. Doing
+// it from here (a library constructor used to) would reconfigure a process that
+// this solver does not own, and would race with any other thread reading the
+// environment.
 
 /**
  * @brief OpenCL variant of the compressible LBM tube solver for CPUs.
@@ -108,47 +104,89 @@ public:
 
   LbmTube(const FluidData<Scalar>& fluid, const MeshData<Scalar, kDim_>& mesh, const ControlData<Scalar>& control, const PerformanceData& performance)
     : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
+    // Checked before the first `cl::Buffer`: every buffer size and every flat
+    // index below is derived from these extents, and the kernels index them
+    // with no bounds check at all.
+    lbmini::ValidateMeshExtents(mesh.size[0], mesh.size[1], kQ_, "opencl::cpu::LbmTube");
+
     nx_ = kMesh_.nx();
     ny_ = kMesh_.ny();
     N_ = nx_ * ny_;
     uSize_ = kDim_ * N_;
     distSize_ = kQ_ * N_;
 
+    // This class is the CPU instantiation of the OpenCL backend: its kernels,
+    // its work-group sizing and every performance figure derived from it only
+    // describe a run on an OpenCL CPU device. Accepting another target here
+    // would report GPU numbers measured on the host (or the reverse), so the
+    // mismatch is rejected instead of being silently reinterpreted.
+    if (kPerformance_.target != lbmini::TargetEnum::CPU)
+      throw std::runtime_error(
+        "opencl::cpu::LbmTube: this solver only supports the CPU target; "
+        "use lbmini::opencl::gpu::LbmTube for the GPU target."
+      );
+
     std::vector<cl::Platform> platforms;
     cl::Platform::get(&platforms);
-    cl_device_type deviceType = (kPerformance_.target == lbmini::TargetEnum::GPU) ? CL_DEVICE_TYPE_GPU : CL_DEVICE_TYPE_CPU;
 
+    // An ICD with no platform, or a platform with no device, leaves the vectors
+    // empty: `platforms[0]` and `devices.front()` would then read past the end
+    // of an empty vector, which is why every access below is guarded.
+    if (platforms.empty())
+      throw std::runtime_error("opencl::cpu::LbmTube: no OpenCL platform available.");
+
+    // Always `CL_DEVICE_TYPE_CPU`, never a cross-type fallback: picking any
+    // remaining device when no CPU device is exposed used to let a CPU-targeted
+    // solver run on a GPU without a single line of output saying so.
     cl::Platform plat;
     std::vector<cl::Device> devices;
     for (auto& p : platforms) {
-      p.getDevices(deviceType, &devices);
+      p.getDevices(CL_DEVICE_TYPE_CPU, &devices);
       if (!devices.empty()) {
         plat = p;
         device_ = devices.front();
         break;
       }
     }
-    if (devices.empty()) {
-      platforms[0].getDevices(CL_DEVICE_TYPE_ALL, &devices);
-      device_ = devices.front();
-    }
+    if (devices.empty())
+      throw std::runtime_error(
+        "opencl::cpu::LbmTube: no OpenCL CPU device available on any platform. "
+        "Install an OpenCL CPU runtime ICD (e.g. the Intel OpenCL CPU runtime) "
+        "and make sure its .icd file is visible under /etc/OpenCL/vendors."
+      );
 
     context_ = cl::Context(device_);
     queue_ = cl::CommandQueue(context_, device_);
 
-    std::ifstream kFile("lbmini/Lbm/OpenCl/Cpu/kernels.cl");
-    if (!kFile.is_open()) {
-      std::cerr << "Failed to open kernels.cl" << std::endl;
-      exit(1);
+    // Throwing instead of `exit()`: aborting here would skip every destructor
+    // in the process, leaving the already-created context, queue and buffers —
+    // and any work already queued on the device — behind.
+    std::ifstream kFile;
+    const std::vector<std::string> candidatePaths = {
+      "lbmini/Lbm/OpenCl/Cpu/kernels.cl",
+      "../lbmini/Lbm/OpenCl/Cpu/kernels.cl",
+      "../../lbmini/Lbm/OpenCl/Cpu/kernels.cl",
+      "/opt/lbm-miniapp/lbmini/Lbm/OpenCl/Cpu/kernels.cl"
+    };
+    for (const auto& p : candidatePaths) {
+      kFile.open(p);
+      if (kFile.is_open()) break;
     }
+    if (!kFile.is_open())
+      throw std::runtime_error(
+        "opencl::cpu::LbmTube: cannot open lbmini/Lbm/OpenCl/Cpu/kernels.cl "
+        "(the path is relative to the working directory)."
+      );
     std::string kernelSource((std::istreambuf_iterator<char>(kFile)), std::istreambuf_iterator<char>());
 
     cl::Program::Sources sources;
     sources.push_back({ kernelSource.c_str(), kernelSource.length() });
     program_ = cl::Program(context_, sources);
     if (program_.build({ device_ }) != CL_SUCCESS) {
-      std::cerr << "OpenCL Build Error: " << program_.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device_) << std::endl;
-      exit(1);
+      throw std::runtime_error(
+        "opencl::cpu::LbmTube: kernel build failed: " +
+        program_.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device_)
+      );
     }
 
     macroscopicKernel_ = cl::Kernel(program_, "computeMacroscopicKernel");
@@ -170,6 +208,20 @@ public:
     syncCounter_ = cl::Buffer(context_, CL_MEM_READ_WRITE, sizeof(int));
     syncFlag_ = cl::Buffer(context_, CL_MEM_READ_WRITE, sizeof(int));
   }
+
+  // The solver owns two KHR command buffers released in its destructor and
+  // hands the device its own `cl::Buffer` handles; a copy would release those
+  // command buffers twice and leave both objects enqueuing work into a freed
+  // recording. Solvers are heavy, unique objects held behind `ILbmTubeNd*`, so
+  // the operations are deleted rather than implemented, uniformly across every
+  // backend. See docs/memory-safety.md §5.2.
+  LbmTube(const LbmTube&) = delete;
+
+  LbmTube& operator=(const LbmTube&) = delete;
+
+  LbmTube(LbmTube&&) = delete;
+
+  LbmTube& operator=(LbmTube&&) = delete;
 
   ~LbmTube() override {
     if (use_cb_ && pfn_release_) {
@@ -216,7 +268,6 @@ public:
   void Init() override {
     const Scalar Cs2 = 1.0 / 3.0;
     const Scalar kRgas_ = kFluid_.constant;
-    const Scalar kCv_ = 1.0 / (kFluid_.gamma - 1.0);
 
     std::vector<Scalar> rho(N_, kFluid_.densityL);
     std::vector<Scalar> tem(N_, Cs2 * kFluid_.pressureL / (kRgas_ * kFluid_.densityL));
@@ -245,53 +296,68 @@ public:
     seedEquilibria();
     computeMacroscopic();
 
-    cl_platform_id plat_id = plat();
-    pfn_create_ = (pfn_clCreateCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clCreateCommandBufferKHR");
-    pfn_ndrange_ = (pfn_clCommandNDRangeKernelKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clCommandNDRangeKernelKHR");
-    pfn_finalize_ = (pfn_clFinalizeCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clFinalizeCommandBufferKHR");
-    pfn_enqueue_ = (pfn_clEnqueueCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clEnqueueCommandBufferKHR");
-    pfn_release_ = (pfn_clReleaseCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clReleaseCommandBufferKHR");
+    use_cb_ = false;
+    std::string extensions = device_.getInfo<CL_DEVICE_EXTENSIONS>();
+    if (extensions.find("cl_khr_command_buffer") != std::string::npos) {
+      cl_platform_id plat_id = plat();
+      pfn_create_ = (pfn_clCreateCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clCreateCommandBufferKHR");
+      pfn_ndrange_ = (pfn_clCommandNDRangeKernelKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clCommandNDRangeKernelKHR");
+      pfn_finalize_ = (pfn_clFinalizeCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clFinalizeCommandBufferKHR");
+      pfn_enqueue_ = (pfn_clEnqueueCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clEnqueueCommandBufferKHR");
+      pfn_release_ = (pfn_clReleaseCommandBufferKHR)clGetExtensionFunctionAddressForPlatform(plat_id, "clReleaseCommandBufferKHR");
 
-    if (pfn_create_ && pfn_ndrange_ && pfn_finalize_ && pfn_enqueue_ && pfn_release_) {
-      use_cb_ = true;
+      if (pfn_create_ && pfn_ndrange_ && pfn_finalize_ && pfn_enqueue_ && pfn_release_) {
+        cl_command_queue q = queue_();
+        cl_properties props[] = { 0x1293, CL_COMMAND_BUFFER_SIMULTANEOUS_USE_KHR, 0 }; // 0x1293 is CL_COMMAND_BUFFER_FLAGS_KHR
 
-      cl_command_queue q = queue_();
-      cl_properties props[] = { 0x1293, CL_COMMAND_BUFFER_SIMULTANEOUS_USE_KHR, 0 }; // 0x1293 is CL_COMMAND_BUFFER_FLAGS_KHR
+        cl_int err;
+        cbEven_ = pfn_create_(1, &q, props, &err);
+        if (err == CL_SUCCESS && cbEven_) {
+          cbOdd_ = pfn_create_(1, &q, props, &err);
+          if (err == CL_SUCCESS && cbOdd_) {
+            size_t global_work_size[1];
+            if constexpr (std::is_same_v<LatticeType, lbmini::opencl::cpu::LatticeD2Q9<Scalar>>) {
+              global_work_size[0] = N_;
+            } else {
+              global_work_size[0] = (N_ + 127) / 128 * 128;
+            }
+            size_t local_work_size[1] = { 128 };
+            const size_t* lws = nullptr;
+            if constexpr (!std::is_same_v<LatticeType, lbmini::opencl::cpu::LatticeD2Q9<Scalar>>) {
+              lws = local_work_size;
+            }
 
-      cl_int err;
-      cbEven_ = pfn_create_(1, &q, props, &err);
-      if (err != CL_SUCCESS)
-        std::cerr << "CB Create Even err: " << err << std::endl;
+            // Even step recording
+            collisionAndEquilibria(fCur_, gCur_, cbEven_, q, global_work_size, lws);
+            streamAndMacroscopic(fCur_, gCur_, fAlt_, gAlt_, cbEven_, q, global_work_size, lws);
+            cl_int finEven = pfn_finalize_(cbEven_);
 
-      cbOdd_ = pfn_create_(1, &q, props, &err);
-      if (err != CL_SUCCESS)
-        std::cerr << "CB Create Odd err: " << err << std::endl;
+            // Odd step recording
+            collisionAndEquilibria(fAlt_, gAlt_, cbOdd_, q, global_work_size, lws);
+            streamAndMacroscopic(fAlt_, gAlt_, fCur_, gCur_, cbOdd_, q, global_work_size, lws);
+            cl_int finOdd = pfn_finalize_(cbOdd_);
 
-      size_t global_work_size[1];
-      if constexpr (std::is_same_v<LatticeType, lbmini::opencl::cpu::LatticeD2Q9<Scalar>>) {
-        global_work_size[0] = N_;
-      } else {
-        global_work_size[0] = (N_ + 127) / 128 * 128;
+            if (finEven == CL_SUCCESS && finOdd == CL_SUCCESS) {
+              use_cb_ = true;
+            } else {
+              pfn_release_(cbEven_);
+              pfn_release_(cbOdd_);
+              cbEven_ = nullptr;
+              cbOdd_ = nullptr;
+              use_cb_ = false;
+            }
+          } else {
+            pfn_release_(cbEven_);
+            cbEven_ = nullptr;
+            cbOdd_ = nullptr;
+            use_cb_ = false;
+          }
+        } else {
+          cbEven_ = nullptr;
+          cbOdd_ = nullptr;
+          use_cb_ = false;
+        }
       }
-      size_t local_work_size[1] = { 128 };
-      const size_t* lws = nullptr;
-      if constexpr (!std::is_same_v<LatticeType, lbmini::opencl::cpu::LatticeD2Q9<Scalar>>) {
-        lws = local_work_size;
-      }
-
-      // Even step recording
-      collisionAndEquilibria(fCur_, gCur_, cbEven_, q, global_work_size, lws);
-      streamAndMacroscopic(fCur_, gCur_, fAlt_, gAlt_, cbEven_, q, global_work_size, lws);
-      err = pfn_finalize_(cbEven_);
-      if (err != CL_SUCCESS)
-        std::cerr << "CB Finalize Even err: " << err << std::endl;
-
-      // Odd step recording
-      collisionAndEquilibria(fAlt_, gAlt_, cbOdd_, q, global_work_size, lws);
-      streamAndMacroscopic(fAlt_, gAlt_, fCur_, gCur_, cbOdd_, q, global_work_size, lws);
-      err = pfn_finalize_(cbOdd_);
-      if (err != CL_SUCCESS)
-        std::cerr << "CB Finalize Odd err: " << err << std::endl;
     }
   }
 
@@ -400,9 +466,8 @@ protected:
 
     if (cb) {
       size_t cbgws[1] = { gws };
-      cl_int err = pfn_ndrange_(cb, q, nullptr, collisionKernel_(), 1, nullptr, cbgws, nullptr, 0, nullptr, nullptr, nullptr);
-      if (err != CL_SUCCESS)
-        std::cerr << "Coll CB err: " << err << std::endl;
+      cl_int err = pfn_ndrange_(cb, nullptr, nullptr, collisionKernel_(), 1, nullptr, cbgws, nullptr, 0, nullptr, nullptr, nullptr);
+      (void)err;
     } else {
       cl_int err = queue_.enqueueNDRangeKernel(collisionKernel_, cl::NullRange, cl::NDRange(gws), cl::NullRange);
       if (err != CL_SUCCESS)
@@ -444,9 +509,8 @@ protected:
 
     if (cb) {
       size_t cbgws[1] = { gws };
-      cl_int err = pfn_ndrange_(cb, q, nullptr, streamKernel_(), 1, nullptr, cbgws, nullptr, 0, nullptr, nullptr, nullptr);
-      if (err != CL_SUCCESS)
-        std::cerr << "Stream CB err: " << err << std::endl;
+      cl_int err = pfn_ndrange_(cb, nullptr, nullptr, streamKernel_(), 1, nullptr, cbgws, nullptr, 0, nullptr, nullptr, nullptr);
+      (void)err;
     } else {
       cl_int err = queue_.enqueueNDRangeKernel(streamKernel_, cl::NullRange, cl::NDRange(gws), cl::NullRange);
       if (err != CL_SUCCESS)

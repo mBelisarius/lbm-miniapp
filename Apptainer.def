@@ -1,0 +1,220 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/nvhpc:26.1-devel-cuda13.1-rockylinux9
+
+%labels
+    Author Marcos Belizario
+    Version 1.0
+    Description Lattice Boltzmann Method CFD solver container for cloud HPC clusters (OpenMP, OpenACC, OpenCL, CUDA, Kokkos, RAJA, MPI)
+
+%files
+    . /opt/lbm-miniapp
+
+%environment
+    export NVHPC_ROOT=/opt/nvidia/hpc_sdk
+    export OMP_PROC_BIND=spread
+    export OMP_PLACES=threads
+    
+    # Resolve one - and always the same - NVHPC / HPC-X tree for the compilers,
+    # CUDA, OpenMPI, PMIx and UCX. Discovering these paths ad hoc used to mix
+    # two directory names of the same SDK release (Linux_x86_64/2026 and
+    # Linux_x86_64/26.1), after which OpenMPI resolved `pmix_framework_names`
+    # against a foreign PMIx and every rank died in the dynamic loader.
+    if [ -r /opt/lbm-miniapp/scripts/nvhpc-env.sh ]; then
+        . /opt/lbm-miniapp/scripts/nvhpc-env.sh
+    fi
+    export PATH=/opt/lbm-miniapp/build:/usr/local/bin:${PATH}
+
+%post
+    set -e
+    
+    # Enable EPEL, CRB, and Intel oneAPI repositories for Rocky Linux 9
+    dnf install -y epel-release dnf-plugins-core
+    printf '[oneAPI]\nname=Intel(R) oneAPI repository\nbaseurl=https://yum.repos.intel.com/oneapi\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB\n' > /etc/yum.repos.d/oneAPI.repo
+    dnf config-manager --set-enabled crb
+    dnf update -y
+    dnf install -y --allowerasing \
+        git \
+        gcc \
+        gcc-c++ \
+        gcc-gfortran \
+        libasan \
+        libubsan \
+        libtsan \
+        make \
+        ninja-build \
+        cmake \
+        pkgconf-pkg-config \
+        which \
+        valgrind \
+        gdb \
+        tar \
+        gzip \
+        unzip \
+        wget \
+        curl \
+        opencl-headers \
+        ocl-icd \
+        ocl-icd-devel \
+        intel-oneapi-runtime-opencl \
+        intel-oneapi-runtime-dpcpp-sycl-opencl-cpu \
+        python3 \
+        python3-pip \
+        python3-devel
+    dnf clean all
+    rm -rf /var/cache/dnf
+
+    # Configure OpenCL ICDs (NVIDIA GPU + Intel CPU)
+    mkdir -p /etc/OpenCL/vendors
+    echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd
+    if [ -f /opt/intel/oneapi/redist/etc/intel64.icd ]; then
+        cp /opt/intel/oneapi/redist/etc/intel64.icd /etc/OpenCL/vendors/intel64.icd
+    elif [ -f /opt/intel/oneapi/lib/etc/intel64.icd ]; then
+        cp /opt/intel/oneapi/lib/etc/intel64.icd /etc/OpenCL/vendors/intel64.icd
+    else
+        echo "libintelocl.so" > /etc/OpenCL/vendors/intel64.icd
+    fi
+    echo "/opt/intel/oneapi/redist/lib" > /etc/ld.so.conf.d/intel-opencl.conf
+    echo "/opt/intel/oneapi/lib" >> /etc/ld.so.conf.d/intel-opencl.conf
+    ldconfig 2>/dev/null || true
+
+    # Install Python packages for benchmarking
+    python3 -m pip install --no-cache-dir --upgrade pip
+    python3 -m pip install --no-cache-dir \
+        numpy \
+        scipy \
+        matplotlib \
+        pyyaml \
+        polars
+
+    # Set up the NVHPC / HPC-X environment for the build through the very same
+    # script the runtime sources, so the binaries are linked against the MPI
+    # stack they will later load.
+    . /opt/lbm-miniapp/scripts/nvhpc-env.sh
+    if [ -z "${LBMINI_NVHPC_DIR:-}" ]; then
+        echo "NVIDIA HPC SDK not found under /opt/nvidia/hpc_sdk" >&2
+        exit 1
+    fi
+
+    # Keep the HPC-X PMIx / UCX ahead of the Rocky system copies for processes
+    # started without the environment (e.g. `apptainer exec ... lbm-miniapp-main`).
+    : > /etc/ld.so.conf.d/000-nvhpc-mpi.conf
+    if [ -n "${LBMINI_MPI_DIR:-}" ]; then
+        HPCX_ROOT=$(dirname "${LBMINI_MPI_DIR}")
+        for d in "${LBMINI_MPI_DIR}/lib" "${HPCX_ROOT}/pmix/lib" "${HPCX_ROOT}/ucx/lib" "${HPCX_ROOT}/ucc/lib" "${HPCX_ROOT}/hcoll/lib"; do
+            if [ -d "${d}" ]; then
+                echo "${d}" >> /etc/ld.so.conf.d/000-nvhpc-mpi.conf
+            fi
+        done
+    fi
+    ldconfig 2>/dev/null || true
+
+    # Build LBM mini-app
+    cd /opt/lbm-miniapp
+    MEM_JOBS=$(awk '/MemTotal/ {m=int($2/1024/2048); print (m<1?1:m)}' /proc/meminfo 2>/dev/null || echo 2)
+    CPU_JOBS=$(nproc 2>/dev/null || echo 1)
+    if [ "$MEM_JOBS" -lt "$CPU_JOBS" ]; then
+        BUILD_JOBS="$MEM_JOBS"
+    else
+        BUILD_JOBS="$CPU_JOBS"
+    fi
+    # Compute capability of the deployment GPU: 80 = A100, 86 = RTX 30xx / A40,
+    # 89 = RTX 40xx / L40, 90 = H100. Kokkos and RAJA accept a single value, and
+    # a mismatch shows up at run time as a Kokkos warning plus JIT recompilation.
+    CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES:-89}"
+    cmake -B build -S . \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/c++ \
+        -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
+        -DENABLE_CUDA=ON \
+        -DENABLE_KOKKOS=ON \
+        -DENABLE_KOKKOS_CUDA=ON \
+        -DENABLE_RAJA=ON \
+        -DENABLE_RAJA_CUDA=ON \
+        -DENABLE_TEST_OPENMP_BACKEND=ON \
+        -DENABLE_TEST_DEVICE_BACKENDS=ON
+    cmake --build build --parallel ${BUILD_JOBS}
+    # `ENABLE_TEST_DEVICE_BACKENDS=ON` in the two trees that may see a device is
+    # what puts the GPU backends under a memory tool at all: `build` carries the
+    # CUDA / Kokkos-GPU / RAJA-GPU instantiations of the memory-safety sweep that
+    # `test gpu` runs under compute-sanitizer, and `build-asan` the OpenCL GPU
+    # one, which compute-sanitizer cannot instrument and AddressSanitizer can.
+    cmake -B build-asan -S . \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DLBMINI_SANITIZER=address+undefined \
+        -DENABLE_CUDA=OFF \
+        -DENABLE_TEST_DEVICE_BACKENDS=ON
+    cmake --build build-asan --parallel ${BUILD_JOBS}
+    cmake -B build-tsan -S . \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DLBMINI_SANITIZER=thread \
+        -DENABLE_CUDA=OFF \
+        -DENABLE_OPENCL=OFF \
+        -DENABLE_MPI=OFF \
+        -DENABLE_TEST_DEVICE_BACKENDS=OFF
+    cmake --build build-tsan --parallel ${BUILD_JOBS}
+    # Uninstrumented *CUDA-free* tree for the Valgrind stage: running the
+    # CUDA-enabled `build` under memcheck drags the NVIDIA driver through the
+    # tool (33,574 suppressed errors) in a stage that must not touch the GPU.
+    cmake -B build-memcheck -S . \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DENABLE_CUDA=OFF \
+        -DENABLE_TEST_DEVICE_BACKENDS=OFF
+    cmake --build build-memcheck --target lbm-miniapp-test --parallel ${BUILD_JOBS}
+
+    ln -sf /opt/lbm-miniapp/build/lbm-miniapp-main /usr/local/bin/lbm-miniapp-main
+    ln -sf /opt/lbm-miniapp/build/lbm-miniapp-test /usr/local/bin/lbm-miniapp-test
+    chmod +x /opt/lbm-miniapp/entrypoint.sh /opt/lbm-miniapp/test/run-tests.sh /opt/lbm-miniapp/test/memory-check.sh /opt/lbm-miniapp/cmake-build.sh
+
+%runscript
+    exec /opt/lbm-miniapp/entrypoint.sh "$@"
+
+%apprun main
+    exec lbm-miniapp-main "$@"
+
+%apprun test
+    exec /opt/lbm-miniapp/test/run-tests.sh "$@"
+
+%apprun unit
+    exec /opt/lbm-miniapp/test/run-tests.sh unit "$@"
+
+%apprun cpu
+    exec /opt/lbm-miniapp/test/run-tests.sh cpu "$@"
+
+%apprun gpu
+    exec /opt/lbm-miniapp/test/run-tests.sh gpu "$@"
+
+%apprun mpi
+    exec /opt/lbm-miniapp/test/run-tests.sh mpi "$@"
+
+%apprun all
+    exec /opt/lbm-miniapp/test/run-tests.sh all "$@"
+
+%apprun memory-check
+    exec /opt/lbm-miniapp/test/run-tests.sh cpu "$@"
+
+%apprun campaign
+    cd /opt/lbm-miniapp/results
+    exec python3 campaign.py "$@"
+
+%help
+    LBM Mini-App CFD Solver Container for HPC Clusters
+
+    Usage:
+      # Run solver with default config.yaml
+      apptainer run --nv lbm-miniapp.sif
+
+      # Run solver specifying a custom config file in current directory
+      apptainer run --nv --bind $(pwd):/work -W /work lbm-miniapp.sif
+
+      # Run test suites:
+      apptainer run --app test lbm-miniapp.sif unit        # Unit tests
+      apptainer run --app test lbm-miniapp.sif cpu         # CPU memory-safety & race tests
+      apptainer run --app test --nv lbm-miniapp.sif gpu    # GPU compute-sanitizer tests
+      apptainer run --app test lbm-miniapp.sif mpi         # MPI multi-rank tests
+      apptainer run --app test --nv lbm-miniapp.sif all    # Full end-to-end verification
+
+      # Run benchmark campaign
+      apptainer run --app campaign --nv lbm-miniapp.sif run
+
+      # Run with MPI on cluster
+      mpirun -np 4 apptainer exec --nv lbm-miniapp.sif lbm-miniapp-main

@@ -1,0 +1,301 @@
+{
+  "libm_flop": {
+    "exp": 20,
+    "log": 22
+  },
+  "source_level": {
+    "cpu_collision": {
+      "add": 849.0009,
+      "mul": 965.0,
+      "div": 29.0,
+      "sqrt": 0.0,
+      "exp": 36.0,
+      "log": 1.0,
+      "basic": 1843.0009
+    },
+    "cpu_stream": {
+      "add": 54.0,
+      "mul": 72.0,
+      "div": 0.0,
+      "sqrt": 0.0,
+      "exp": 0.0,
+      "log": 0.0,
+      "basic": 126.0
+    },
+    "cpu_stream+macro": {
+      "add": 110.0,
+      "mul": 100.0,
+      "div": 1.0001,
+      "sqrt": 0.0,
+      "exp": 0.0,
+      "log": 0.0,
+      "basic": 211.0
+    },
+    "cuda_collision": {
+      "add": 631.0,
+      "mul": 730.0,
+      "div": 28.0,
+      "sqrt": 0.0,
+      "exp": 36.0,
+      "log": 1.0,
+      "basic": 1389.0
+    },
+    "cuda_stream+macro": {
+      "add": 263.0,
+      "mul": 227.0,
+      "div": 10.0,
+      "sqrt": 0.0,
+      "exp": 36.0,
+      "log": 36.0,
+      "basic": 500.0
+    }
+  },
+  "executed": {
+    "cpu_collision": {
+      "rest": {
+        "flop": 1632,
+        "fma": 543,
+        "arith": 546,
+        "instr": 4453
+      },
+      "moving": {
+        "flop": 1746,
+        "fma": 591,
+        "arith": 564,
+        "instr": 4597
+      }
+    },
+    "cpu_stream": {
+      "rest": {
+        "flop": 126,
+        "fma": 54,
+        "arith": 18,
+        "instr": 354
+      },
+      "moving": {
+        "flop": 126,
+        "fma": 54,
+        "arith": 18,
+        "instr": 354
+      }
+    },
+    "cpu_streammacro": {
+      "rest": {
+        "flop": 200,
+        "fma": 74,
+        "arith": 52,
+        "instr": 463
+      },
+      "moving": {
+        "flop": 200,
+        "fma": 74,
+        "arith": 52,
+        "instr": 463
+      }
+    },
+    "cuda_collision": {
+      "rest": {
+        "flop": 1440,
+        "fma": 387,
+        "arith": 666,
+        "instr": 4266
+      },
+      "moving": {
+        "flop": 1554,
+        "fma": 435,
+        "arith": 684,
+        "instr": 4410
+      }
+    },
+    "cuda_streammacro": {
+      "rest": {
+        "flop": 2147,
+        "fma": 749,
+        "arith": 649,
+        "instr": 5525
+      },
+      "moving": {
+        "flop": 2147,
+        "fma": 749,
+        "arith": 649,
+        "instr": 5525
+      }
+    }
+  },
+  "model": {
+    "traffic": {
+      "cpu": {
+        "colisao": {
+          "macro_leitura": 32,
+          "multiplicadores": 48,
+          "f_g": 288
+        },
+        "propagacao": {
+          "f_g_origem": 144,
+          "indices": 144,
+          "pesos": 288,
+          "f_g_escrita": 144,
+          "alocacao_escrita_f_g": 144,
+          "releitura_f_g": 144,
+          "macro_escrita": 40,
+          "alocacao_escrita_macro": 40
+        },
+        "total": 1456
+      },
+      "gpu": {
+        "colisao": {
+          "macro_leitura": 32,
+          "multiplicadores": 40,
+          "f_g": 288
+        },
+        "propagacao": {
+          "f_g_origem": 144,
+          "f_g_escrita": 144,
+          "macro_escrita": 40
+        },
+        "total": 688
+      }
+    },
+    "platform": {
+      "cpu": {
+        "peak_gflops": 1689.6000000000001,
+        "bw_gbs": 102.4
+      },
+      "gpu": {
+        "peak_gflops": 482.304,
+        "bw_gbs": 672.0
+      },
+      "gpu_1_2": {
+        "peak_gflops": 15433.728,
+        "bw_gbs": 672.0
+      }
+    },
+    "variants": {
+      "cpu": {
+        "stages": {
+          "colisao": {
+            "exp": 36.0,
+            "log": 1.0,
+            "flop": 1746,
+            "aritmetica": 1004.0
+          },
+          "propagacao": {
+            "exp": 0.0,
+            "log": 0.0,
+            "flop": 200,
+            "aritmetica": 200.0
+          }
+        },
+        "flop": 1946,
+        "bytes": 1456,
+        "ai": 1.3365384615384615,
+        "ridge": 16.5,
+        "gflops": 136.86153846153846,
+        "regime": "memoria",
+        "mlups_memoria": 70.32967032967034,
+        "mlups_calculo": 868.2425488180885,
+        "mlups": 70.32967032967034
+      },
+      "gpu": {
+        "stages": {
+          "colisao": {
+            "exp": 36.0,
+            "log": 1.0,
+            "flop": 1554,
+            "aritmetica": 812.0
+          },
+          "propagacao": {
+            "exp": 36.0,
+            "log": 36.0,
+            "flop": 2147,
+            "aritmetica": 635.0
+          }
+        },
+        "flop": 3701,
+        "bytes": 688,
+        "ai": 5.379360465116279,
+        "ridge": 0.7177142857142856,
+        "gflops": 482.304,
+        "regime": "calculo",
+        "mlups_memoria": 976.7441860465116,
+        "mlups_calculo": 130.31721156444203,
+        "mlups": 130.31721156444203
+      },
+      "gpu_tabelas": {
+        "stages": {
+          "colisao": {
+            "exp": 36.0,
+            "log": 1.0,
+            "flop": 1554,
+            "aritmetica": 812.0
+          },
+          "propagacao": {
+            "exp": 0.0,
+            "log": 0.0,
+            "flop": 200,
+            "aritmetica": 200.0
+          }
+        },
+        "flop": 1754,
+        "bytes": 1120,
+        "ai": 1.5660714285714286,
+        "ridge": 0.7177142857142856,
+        "gflops": 482.304,
+        "regime": "calculo",
+        "mlups_memoria": 600.0,
+        "mlups_calculo": 274.97377423033066,
+        "mlups": 274.97377423033066
+      },
+      "gpu_1_2": {
+        "stages": {
+          "colisao": {
+            "exp": 36.0,
+            "log": 1.0,
+            "flop": 1554,
+            "aritmetica": 812.0
+          },
+          "propagacao": {
+            "exp": 36.0,
+            "log": 36.0,
+            "flop": 2147,
+            "aritmetica": 635.0
+          }
+        },
+        "flop": 3701,
+        "bytes": 688,
+        "ai": 5.379360465116279,
+        "ridge": 22.96685714285714,
+        "gflops": 3614.9302325581393,
+        "regime": "memoria",
+        "mlups_memoria": 976.7441860465116,
+        "mlups_calculo": 4170.150770062145,
+        "mlups": 976.7441860465116
+      },
+      "gpu_tabelas_1_2": {
+        "stages": {
+          "colisao": {
+            "exp": 36.0,
+            "log": 1.0,
+            "flop": 1554,
+            "aritmetica": 812.0
+          },
+          "propagacao": {
+            "exp": 0.0,
+            "log": 0.0,
+            "flop": 200,
+            "aritmetica": 200.0
+          }
+        },
+        "flop": 1754,
+        "bytes": 1120,
+        "ai": 1.5660714285714286,
+        "ridge": 22.96685714285714,
+        "gflops": 1052.4,
+        "regime": "memoria",
+        "mlups_memoria": 600.0,
+        "mlups_calculo": 8799.160775370581,
+        "mlups": 600.0
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
+#include "Guards.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
 
@@ -116,6 +117,14 @@ public:
     const ControlData<Scalar>& control,
     const PerformanceData& performance
   );
+
+  LbmTube(const LbmTube&) = delete;
+
+  LbmTube& operator=(const LbmTube&) = delete;
+
+  LbmTube(LbmTube&&) = delete;
+
+  LbmTube& operator=(LbmTube&&) = delete;
 
   ~LbmTube() override;
 
@@ -227,8 +236,7 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   const PerformanceData& performance
 )
   : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
-  // Single host thread orchestrates GPU launches; all compute is on device.
-  omp_set_num_threads(1);
+  ValidateMeshExtents(mesh.size[0], mesh.size[1], kQ_, "OpenACC GPU");
 
   nx_ = mesh.size[0];
   ny_ = mesh.size[1];
@@ -262,6 +270,24 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   if (!rhoDev_ || !pDev_ || !temDev_ || !uDev_ || !fDev_ || !gDev_ || !fauxDev_ || !gauxDev_ || !lastGxDev_) {
     std::cerr << "[openacc::gpu::LbmTube] omp_target_alloc failed on device " << dev_
       << " (num_devices=" << omp_get_num_devices() << ", N=" << N_ << "). Check available VRAM." << std::endl;
+    if (rhoDev_)
+      omp_target_free(rhoDev_, dev_);
+    if (pDev_)
+      omp_target_free(pDev_, dev_);
+    if (temDev_)
+      omp_target_free(temDev_, dev_);
+    if (uDev_)
+      omp_target_free(uDev_, dev_);
+    if (fDev_)
+      omp_target_free(fDev_, dev_);
+    if (gDev_)
+      omp_target_free(gDev_, dev_);
+    if (fauxDev_)
+      omp_target_free(fauxDev_, dev_);
+    if (gauxDev_)
+      omp_target_free(gauxDev_, dev_);
+    if (lastGxDev_)
+      omp_target_free(lastGxDev_, dev_);
     throw std::runtime_error("omp_target_alloc returned nullptr");
   }
 

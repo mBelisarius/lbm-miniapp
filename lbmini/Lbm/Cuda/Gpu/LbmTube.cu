@@ -1,5 +1,8 @@
 #include "Lbm/Cuda/Gpu/LbmTube.hpp"
 #include <iostream>
+#include <stdexcept>
+#include <string>
+#include "Guards.hpp"
 #include "Lbm/Cuda/Gpu/LatticeD2Q9.hpp"
 
 namespace lbmini::cuda::gpu {
@@ -499,281 +502,97 @@ __global__ void streamAndMacroscopicKernel(
 }
 
 
-template<typename Scalar, typename LatticeType>
-LbmTube<Scalar, LatticeType>::LbmTube(
-  const FluidData<Scalar>& fluid,
-  const MeshData<Scalar, kDim_>& mesh,
-  const ControlData<Scalar>& control,
-  const PerformanceData& performance
-)
-  : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
-  // Single host thread orchestrates GPU launches; all compute is on device.
-  nx_ = mesh.size[0];
-  ny_ = mesh.size[1];
-  N_ = nx_ * ny_;
-  uSize_ = N_ * kDim_;
-  distSize_ = N_ * kQ_;
+namespace internal {
 
-
-  rhoHost_.assign(N_, Scalar{ 0 });
-  pHost_.assign(N_, Scalar{ 0 });
-  temHost_.assign(N_, Scalar{ 0 });
-  uHost_.assign(uSize_, Scalar{ 0 });
-  lastGxHost_.assign(N_ * (kDim_ + 1), Scalar{ 0 });
-
-  const std::size_t sN = static_cast<std::size_t>(N_) * sizeof(Scalar);
-  const std::size_t sU = static_cast<std::size_t>(uSize_) * sizeof(Scalar);
-  const std::size_t sD = static_cast<std::size_t>(distSize_) * sizeof(Scalar);
-  const std::size_t sLg = static_cast<std::size_t>(N_ * (kDim_ + 1)) * sizeof(Scalar);
-
-  cudaMalloc(&rhoDev_, sN);
-  cudaMalloc(&pDev_, sN);
-  cudaMalloc(&temDev_, sN);
-  cudaMalloc(&uDev_, sU);
-  cudaMalloc(&fDev_, sD);
-  cudaMalloc(&gDev_, sD);
-  cudaMalloc(&fauxDev_, sD);
-  cudaMalloc(&gauxDev_, sD);
-  cudaMalloc(&lastGxDev_, sLg);
-
-  if (!rhoDev_ || !pDev_ || !temDev_ || !uDev_ || !fDev_ || !gDev_ ||
-    !fauxDev_ || !gauxDev_ || !lastGxDev_) {
-    std::cerr << "[openmp::gpu::LbmTube] omp_target_alloc failed on device "
-      << 0 << " (num_devices=" << 1
-      << ", N=" << N_ << "). Check available VRAM." << std::endl;
-    throw std::runtime_error("omp_target_alloc returned nullptr");
-  }
-
-  fCur_ = fDev_;
-  fAlt_ = fauxDev_;
-  gCur_ = gDev_;
-  gAlt_ = gauxDev_;
-}
-
-template<typename Scalar, typename LatticeType>
-LbmTube<Scalar, LatticeType>::~LbmTube() {
-  if (rhoDev_)
-    cudaFree(rhoDev_);
-  if (pDev_)
-    cudaFree(pDev_);
-  if (temDev_)
-    cudaFree(temDev_);
-  if (uDev_)
-    cudaFree(uDev_);
-  if (fDev_)
-    cudaFree(fDev_);
-  if (gDev_)
-    cudaFree(gDev_);
-  if (fauxDev_)
-    cudaFree(fauxDev_);
-  if (gauxDev_)
-    cudaFree(gauxDev_);
-  if (lastGxDev_)
-    cudaFree(lastGxDev_);
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::getP(Scalar* dst) const {
-  cudaMemcpy(pHost_.data(), pDev_, static_cast<std::size_t>(N_) * sizeof(Scalar), cudaMemcpyDeviceToHost);
-  std::copy(pHost_.begin(), pHost_.end(), dst);
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::getRho(Scalar* dst) const {
-  cudaMemcpy(rhoHost_.data(), rhoDev_, static_cast<std::size_t>(N_) * sizeof(Scalar), cudaMemcpyDeviceToHost);
-  std::copy(rhoHost_.begin(), rhoHost_.end(), dst);
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::getT(Scalar* dst) const {
-  cudaMemcpy(temHost_.data(), temDev_, static_cast<std::size_t>(N_) * sizeof(Scalar), cudaMemcpyDeviceToHost);
-  std::copy(temHost_.begin(), temHost_.end(), dst);
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::getU(Scalar* dst) const {
-  cudaMemcpy(uHost_.data(), uDev_, static_cast<std::size_t>(uSize_) * sizeof(Scalar), cudaMemcpyDeviceToHost);
-  for (Index cell = 0; cell < N_; ++cell)
-    for (Index d = 0; d < kDim_; ++d)
-      dst[cell * kDim_ + d] = uHost_[d * N_ + cell];
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::Init() {
-  for (Index i = 0; i < nx_; ++i) {
-    for (Index j = 0; j < ny_; ++j) {
-      const Index cell = cellIndex(static_cast<int>(i), static_cast<int>(j));
-      uHost_[0 * N_ + cell] = Scalar{ 0 };
-      uHost_[1 * N_ + cell] = Scalar{ 0 };
-      if (i < nx_ / 2) {
-        rhoHost_[cell] = kFluid_.densityL;
-        pHost_[cell] = kFluid_.pressureL;
-      } else {
-        rhoHost_[cell] = kFluid_.densityR;
-        pHost_[cell] = kFluid_.pressureR;
-      }
-      temHost_[cell] = LatticeType::Cs2 * pHost_[cell] / (rhoHost_[cell] * kFluid_.constant);
-      for (Index d = 0; d < kDim_ + 1; ++d)
-        lastGxHost_[d * N_ + cell] = Scalar{ 0 };
-    }
-  }
-
-  const std::size_t sN = static_cast<std::size_t>(N_) * sizeof(Scalar);
-  const std::size_t sU = static_cast<std::size_t>(uSize_) * sizeof(Scalar);
-  const std::size_t sLg = static_cast<std::size_t>(N_ * (kDim_ + 1)) * sizeof(Scalar);
-  cudaMemcpy(rhoDev_, rhoHost_.data(), sN, cudaMemcpyHostToDevice);
-  cudaMemcpy(pDev_, pHost_.data(), sN, cudaMemcpyHostToDevice);
-  cudaMemcpy(temDev_, temHost_.data(), sN, cudaMemcpyHostToDevice);
-  cudaMemcpy(uDev_, uHost_.data(), sU, cudaMemcpyHostToDevice);
-  cudaMemcpy(lastGxDev_, lastGxHost_.data(), sLg, cudaMemcpyHostToDevice);
-
-  seedEquilibria();
-  computeMacroscopic();
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::Step(const bool save) {
-  Run(1, save);
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::Run(const Index steps, bool /*save*/) {
-  for (Index t = 0; t < steps; ++t) {
-    collisionAndEquilibria();
-    streamAndMacroscopic();
-    std::swap(fCur_, fAlt_);
-    std::swap(gCur_, gAlt_);
-  }
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::computeMacroscopic() {
-  const Scalar Ushift0 = kControl_.U(0);
-  const Scalar Ushift1 = kControl_.U(1);
-  const Scalar invCv = Scalar{ 1 } / kFluid_.specificHeatCv;
-  const Scalar Rgas = kFluid_.constant;
-  const Scalar* pF = fCur_;
-  const Scalar* pG = gCur_;
-  Scalar* pRho = rhoDev_;
-  Scalar* pP = pDev_;
-  Scalar* pT = temDev_;
-  Scalar* pU = uDev_;
-  const int nx = static_cast<int>(nx_);
-  const int ny = static_cast<int>(ny_);
-  const int N = static_cast<int>(N_);
-
-  // collapse(2) over int ci/cj: eliminates 64-bit div/mod for cell indexing.
-  // thread_limit(64): halves per-block register demand, enabling 4-8 concurrent
-  // blocks per SM on the 65536-register Ada register file.
-  // kD2Q9Cx/kD2Q9Cy are namespace-scope `declare target` constants — nvc++
-  // can reference them inside `is_device_ptr` kernels without a `map` clause.
+template<typename Scalar>
+void launchComputeMacroscopic(
+  const Scalar* pF,
+  const Scalar* pG,
+  Scalar* pRho,
+  Scalar* pP,
+  Scalar* pT,
+  Scalar* pU,
+  const Scalar Ushift0,
+  const Scalar Ushift1,
+  const Scalar invCv,
+  const Scalar Rgas,
+  const int nx,
+  const int ny,
+  const int N
+) {
   int threads = 64;
   int blocks = (N + threads - 1) / threads;
   computeMacroscopicKernel<Scalar><<<blocks, threads>>>(pF, pG, pRho, pP, pT, pU, Ushift0, Ushift1, invCv, Rgas, nx, ny, N);
+  CheckCuda(cudaGetLastError(), "launch computeMacroscopicKernel");
 }
 
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::seedEquilibria() {
-  const Scalar Ushift0 = kControl_.U(0);
-  const Scalar Ushift1 = kControl_.U(1);
-  const Scalar kTiny = kTiny_;
-  Scalar* pF = fCur_;
-  Scalar* pG = gCur_;
-  const Scalar* pRho = rhoDev_;
-  const Scalar* pT = temDev_;
-  const Scalar* pU = uDev_;
-  const int nx = static_cast<int>(nx_);
-  const int ny = static_cast<int>(ny_);
-  const int N = static_cast<int>(N_);
-  const Scalar cv = kFluid_.specificHeatCv;
-
+template<typename Scalar>
+void launchSeedEquilibria(
+  Scalar* pF,
+  Scalar* pG,
+  const Scalar* pRho,
+  const Scalar* pT,
+  const Scalar* pU,
+  const Scalar Ushift0,
+  const Scalar Ushift1,
+  const Scalar kTiny,
+  const int nx,
+  const int ny,
+  const int N,
+  const Scalar cv
+) {
   int threads = 64;
   int blocks = (N + threads - 1) / threads;
   seedEquilibriaKernel<Scalar><<<blocks, threads>>>(pF, pG, pRho, pT, pU, Ushift0, Ushift1, kTiny, nx, ny, N, cv);
+  CheckCuda(cudaGetLastError(), "launch seedEquilibriaKernel");
 }
 
-/**
- * @brief Launches the fused BGK collision and equilibrium computation kernel.
- *
- * @details
- * Design notes:
- *  - **collapse(2) + int ci/cj**: eliminates 64-bit integer division that would
- *    arise from a flat `cell % ny` / `cell / ny` with Index (long) loop var.
- *  - **thread_limit(64)**: with ~200 live 32-bit register slots per thread, 64
- *    threads/block uses 12800 registers — fits 5 concurrent blocks per SM on
- *    Ada's 65536-register file, dramatically improving latency hiding vs the
- *    previous 128 threads/block (only 2 concurrent blocks).
- *  - **Fully branchless NR**: the `bool solverOk` flag was causing warp divergence
- *    near shock waves. We replace it with a `Scalar` guard (`nrOk`) so all
- *    threads execute the same control flow. In the fallback path, xi stays
- *    zero, and geqLocal is set to a uniform distribution via ternary selects.
- *  - **Unrolling**: `feqLocal[9]`, `si[9]`, `e[9]` are unrolled via `#pragma unroll 9`;
- *    with thread_limit(64) and branchless control flow the compiler can fully
- *    scalarise them into registers without spilling to local memory.
- */
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
-  const Scalar Ushift0 = kControl_.U(0);
-  const Scalar Ushift1 = kControl_.U(1);
-  const Scalar visc = kFluid_.viscosity;
-  const Scalar cond = kFluid_.conductivity;
-  const Scalar cp = kFluid_.specificHeatCp;
-  const Scalar cv = kFluid_.specificHeatCv;
-  const Scalar kTiny = kTiny_;
-  const Scalar kMaxE = kMaxExp_;
-
-  Scalar* pF = fCur_;
-  Scalar* pG = gCur_;
-  Scalar* pLastGx = lastGxDev_;
-  const Scalar* pRho = rhoDev_;
-  const Scalar* pT = temDev_;
-  const Scalar* pU = uDev_;
-  const int nx = static_cast<int>(nx_);
-  const int ny = static_cast<int>(ny_);
-  const int N = static_cast<int>(N_);
-
+template<typename Scalar>
+void launchCollisionAndEquilibria(
+  Scalar* pF,
+  Scalar* pG,
+  Scalar* pLastGx,
+  const Scalar* pRho,
+  const Scalar* pT,
+  const Scalar* pU,
+  const Scalar Ushift0,
+  const Scalar Ushift1,
+  const Scalar visc,
+  const Scalar cond,
+  const Scalar cp,
+  const Scalar cv,
+  const Scalar kTiny,
+  const Scalar kMaxE,
+  const int nx,
+  const int ny,
+  const int N
+) {
   int threads = 64;
   int blocks = (N + threads - 1) / threads;
   collisionAndEquilibriaKernel<Scalar><<<blocks, threads>>>(pF, pG, pLastGx, pRho, pT, pU, Ushift0, Ushift1, visc, cond, cp, cv, kTiny, kMaxE, nx, ny, N);
+  CheckCuda(cudaGetLastError(), "launch collisionAndEquilibriaKernel");
 }
 
-/**
- * @brief Launches the combined streaming and macroscopic update kernel.
- *
- * @details
- * Performs on-the-fly IDW streaming + macroscopic reduction.
- *
- * Design notes:
- *  - **collapse(2) + int ci/cj**: eliminates the expensive 64-bit division
- *    `cell/ny` and `cell%ny` from the previous flat-Index loop.
- *  - **Branchless IDW (no snap cascade)**: the 4-way if/else snap-to-node check
- *    caused warp divergence on grid edges. We use `exp(-p*log(r²+kTiny))` for
- *    all corners; when `r²→0` the weight→+∞ but after wsum normalisation the
- *    result is identical to the snap value. Zero branches, zero divergence.
- *  - **Axis-aligned directions** (`cy[idc]==0`): the inner loop is unrolled by
- *    `#pragma unroll 9`, so the `cy[idc]==0` test is evaluated at compile time,
- *    and the 5 axis-aligned unrolled copies use pure 1-D lerp (no exp/log).
- */
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::streamAndMacroscopic() {
-  const Scalar* pF = fCur_;
-  const Scalar* pG = gCur_;
-  Scalar* pFaux = fAlt_;
-  Scalar* pGaux = gAlt_;
-  Scalar* pRho = rhoDev_;
-  Scalar* pP = pDev_;
-  Scalar* pT = temDev_;
-  Scalar* pU = uDev_;
-  const Scalar Ushift0 = kControl_.U(0);
-  const Scalar Ushift1 = kControl_.U(1);
-  const Scalar invCv = Scalar{ 1 } / kFluid_.specificHeatCv;
-  const Scalar Rgas = kFluid_.constant;
-  const Scalar kTiny = kTiny_;
-  const Scalar idwExp = kControl_.idw;
-  const int nx = static_cast<int>(nx_);
-  const int ny = static_cast<int>(ny_);
-  const int N = static_cast<int>(N_);
-
+template<typename Scalar>
+void launchStreamAndMacroscopic(
+  const Scalar* pF,
+  const Scalar* pG,
+  Scalar* pFaux,
+  Scalar* pGaux,
+  Scalar* pRho,
+  Scalar* pP,
+  Scalar* pT,
+  Scalar* pU,
+  const Scalar Ushift0,
+  const Scalar Ushift1,
+  const Scalar invCv,
+  const Scalar Rgas,
+  const Scalar kTiny,
+  const Scalar idwExp,
+  const int nx,
+  const int ny,
+  const int N
+) {
   int threads = 64;
   int blocks = (N + threads - 1) / threads;
   if (ny == 1) {
@@ -783,8 +602,28 @@ void LbmTube<Scalar, LatticeType>::streamAndMacroscopic() {
   } else {
     streamAndMacroscopicKernel<Scalar, 0><<<blocks, threads>>>(pF, pG, pFaux, pGaux, pRho, pP, pT, pU, Ushift0, Ushift1, invCv, Rgas, kTiny, idwExp, nx, ny, N);
   }
+  CheckCuda(cudaGetLastError(), "launch streamAndMacroscopicKernel");
 }
 
+template void launchComputeMacroscopic<double>(
+  const double*, const double*, double*, double*, double*, double*,
+  double, double, double, double, int, int, int
+);
 
-template class LbmTube<double, LatticeD2Q9<double>>;
+template void launchSeedEquilibria<double>(
+  double*, double*, const double*, const double*, const double*,
+  double, double, double, int, int, int, double
+);
+
+template void launchCollisionAndEquilibria<double>(
+  double*, double*, double*, const double*, const double*, const double*,
+  double, double, double, double, double, double, double, double, int, int, int
+);
+
+template void launchStreamAndMacroscopic<double>(
+  const double*, const double*, double*, double*, double*, double*,
+  double*, double*, double, double, double, double, double, double, int, int, int
+);
+
+} // namespace internal
 } // namespace lbmini::cuda::gpu

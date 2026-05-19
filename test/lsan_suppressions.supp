@@ -1,0 +1,56 @@
+# LeakSanitizer suppressions for LBM Mini-App
+# Suppresses known one-time allocations from vendor runtime libraries and drivers.
+
+# Intel OpenCL CPU Runtime and SVML math libraries
+leak:libintelocl.so
+leak:libocl_svml_l9.so
+leak:libirng.so
+leak:libcommon_clang.so
+leak:libigc.so
+leak:libiga.so
+leak:libze_loader.so
+leak:Intel::OpenCL
+leak:__ocl_svml
+leak:dErfInv
+
+# OpenCL ICD Loader and NVIDIA OpenCL Driver
+leak:libOpenCL.so
+leak:libOpenCL.so.1
+leak:libnvidia-opencl.so
+leak:libpocl.so
+
+# oneTBB, the task scheduler the Intel OpenCL CPU runtime dispatches through.
+# Its arena is allocated once, from the ICD loader's `pthread_once`, and lives
+# until the process dies; ASan needs `fast_unwind_on_malloc=0` to attribute it
+# here at all (see test/memory-check.sh).
+leak:libtbb.so
+leak:libtbbmalloc.so
+
+# NVHPC and OpenMP runtime internals
+leak:libnvomp.so
+leak:libgomp.so
+leak:initThreadInfoTables
+leak:initThreadId
+leak:hxiInitThreadId
+
+# MPI runtimes (OpenMPI / HPC-X).
+#
+# The launcher, not the solver: PMIx keys its process-set data in shared memory
+# and hands out copies that live until the daemon exits (`PMIx_Value_xfer`,
+# `pmix_gds_shmem2_fetch`), and UCX/UCC/HCOLL register their transports and
+# memory domains once per rank. All of it is still allocated when the rank
+# calls `MPI_Finalize`, so LeakSanitizer reports it at exit; none of it is
+# reachable from this project's code. Named per module here so the sanitized
+# MPI pass in test/run-tests.sh can actually see the solver's own allocations.
+leak:libmpi.so
+leak:libopen-pal.so
+leak:libopen-rte.so
+leak:libpmix.so
+leak:mca_
+leak:libucp.so
+leak:libucs.so
+leak:libuct.so
+leak:libucm.so
+leak:libucc.so
+leak:libhcoll.so
+leak:libsharp.so

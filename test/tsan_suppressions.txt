@@ -1,0 +1,41 @@
+# ThreadSanitizer suppressions for LBM Mini-App
+# Suppresses benign data race warnings from uninstrumented third-party libraries and runtimes.
+
+# Kokkos OpenMP backend initialization and thread-count discovery
+race:Kokkos::Impl::OpenMPInternal::get_current_max_threads
+race:Kokkos_OpenMP_Instance.cpp
+race:Kokkos::Impl::OpenMPInternal*
+race:Kokkos::OpenMP*
+race:Kokkos::initialize*
+race:Kokkos::finalize*
+race:Kokkos::*
+race:desul::*
+
+# RAJA OpenMP internals
+race:RAJA::*
+race:camp::*
+
+# Uninstrumented OpenMP runtime library internals (libgomp, libomp, libnvomp)
+race:libgomp.so*
+race:libomp.so*
+race:libnvomp.so*
+race:nvomp*
+race:targetFuncHostTrampoline*
+race:gomp_*
+race:GOMP_*
+race:omp_*
+race:__kmp*
+race:kmp_*
+
+# Uninstrumented OpenCL / MPI / runtime libraries
+race:libintelocl.so*
+race:libtbb.so*
+race:libmpi*.so*
+race:ompi_*
+race:mca_*
+called_from_lib:libgomp.so*
+called_from_lib:libomp.so*
+called_from_lib:libnvomp.so*
+called_from_lib:libintelocl.so*
+called_from_lib:libtbb.so*
+called_from_lib:libmpi*.so*

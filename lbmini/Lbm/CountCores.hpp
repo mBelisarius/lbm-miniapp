@@ -3,10 +3,12 @@
 
 #include <cmath>
 #include <fstream>
+#ifdef __linux__
 #include <sched.h>
+#include <unistd.h>
+#endif
 #include <string>
 #include <thread>
-#include <unistd.h>
 
 namespace lbmini {
 /**
@@ -68,6 +70,7 @@ inline int CountPerformanceCores() {
  * @brief Restrict the process CPU affinity to performance cores only.
  */
 inline void SetProcessToPerformanceCores() {
+  #ifdef __linux__
   std::ifstream in("/sys/devices/cpu_core/cpus");
   if (!in.is_open())
     return; // Fallback to OS default
@@ -105,6 +108,7 @@ inline void SetProcessToPerformanceCores() {
   if (has_cores) {
     sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
   }
+  #endif
 }
 }
 

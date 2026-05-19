@@ -7,9 +7,10 @@
 #include <unsupported/Eigen/CXX11/Tensor>
 
 #include "Data.hpp"
-#include "Lbm/CountCores.hpp"
+#include "Guards.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
+#include "Utils.hpp"
 
 namespace lbmini::openacc::cpu {
 /**
@@ -27,14 +28,12 @@ namespace lbmini::openacc::cpu {
  *    kernel inside uses `#pragma acc parallel loop` to amortise
  *    fork/join. The O(1) buffer swap between kernels is guarded by
  *    ``, whose implicit barrier orders the ping-pong.
- *  - The constructor honours the `cores` field of `config.yaml` via
- *    `omp_set_num_threads(...)`. When `cores == 0`, it auto-detects the
- *    number of performance cores on hybrid Intel hosts via
- *    `CountPerformanceCores()`, so E-cores (which slow down static-scheduled
- *    bandwidth-bound kernels) are excluded.
- *  - Thread and memory affinity is pinned with `OMP_PLACES=cores` and
- *    `OMP_PROC_BIND=close`, set from the constructor before the first
- *    parallel region so first-touch allocations are NUMA-local.
+ *  - Thread count and thread/memory affinity are process-global settings and
+ *    belong to `lbmini::Executor`, which applies the `cores` field of
+ *    `config.yaml` (or the auto-detected performance-core count),
+ *    `ACC_NUM_CORES` and the `OMP_PLACES` / `OMP_PROC_BIND` placement policy
+ *    once per process, before any solver exists. The constructor deliberately
+ *    touches none of it.
  */
 template<typename Scalar, typename LatticeType>
 class LbmTube : public ILbmTube<Scalar, LatticeType> {
@@ -53,6 +52,19 @@ public:
     const ControlData<Scalar>& control,
     const PerformanceData& performance
   );
+
+  // The solver caches raw `fCur_`/`fAlt_` ping-pong pointers into its own
+  // buffers; a copy would leave them aliasing the source's storage and a move
+  // would leave them dangling. Solvers are heavy, unique objects held behind
+  // `ILbmTubeNd*`, so the operations are deleted rather than implemented,
+  // uniformly across every backend. See docs/memory-safety.md §5.2.
+  LbmTube(const LbmTube&) = delete;
+
+  LbmTube& operator=(const LbmTube&) = delete;
+
+  LbmTube(LbmTube&&) = delete;
+
+  LbmTube& operator=(LbmTube&&) = delete;
 
   /**
    * @name Macroscopic field getters
@@ -110,7 +122,10 @@ protected:
    */
   void streamAndMacroscopic();
 
-private:
+  // Deliberately `protected` rather than `private`: the memory-safety suite
+  // (`test/streaming_table_test.cpp`) derives from this class to assert that
+  // every precomputed gather index stays inside `[0, N_)`.
+protected:
   /**
    * @brief Precompute per-(cell, idc) streaming neighbor indices and weights.
    *
@@ -174,27 +189,16 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   const PerformanceData& performance
 )
   : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
-  // P-core affinity and NUMA-local binding. Must be set BEFORE the first
-  // parallel region so the OpenMP runtime picks them up. `setenv(..., 0)`
-  // preserves the user's env if they already exported a value manually.
-  setenv("OMP_PLACES", "cores", 0);
-  setenv("OMP_PROC_BIND", "close", 0);
+  // Everything below derives from these two extents, so they are checked
+  // before the first allocation: a zero extent yields an empty buffer the
+  // kernels still index, and a cell count beyond int32 wraps the streaming
+  // tables into negative (wild) indices.
+  ValidateMeshExtents(mesh.size[0], mesh.size[1], kQ_, "openacc::cpu::LbmTube");
 
-  // Honour the config.yaml `cores` setting. On `cores == 0` (auto), count
-  // only the performance cores on hybrid Intel hosts (E-cores drag static
-  // schedules down); otherwise respect the explicit value.
-  if (kPerformance_.cores > 0) {
-    // OpenACC doesn't have an omp_set_num_threads equivalent that works seamlessly
-    // without env vars in all compilers. We set the env var ACC_NUM_CORES in main.cpp.
-  } else {
-    // Similarly, rely on ACC_NUM_CORES being set by main or the user,
-    // or just let it use all available cores. But wait, the issue states
-    // "using only the Performance P-Cores results in a faster simulation, investigate this and fix if encessary."
-    // So for OpenACC CPU, if cores is 0, we should set the ACC_NUM_CORES here or in main.cpp.
-    // Actually, setting `ACC_NUM_CORES` using `CountPerformanceCores()` here makes sense.
-    std::string coresStr = std::to_string(lbmini::CountPerformanceCores());
-    setenv("ACC_NUM_CORES", coresStr.c_str(), 0);
-  }
+  // Thread count and affinity (`ACC_NUM_CORES`, `OMP_PLACES`, `OMP_PROC_BIND`)
+  // are process-global state with a single owner, `lbmini::Executor`: writing
+  // them from here would silently reconfigure every other live solver and race
+  // with any thread reading the environment.
 
   nx_ = mesh.size[0];
   ny_ = mesh.size[1];
@@ -786,7 +790,7 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
         const Scalar w11 = Scalar{ 1 } / std::pow(d11, idw);
         const Scalar wsum = w00 + w10 + w01 + w11;
 
-        if (!std::isfinite(wsum) || wsum < kTiny_) {
+        if (!IsFinite(wsum) || wsum < kTiny_) {
           // Degenerate fallback: nearest neighbor, bounce-back on x out-of-range.
           Index xN = static_cast<Index>(std::round(xSrc));
           Index yN = static_cast<Index>(std::round(ySrc));
@@ -817,6 +821,12 @@ void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
       }
     }
   }
+
+  // One-off proof that the gather table only addresses existing cells. This is
+  // what licenses `stream()` to dereference `streamIdx_` with no bounds check
+  // whatsoever: the cost is a single linear pass at construction, against
+  // thousands of time steps of unguarded, full-speed gathering.
+  VerifyIndexTable(streamIdx_, N_, "openacc::cpu::LbmTube");
 }
 
 template<typename Scalar, typename LatticeType>
