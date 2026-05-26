@@ -22,7 +22,8 @@ A simulação de escoamentos complexos tornou-se uma ferramenta indispensável e
 A crescente demanda por simulações com alta fidelidade decorre da necessidade de prever comportamentos fluidodinâmicos em condições extremas, como em escoamentos turbulentos, fenômenos de transição de fase e em reações químicas.
 Esses fenômenos apresentam forte dependência de pequenas escalas espaciais e temporais, o que exige discretizações refinadas e esquemas numéricos de alta ordem.
 A o mesmo tempo, testes experimentais em túnel de vento tornam‑se custosos e, por vezes, inviáveis quando se busca explorar amplos espaços de parâmetros, como variação de número de Mach, de número de Reynolds, e geometrias complexas.
-Assim, o emprego de métodos numéricos que garantam tanto exatidão quanto eficiência computacional torna‑se essencial para aplicações e pesquisas aeroespaciais e farmacêuticas, assim como para o desenvolvimento de turbo máquinas e motores de combustão~\cite{Mira2023}.
+Assim, o emprego de métodos numéricos que garantam tanto exatidão quanto eficiência computacional torna‑se essencial para aplicações e pesquisas aeroespaciais e farmacêuticas, assim como para o desenvolvimento de turbomáquinas e motores de combustão~\cite{Mira2023, Succi2001}.
+A versatilidade do LBM para lidar com escoamentos multifásicos e meios porosos tem sido amplamente documentada, consolidando-o como uma alternativa competitiva aos solvers tradicionais de volumes finitos (FVM)~\cite{Lauricella2025, Aniello2022}.
 
 Métodos tradicionais de CFD de alta fidelidade, como Large Eddy Simulation (LES) ou simulação direta de Navier–Stokes (DNS), alcançam incrível precisão, porém são tipicamente limitados por seus custos computacionais e de uso de memória.
 Isso se deve, pois, para capturar os efeitos turbulentos devido à vorticidade no escoamento, é necessária uma ampla escala de espaço, desde a escala do problema até a escala de Kolmogorov, onde os vórtices são dissipados por efeitos viscosos~\cite{Davidson2015}.
@@ -35,27 +36,281 @@ Dividir o domínio em subdomínios, cada um tratado em nós distintos de computa
 Nesse cenário, a integração entre algoritmos inovadores e a utilização de plataformas HPC emergentes, que combinam unidades de processamento central (CPUs) e aceleradores de hardware (GPUs, FPGAs, TPUs), é essencial para viabilizar simulações que reproduzam com precisão os fenômenos observados na natureza. \textcite{Karp2025} demonstra que, mesmo em arquiteturas modulares com CPUs e GPUs, é possível manter eficiência acima de 80\% em até milhares de núcleos, desde que a decomposição do domínio e comunicação entre núcleos sejam cuidadosamente projetados.
 Essa tendência é reforçada pelos estudos de \textcite{Davis2023}, que evidenciam a necessidade de desenvolver códigos que possam ser executados em arquiteturas diversas, garantindo escalabilidade e portabilidade sem prejuízo significativo de performance computacional.
 
+\subsection{Análise de Erros, Verificação e Validação}\label{subsec:erros-verificacao-validacao}
+
+A confiabilidade de simulações de alta fidelidade em CFD é fundamentada em processos rigorosos de Verificação e Validação (V\&V)~\cite{Roache1998, Oberkampf2010}.
+Enquanto a verificação busca assegurar que o modelo matemático está sendo resolvido corretamente (``resolver as equações de forma certa''), a validação visa confirmar se o modelo escolhido representa fielmente a realidade física (``resolver as equações certas'')~\cite{AIAA1998, ASME2009}.
+
+A análise de fenômenos fluidodinâmicos pode ser realizada por vias experimentais ou por meio de simulação numérica, cada qual apresentando vantagens e limitações distintas.
+A abordagem experimental, frequentemente realizada em túneis de vento ou bancadas de teste, oferece o contato direto com a realidade física.
+No entanto, enfrenta desafios como o alto custo de operação, a dificuldade de acesso a dados em todo o domínio de escoamento e a presença de erros de medição, calibração e interferência de sensores~\cite{Stern2001}.
+Em contrapartida, a simulação numérica permite a extração de dados detalhados em qualquer ponto do domínio e a exploração de amplos espaços de parâmetros a um custo comparativamente reduzido.
+Contudo, sua precisão é intrinsecamente dependente da qualidade dos modelos matemáticos e da resolução numérica empregada~\cite{Oberkampf2010}.
+
+O processo de simulação inicia-se com a modelagem matemática, onde o problema físico é traduzido em equações diferenciais governantes, como as equações de Navier-Stokes ou a equação de Boltzmann.
+Simplificações são frequentemente introduzidas para tornar o problema tratável, como a assunção de fluido incompressível, gás ideal ou regime estacionário.
+A resolução dessas equações pode ser feita de forma analítica, fornecendo soluções exatas, porém limitadas a problemas com geometrias e condições de contorno triviais.
+Para escoamentos complexos de interesse prático, a solução numérica torna-se imperativa, aproximando as equações contínuas por meio de métodos de discretização.
+
+A transição entre a realidade física e o resultado numérico introduz diversas fontes de erro que impactam a fidelidade da análise.
+O erro de modelagem decorre das simplificações nas equações governantes ou no uso de modelos que não capturam toda a física, refletindo-se na incapacidade de reproduzir fenômenos experimentais~\cite{AIAA1998}.
+Já o erro de discretização surge da transformação das equações diferenciais em algébricas, englobando truncagens espaciais e temporais que impactam a convergência e a captura de pequenas escalas~\cite{Roache1998}.
+Somam-se a estes o erro de iteração, associado ao processo de resolução numérica até atingir critérios de convergência, e o erro de arredondamento, resultante da precisão finita dos computadores.
+No contexto do LBM, a verificação exige estudos de convergência de malha, demonstrando que o erro global reduz-se com uma taxa de segunda ordem para escoamentos subsônicos~\cite{Rathnayake2024, Succi2001}.
+Em regimes compressíveis e hipersônicos, a presença de choques e descontinuidades introduz erros adicionais que podem degradar a ordem de convergência, exigindo técnicas de estabilização e sensores de choque para manter a integridade dos resultados~\cite{Tran2022, Qiu2020, Guo2020}.
+
 %---------------------------------------------------------------------------------------
 
 \section{Método de Lattice Boltzmann}\label{sec:metodo-de-lattice-boltzmann}
 
-O Método de Lattice Boltzmann (LBM) distingue‑se dos métodos tradicionais de CFD ao modelar o escoamento em escala mesoscópica através de modelos cinéticos discretos, operando sobre distribuições de partículas em nós de uma malha regular em vez de discretizar diretamente as equações de Navier–Stokes.
-Enquanto o método dos volumes finitos resolve as leis de conservação de massa, momento e energia pelos seus fluxos nas fronteiras de células, o LBM executa localmente dois passos simples de colisão e propagação (\textit{stream-and-collide}) para funções de distribuição em cada direção discreta do modelo.
-Essa estrutura de \textit{stream-and-collide} confere acoplamento estritamente local, minimizando dependências de vizinhança e favorecendo o paralelismo massivo, sobretudo em arquiteturas de memória distribuída e aceleradores de hardware~\cite{Chen1998}.
+O Método de Lattice Boltzmann (LBM) consolidou-se nas últimas décadas como uma abordagem mesoscópica robusta para a simulação de dinâmica dos fluidos, oferecendo uma alternativa computacionalmente eficiente aos métodos baseados na discretização direta das equações de Navier-Stokes.
+Como discutido em revisões seminais e livros-texto fundamentais~\cite{Chen1998, Succi2001, WolfGladrow2000}, o LBM não apenas simplifica o tratamento de geometrias complexas e condições de contorno, mas também se integra naturalmente a arquiteturas de computação paralela massiva.
+A fundamentação do método repousa na teoria cinética dos gases, modelando a evolução de funções de distribuição de partículas em uma rede discreta, em vez de resolver diretamente variáveis macroscópicas contínuas.
+\subsection{Evolução Histórica e de Autômatos de Gás de Rede}\label{subsec:lbm-historico}
 
-No contexto de escoamentos compressíveis e estudo de choques, o LBM tradicional, originalmente formulado para regimes quase incompressíveis, foi estendido através de variantes como múltiplos tempos de relaxação (MRT), modelos de função dupla de distribuição (DDF) e esquemas recursivos regularizados (RR, HRR)~\cite{Guo2020}.
-Essas extensões introduzem termos de correção de simetria e discretizações \textit{upwind} para capturar descontinuidades sem oscilações numéricas excessivas.
-Em particular, \textcite{Guo2020} demonstraram que, ao empregar um operador de colisão híbrido recursivo-regularizado e globalmente por um \textit{solver} de entropia pelo método de volumes finitos, é possível recuperar choques de alta intensidade com excelente concordância com soluções analíticas, mesmo em regime supersônico. \textcite{Qiu2020} validaram essa abordagem em tubos de choque com interação de camada limite, confirmando a estabilidade e precisão do LBM regularizado para escoamentos altamente compressíveis.
+A gênese do LBM está intrinsecamente ligada aos Autômatos de Gás de Rede (Lattice Gas Automata - LGA). O modelo precursor, conhecido como HPP (Hardy, Pomeau e Pazzis), demonstrou que leis macroscópicas de conservação poderiam emergir de regras locais simples de colisão e propagação em uma rede quadrada~\cite{HPP1973}.
+No entanto, o modelo HPP carecia de isotropia rotacional, o que impedia a recuperação correta das equações de Navier-Stokes.
+Este obstáculo foi superado por \textcite{Frisch1986} com a introdução do modelo FHP (Frisch, Hasslacher e Pomeau), que utilizava uma rede hexagonal para garantir a isotropia necessária, marcando o início da CFD baseada em redes discretas.
 
-Nos trabalhos recentes de \textcite{Tran2022}, observa-se o desenvolvimento de estratégias para aumentar a estabilidade e fidelidade do LBM em regimes compressíveis, onde um modelo LBM que emprega aproximações de equilíbrios locais obtidas analiticamente e numericamente, relaxação local dependente do nó e o conceito de \textit{shifted lattice} para estabilizar choques e fluxos supersônicos, validando o método em casos como o tubo de choque de Sod, escoamento ao redor de um cilindro e de um aerofólio NACA0012 com números de Reynolds de até $10^7$.
-No trabalho de \textcite{Rathnayake2024}, apresenta-se uma implementação prática do LBM compressível proposto por \textcite{Tran2022} com duas funções de distribuição por nó para conservar massa/momento e energia, além de técnicas numéricas auxiliares, como interpolação por distância inversa e resolução da distribuição de energias pelo método de Newton-Raphson, com uma análise de desempenho produzida no cluster HPC FAU Fritz.
+Como discutido por \textcite{Chen1998}, embora os modelos LGA fossem teoricamente atraentes pela sua simplicidade e conservação estrita, eles apresentavam desafios práticos significativos, como o ruído estatístico inerente às partículas booleanas e a falta de invariância de Galileu em altas velocidades.
+A transição definitiva para o LBM ocorreu quando pesquisadores propuseram substituir as partículas discretas por funções de distribuição contínuas, $f_i$, que representam a probabilidade de encontrar uma partícula em uma determinada direção de velocidade.
+Este avanço, liderado por \textcite{McNamara1988}, eliminou o ruído estatístico e permitiu o uso de operadores de colisão mais sofisticados.
+Subsequentemente, \textcite{Higuera1989} introduziram a linearização do operador de colisão, facilitando a análise de estabilidade e a implementação numérica que hoje fundamenta o método.
 
-Em termos de desempenho em sistemas de computação de alta performance, o LBM tem sido implementado com sucesso em GPUs, FPGAs e grandes clusters de computação heterogênea.
-A característica de localidade das computações necessárias permite alta paralelização e padrão de acesso à memória previsível, permitindo que implementações atinjam picos de centenas de GLUPS (\textit{giga‑lattice updates per second})~\cite{Ma2023}.
+\subsection{Escalas de Descrição e Modelagem Mesoscópica}\label{subsec:lbm-escalas}
 
-Comparado a \textit{solvers} de volumes finitos de alta ordem, o LBM frequentemente atinge maior taxa de atualização de célula por segundo, pois evita solucionadores implícitos ou iterações de sistemas lineares globais.
-Para malhas regulares de grande dimensão, um solver LBM otimizado em GPU supera um FVM explícito de segunda ordem por até duas vezes em atualizações de célula por segundo, especialmente quando a granularidade de paralelismo é alta ($\geq 1000$ células/thread)~\cite{Aniello2022}.
-No entanto, o LBM costuma requerer maior memória por nó de malha, pois há o armazenamento de múltiplas distribuições por célula contra poucas variáveis macroscópicas no FVM, o que pode limitar a resolução máxima em GPUs com memória restrita.
+A descrição de sistemas fluidodinâmicos pode ser abordada sob três perspectivas fundamentais, dependendo da escala de observação.
+Na escala molecular (microscópica), o fluido é tratado como um conjunto de partículas individuais que seguem as leis de Newton.
+Embora precisa, esta escala é computacionalmente proibitiva para sistemas macroscópicos.
+No extremo oposto, a escala macroscópica trata o fluido como um meio contínuo, regido pelas equações de Navier-Stokes.
+
+O LBM situa-se na escala mesoscópica, servindo como uma ponte entre as descrições micro e macroscópica.
+Em vez de rastrear cada partícula, o método opera sobre a função de distribuição de probabilidade $f(\mathbf{x}, \boldsymbol{\xi}, t)$, que descreve a densidade de partículas na posição $\mathbf{x}$ com velocidade $\boldsymbol{\xi}$ no tempo $t$.
+A evolução desta função é governada pela Equação de Transporte de Boltzmann:
+\begin{equation}
+    \frac{\partial f}{\partial t} + \boldsymbol{\xi} \cdot \nabla f + \frac{\mathbf{F}}{\rho} \cdot \nabla_{\boldsymbol{\xi}} f = \Omega(f)
+\end{equation}
+onde $\mathbf{F}$ representa forças externas e $\Omega(f)$ é o operador de colisão.
+
+A Figura~\ref{fig:lbm-escalas} ilustra a hierarquia destas escalas e o posicionamento do LBM como um elo entre o mundo molecular e o contínuo.
+
+\begin{figure}[H]
+    \centering
+    \fbox{IMAGEM PLACEHOLDER: Hierarquia de Escalas de Descrição}
+    \caption{Representação das escalas de descrição de um fluido: microscópica (partículas individuais), mesoscópica (funções de distribuição de probabilidade - LBM) e macroscópica (meio contínuo - Navier-Stokes).}
+    \label{fig:lbm-escalas}
+\end{figure}
+
+A transição entre as escalas é quantificada pelo número de Knudsen ($Kn = \lambda/L$), onde $\lambda$ é o caminho livre médio.
+O LBM é particularmente eficaz no regime hidrodinâmico ($Kn \to 0$), onde recupera as equações de Navier-Stokes via análise de Chapman-Enskog~\cite{Chen1998, Benzi1992}.
+A fundamentação teórica que conecta a equação de Boltzmann contínua à sua forma discretizada na rede foi formalizada por \textcite{He1997}, que demonstraram como o LBE pode ser derivado rigorosamente através da discretização do espaço de fases.
+
+\subsection{Dedução da Equação de Lattice Boltzmann}\label{subsec:lbm-deducao}
+
+A derivação do LBM a partir da equação de Boltzmann contínua envolve a discretização do espaço de fases (espaço e velocidades) e do tempo.
+O ponto de partida é a aproximação de relaxação simples de \textcite{Bhatnagar1954}, conhecida como operador BGK:
+\begin{equation}
+    \frac{\partial f}{\partial t} + \boldsymbol{\xi} \cdot \nabla f = -\frac{1}{\tau}(f - f^{eq})
+\end{equation}
+onde $f^{eq}$ é a distribuição de equilíbrio de Maxwell-Boltzmann.
+A discretização do espaço de velocidades é realizada projetando-se a função de distribuição em uma base de polinômios de Hermite ortogonais, $\mathcal{H}^{(n)}(\boldsymbol{\xi})$.
+Como demonstrado por \textcite{Shan2006}, a truncagem desta expansão em ordem $N$ define a fidelidade com que os momentos macroscópicos são capturados, permitindo que o método recupere as equações hidrodinâmicas com precisão controlada.
+A escolha do conjunto de velocidades discretas, ou quadratura de Hermite, é crucial para a preservação da simetria galileana e a isotropia do escoamento~\cite{Guo2020}.
+
+Integrando a equação ao longo das linhas características em um intervalo de tempo $\Delta t$, e assumindo que o termo de colisão varia linearmente, obtém-se a Equação de Lattice Boltzmann (LBE):
+\begin{equation}
+    f_i(\mathbf{x} + \mathbf{c}_i\Delta t, t + \Delta t) - f_i(\mathbf{x}, t) = -\frac{\Delta t}{\tau + \Delta t/2}(f_i(\mathbf{x}, t) - f_i^{eq}(\mathbf{x}, t))
+\end{equation}
+A redefinição do tempo de relaxação como $\bar{\tau} = \tau / \Delta t + 1/2$ leva à forma clássica utilizada em implementações numéricas.
+Este processo de discretização garante que a conservação de massa e momento seja mantida exatamente ao nível da malha, enquanto a viscosidade emerge como uma propriedade do processo de relaxação.
+
+\subsection{O Método LBM Clássico Incompressível: Modelo D2Q9}\label{subsec:lbm-incompressivel}
+
+O modelo D2Q9 (duas dimensões e nove velocidades discretas) é a formulação mais comum para escoamentos incompressíveis ou fracamente compressíveis, tendo sido introduzido e popularizado por \textcite{Qian1992}.
+Neste modelo, as velocidades discretas $\mathbf{c}_i$ são organizadas em uma rede quadrada:
+\begin{equation}
+    \mathbf{c}_i = \begin{cases} (0, 0), & i=0 \\ (\pm 1, 0)c, (0, \pm 1)c, & i=1,2,3,4 \\ (\pm 1, \pm 1)c, & i=5,6,7,8 \end{cases}
+\end{equation}
+onde $c = \Delta x / \Delta t$ é a velocidade da rede.
+Os pesos de quadratura $w_i$ associados a estas direções são fundamentais para garantir a isotropia do tensor de tensões: $w_0 = 4/9$, $w_{1,2,3,4} = 1/9$ e $w_{5,6,7,8} = 1/36$.
+
+A Figura~\ref{fig:lbm-lattices} apresenta a disposição espacial das velocidades discretas para os modelos D2Q9 e o seu análogo tridimensional D3Q19.
+
+\begin{figure}[H]
+    \centering
+    \fbox{IMAGEM PLACEHOLDER: Topologias de Rede LBM (D2Q9 e D3Q19)}
+    \caption{Representação esquemática dos conjuntos de velocidades discretas: (a) modelo D2Q9 com 9 velocidades em duas dimensões e (b) modelo D3Q19 com 19 velocidades em três dimensões.}
+    \label{fig:lbm-lattices}
+\end{figure}
+
+A função de distribuição de equilíbrio para o regime incompressível é dada pela expansão de segunda ordem da Maxwelliana:
+\begin{equation}
+    f_i^{eq} = w_i \rho \left[ 1 + \frac{3(\mathbf{c}_i \cdot \mathbf{u})}{c^2} + \frac{9(\mathbf{c}_i \cdot \mathbf{u})^2}{2c^4} - \frac{3\mathbf{u}^2}{2c^2} \right]
+\end{equation}
+onde a velocidade do som no lattice é fixada em $c_s = c/\sqrt{3}$.
+As variáveis macroscópicas são recuperadas através dos momentos da distribuição discreta:
+\begin{equation}
+    \rho = \sum_{i=0}^8 f_i, \quad \rho \mathbf{u} = \sum_{i=0}^8 f_i \mathbf{c}_i
+\end{equation}
+A pressão é determinada diretamente da densidade pela equação de estado $p = c_s^2 \rho$.
+Esta relação implica que o método opera em um regime fracamente compressível, onde o erro de compressibilidade é proporcional a $O(Ma^2)$, sendo desprezível para números de Mach baixos ($Ma < 0.1$).
+
+\subsection{Análise Multiescala de Chapman-Enskog}\label{subsec:lbm-chapman-enskog}
+
+A transição formal da escala cinética para a hidrodinâmica é estabelecida através da análise de Chapman-Enskog.
+Esta técnica permite derivar as equações de conservação de massa e momento (Navier-Stokes) a partir da Equação de Lattice Boltzmann, tratando as variáveis macroscópicas como variações lentas em relação aos processos de colisão microscópicos.
+
+O ponto de partida é a expansão perturbativa da função de distribuição em torno do estado de equilíbrio local $f_i^{eq}$:
+\begin{equation}
+    f_i = f_i^{(0)} + \epsilon f_i^{(1)} + \epsilon^2 f_i^{(2)} + \mathcal{O}(\epsilon^3)
+\end{equation}
+onde $\epsilon$ representa o número de Knudsen, que atua como um parâmetro de escala pequeno.
+Por definição, $f_i^{(0)} = f_i^{eq}$, o que implica que os momentos macroscópicos de densidade e momento linear são preservados pela distribuição de equilíbrio:
+\begin{equation}
+    \sum_i f_i^{(0)} = \rho, \quad \sum_i f_i^{(0)} \mathbf{c}_i = \rho \mathbf{u}
+\end{equation}
+Consequentemente, as correções de ordem superior não devem contribuir para os momentos primários:
+\begin{equation}
+    \sum_i f_i^{(k)} = 0, \quad \sum_i f_i^{(k)} \mathbf{c}_i = 0, \quad k \ge 1
+\end{equation}
+
+A análise multiescala introduz diferentes escalas de tempo e espaço, associadas à advecção e à dissipação viscosa.
+As derivadas parciais são expandidas em potências de $\epsilon$:
+\begin{equation}
+    \frac{\partial}{\partial t} = \epsilon \frac{\partial}{\partial t_1} + \epsilon^2 \frac{\partial}{\partial t_2}, \quad \nabla = \epsilon \nabla_1
+\end{equation}
+Ao aplicar esta expansão à Equação de Lattice Boltzmann e realizar uma expansão de Taylor em torno de $(\mathbf{x}, t)$, é possível agrupar os termos em potências sucessivas de $\epsilon$, como esquematizado na Figura~\ref{fig:lbm-chapman-enskog-diagram}.
+
+\begin{figure}[H]
+    \centering
+    \fbox{IMAGEM PLACEHOLDER: Fluxograma da Expansão de Chapman-Enskog}
+    \caption{Diagrama conceitual da análise multiescala de Chapman-Enskog, mostrando a recuperação das equações de Euler na ordem $\epsilon^1$ e das equações de Navier-Stokes na ordem $\epsilon^2$.}
+    \label{fig:lbm-chapman-enskog-diagram}
+\end{figure}
+
+Na ordem $\epsilon^1$, a análise recupera as equações de Euler para fluidos não-viscosos:
+\begin{equation}
+    \frac{\partial \rho}{\partial t_1} + \nabla_1 \cdot (\rho \mathbf{u}) = 0
+\end{equation}
+\begin{equation}
+    \frac{\partial (\rho \mathbf{u})}{\partial t_1} + \nabla_1 \cdot \boldsymbol{\Pi}^{(0)} = 0
+\end{equation}
+onde $\boldsymbol{\Pi}^{(0)} = \sum_i \mathbf{c}_i \mathbf{c}_i f_i^{(0)}$ representa o tensor de fluxo de momento no equilíbrio.
+
+Na ordem $\epsilon^2$, os efeitos de transporte viscoso são incorporados, levando à recuperação das equações de Navier-Stokes completas.
+A viscosidade cinemática $\nu$ é formalmente derivada como:
+\begin{equation}
+    \nu = c_s^2 \left( \tau - \frac{1}{2} \right) \Delta t
+\end{equation}
+O termo $-1/2$ surge como uma correção discreta de segunda ordem, essencial para garantir a precisão do método em relação à viscosidade física do fluido.
+Esta derivação, detalhada em \textcite{Chen1998} e \textcite{Guo2020}, demonstra que o LBM resolve efetivamente as equações de Navier-Stokes no limite de baixo número de Mach, consolidando sua validade como um solver de dinâmica dos fluidos.
+
+\subsection{Mapeamento de Unidades e Adimensionalização}\label{subsec:lbm-unidades}
+
+Uma característica distintiva do LBM é a execução das simulações em um sistema de unidades próprio, frequentemente chamado de ``unidades do lattice'' (\textit{lattice units}, LU). Neste sistema, a distância entre nós da malha ($\Delta x$), o passo de tempo ($\Delta t$) e a densidade de referência ($\rho_0$) são geralmente normalizados para a unidade.
+
+O mapeamento entre o mundo físico e o lattice é feito através de números adimensionais, principalmente o número de Reynolds ($Re = U L / \nu$) e, em escoamentos compressíveis, o número de Mach ($Ma = U / c_s$). Para garantir a similaridade dinâmica, os números adimensionais na simulação devem coincidir com os do problema físico.
+A viscosidade no lattice ($\nu_{lb}$) é então determinada por:
+\begin{equation}
+    \nu_{lb} = \frac{u_{lb} N}{Re}
+\end{equation}
+onde $u_{lb}$ é a velocidade característica no lattice (limitada por critérios de estabilidade e compressibilidade) e $N$ é o número de nós que representa a escala $L$.
+A escolha correta desses parâmetros é vital para evitar erros de simulação e garantir que os resultados possam ser convertidos de volta para unidades físicas com precisão~\cite{Rathnayake2024}.
+
+\subsection{Operadores de Colisão e Estabilidade Numérica}\label{subsec:lbm-colisao}
+
+Embora o modelo BGK seja amplamente utilizado devido à sua simplicidade, ele apresenta limitações intrínsecas, como o número de Prandtl fixo ($\Pr = 1$ para o modelo BGK padrão) e instabilidades em regimes de baixas viscosidades (altos números de Reynolds).
+Como discutido por \textcite{Chen1998}, para superar estas deficiências, foram desenvolvidos operadores de colisão mais robustos, como o de Múltiplos Tempos de Relaxação (MRT) e o Entrópico (ELBM).
+
+No modelo MRT, o processo de colisão é realizado no espaço de momentos em vez do espaço de funções de distribuição.
+Uma matriz de transformação $\mathbf{M}$ mapeia as funções de distribuição para um conjunto de momentos macroscópicos e não-físicos, $\mathbf{m} = \mathbf{M}\mathbf{f}$.
+A colisão ocorre como uma relaxação linear destes momentos para seus estados de equilíbrio:
+\begin{equation}
+    \mathbf{f}^* = \mathbf{f} - \mathbf{M}^{-1}\mathbf{S}[\mathbf{M}\mathbf{f} - \mathbf{m}^{eq}]
+\end{equation}
+onde $\mathbf{S}$ é uma matriz diagonal contendo as taxas de relaxação individuais para cada momento.
+Esta flexibilidade permite ajustar independentemente a viscosidade de cisalhamento e a viscosidade de volume, melhorando significativamente a estabilidade e a precisão em escoamentos complexos. \textcite{Benzi1992} destaca que esta abordagem é fundamental para simulações de turbulência onde a dissipação em pequenas escalas deve ser cuidadosamente controlada.
+Adicionalmente, o modelo de momentos generalizado proposto por \textcite{dHumières1992} fornece a base para implementações MRT modernas que superam a rigidez do parâmetro de relaxação único do modelo BGK\@.
+
+\subsection{Regularização de Momentos e Escoamentos Compressíveis}\label{subsec:lbm-regularizacao}
+
+Para escoamentos em regimes de alta velocidade, a estabilidade do LBM é frequentemente comprometida por erros de truncagem na quadratura de Hermite.
+A técnica de regularização busca mitigar este problema filtrando componentes de não-equilíbrio que não pertencem ao espaço de polinômios de Hermite suportado pelo lattice.
+O princípio da Regularização Recursiva (RR), detalhado por \textcite{Guo2020}, baseia-se na projeção da parte de não-equilíbrio $f_i^{neq} = f_i - f_i^{eq}$ nos polinômios de Hermite antes do passo de colisão.
+Como demonstrado por \textcite{Latt2006}, a regularização permite a reconstrução de funções de distribuição mais estáveis ao descartar momentos de ordens superiores que não são suportados pela rede discreta, reduzindo instabilidades numéricas em altos gradientes.
+
+A versão Híbrida (HRR) combina esta projeção com o cálculo de momentos via diferenças finitas em regiões de altos gradientes, como em frentes de choque.
+Esta técnica, validada por \textcite{Qiu2020}, permite o uso de redes de baixa conectividade (como D2Q9 ou D3Q19) em números de Mach elevados, onde tradicionalmente seriam exigidas redes de ordem superior.
+A regularização atua como um mecanismo de estabilização que preserva a integridade física da distribuição de partículas, evitando divergências numéricas sem introduzir dissipação excessiva.
+
+\subsection{Técnica de Dupla Distribuição e Redes Deslocadas}\label{subsec:lbm-tran-rathnayake}
+
+A simulação de escoamentos compressíveis térmicos exige a conservação estrita da energia total.
+No LBM, isto é frequentemente alcançado através do modelo de Dupla Função de Distribuição (DDF), onde um conjunto $f_i$ resolve a massa e o momento, enquanto um segundo conjunto $g_i$ (ou $h_i$) resolve a equação da energia.
+O modelo implementado por \textcite{Tran2022} e \textcite{Rathnayake2024} utiliza esta abordagem aliada ao conceito de \textit{shifted lattices} (redes deslocadas).
+
+Em redes deslocadas, o conjunto de velocidades discretas $\mathbf{c}_i$ é transladado por uma velocidade de referência $\mathbf{U}_{ref}$, permitindo que a quadratura de Hermite seja centrada na região de maior densidade de probabilidade no espaço de velocidades para escoamentos supersônicos, conforme ilustrado na Figura~\ref{fig:lbm-shifted-lattice}.
+
+\begin{figure}[H]
+    \centering
+    \fbox{IMAGEM PLACEHOLDER: Conceito de Redes Deslocadas (Shifted Lattices)}
+    \caption{Comparação entre uma rede padrão centrada na origem e uma rede deslocada por uma velocidade de referência $\mathbf{U}_{ref}$, otimizando a captura da função de distribuição em escoamentos de alta velocidade.}
+    \label{fig:lbm-shifted-lattice}
+\end{figure}
+
+Esta técnica reduz drasticamente os erros de Galileu e expande a região de estabilidade do método para regimes hipersônicos ($Ma > 5$). O acoplamento entre as distribuições e o uso de métodos iterativos, como o de Newton-Raphson, para determinar a temperatura local garantem a consistência termodinâmica do solver.
+
+\subsection{Implementação Algorítmica e Fluxo de Trabalho}\label{subsec:lbm-algoritmo}
+
+A estrutura computacional do LBM é notavelmente simples e local, o que favorece a paralelização massiva.
+O ciclo básico consiste em quatro etapas principais: inicialização, colisão, propagação e aplicação de condições de contorno.
+O Algoritmo~\ref{alg:lbm-cycle} descreve o fluxo lógico de um passo de tempo.
+
+\begin{algorithm}[H]
+\caption{Ciclo de Execução de um Passo de Tempo no LBM}\label{alg:lbm-cycle}
+\Entrada{Distribuições $f_i(\mathbf{x}, t)$}
+\Saida{Distribuições atualizadas $f_i(\mathbf{x}, t + \Delta t)$}
+\Para{cada nó $\mathbf{x}$ do lattice}{
+    Calcular momentos macroscópicos: $\rho = \sum f_i$ e $\mathbf{u} = \frac{1}{\rho} \sum f_i \mathbf{c}_i$\;
+    Calcular a distribuição de equilíbrio $f_i^{eq}(\rho, \mathbf{u})$\;
+    \textbf{Colisão:} $f_i^{coll}(\mathbf{x}, t) = f_i(\mathbf{x}, t) - \frac{1}{\tau} (f_i(\mathbf{x}, t) - f_i^{eq}(\mathbf{x}, t))$\;
+}
+\Para{cada nó $\mathbf{x}$ do lattice}{
+    \textbf{Propagação:} $f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i^{coll}(\mathbf{x}, t)$\;
+}
+Aplicar condições de contorno (ex: \textit{bounce-back})\;
+\Retorne{ $f_i(\mathbf{x}, t + \Delta t)$ }
+\end{algorithm}
+
+\begin{figure}[H]
+    \centering
+    % Placeholder para Imagem: Ilustração do processo de Stream-and-Collide em uma rede D2Q9.
+    % A imagem deve mostrar a colisão local nos nós seguida pelo deslocamento das partículas para os vizinhos.
+    \fbox{IMAGEM PLACEHOLDER: Processo de Streaming e Colisão no LBM}
+    \caption{Representação esquemática do passo de colisão local e propagação adjacente em uma rede bidimensional D2Q9.}
+    \label{fig:lbm-stream-collide}
+\end{figure}
+
+
+\subsection{Tratamento de Condições de Contorno e Estabilização Hipersônica}\label{subsec:lbm-contorno-hipersonico}
+
+O tratamento de condições de contorno (BC) no LBM exige a determinação das funções de distribuição que entram no domínio a partir das fronteiras, garantindo que as leis de conservação e o comportamento hidrodinâmico sejam preservados.
+As técnicas mais comuns incluem:
+\begin{itemize}
+    \item \textbf{Bounce-Back:} Utilizado para condições de não-escorregamento (\textit{no-slip}) em paredes sólidas, onde as partículas que atingem a parede são refletidas de volta para o domínio.
+    Esta técnica é valorizada por sua simplicidade e capacidade de lidar com geometrias complexas sem perda de massa~\cite{He1997}.
+    \item \textbf{Equilibrium e Non-Equilibrium BC:} As distribuições na fronteira são impostas combinando os valores de equilíbrio correspondentes às variáveis macroscópicas desejadas com correções de não-equilíbrio.
+    O método proposto por \textcite{Zou1997} é amplamente utilizado para prescrever perfis de velocidade ou pressão com precisão de segunda ordem.
+    \item \textbf{Anti-Specular Bounce-Back:} Utilizado em saídas de escoamento para minimizar reflexões de ondas de pressão e garantir a saída suave do fluido do domínio computacional.
+\end{itemize}
+
+Para escoamentos hipersônicos, a estabilização adicional é necessária devido às severas descontinuidades.
+Além da regularização HRR, utilizam-se técnicas como o \textit{Lax-Wendroff LBM} ou esquemas de interpolação \textit{upwind} (como WENO) para a etapa de propagação.
+Estas técnicas introduzem uma dissipação numérica controlada que inibe as oscilações de Gibbs próximas aos choques, permitindo a simulação estável de números de Mach elevados ($Ma > 5$)~\cite{Tran2022}.
+
+A simulação de regimes hipersônicos também exige a consideração de efeitos de alta temperatura, como a excitação de modos vibracionais e a dissociação molecular.
+Embora o modelo de gás ideal seja frequentemente utilizado como primeira aproximação, extensões do LBM com equações de estado mais complexas e termos de fonte para reações químicas estão em desenvolvimento ativo, permitindo que o método mesoscópico aborde a física complexa da reentrada atmosférica~\cite{Guo2020}.
+
 
 %---------------------------------------------------------------------------------------
 
@@ -65,7 +320,8 @@ Historicamente, os supercomputadores evoluíram de sistemas monolíticos para ar
 A transição para processadores multi-core e a introdução de aceleradores de hardware, como GPUs e FPGAs, permitiram um salto significativo no poder computacional.
 Esses avanços possibilitaram a execução de simulações em escalas até então inimagináveis, permitindo a modelagem de fenômenos complexos com alta resolução espacial e temporal.
 As GPUs, originalmente desenvolvidas para renderização gráfica, provaram ser extremamente eficientes para computação de propósito científico devido à sua capacidade de realizar cálculos em paralelo em milhares de núcleos em simultâneo.
-Já as FPGAs oferecem flexibilidade para a implementação de algoritmos específicos com eficiência energética elevada. \cite{Karp2025}.
+Esta arquitetura é particularmente vantajosa para o LBM, dada a localidade espacial do passo de colisão e a natureza de acesso a memória do passo de propagação~\cite{Ma2023, Tomczak2021}.
+Já as FPGAs oferecem flexibilidade para a implementação de algoritmos específicos com eficiência energética elevada~\cite{Karp2025, Herdman2012}.
 
 A crescente diversidade de arquiteturas levou ao desenvolvimento de diversos frameworks que auxiliam os programadores a escrever códigos que possam ser executados de forma eficiente em plataformas heterogêneas.
 A escolha entre frameworks proprietários, como CUDA, e camadas de abstração, como Kokkos ou RAJA, envolve uma decisão entre desempenho e portabilidade.
