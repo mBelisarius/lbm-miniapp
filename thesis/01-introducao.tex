@@ -22,25 +22,25 @@
 %---------------------------------------------------------------------------------------
 
 Simulações de escoamentos complexos se tornou uma tarefa indispensável em diversas áreas da engenharia e das ciências aplicadas.
-A crescente demanda por simulações com alta fidelidade decorre da necessidade de prever comportamentos fluidodinâmicos em condições extremas, como em escoamentos turbulentos, fenômenos de transição de fase e em reações químicas, sem incorrer em custos proibitivos de experimentação física \cite{Aniello2022}.
+A crescente demanda por simulações com alta fidelidade decorre da necessidade de prever comportamentos fluidodinâmicos em condições extremas, como em escoamentos turbulentos, fenômenos de transição de fase e em reações químicas, sem incorrer em custos proibitivos de experimentação física \parencite{Aniello2022}.
 
-A fim de reduzir o tempo de desenvolvimento e os custos operacionais de simulações, é fundamental o emprego de métodos numéricos eficientes e escaláveis, aliados ao uso de sistemas computacionais de alta performance, onde a divisão em tarefas computacionais menores e a adoção de técnicas de programação paralela possibilita a execução de simulações com alta resolução em hardware moderno, otimizando o tempo de processamento e reduzindo o custo computacional \cite{Chen1998}.
+A fim de reduzir o tempo de desenvolvimento e os custos operacionais de simulações, é fundamental o emprego de métodos numéricos eficientes e escaláveis, aliados ao uso de sistemas computacionais de alta performance, onde a divisão em tarefas computacionais menores e a adoção de técnicas de programação paralela possibilita a execução de simulações com alta resolução em hardware moderno, otimizando o tempo de processamento e reduzindo o custo computacional \parencite{Chen1998}.
 
 Historicamente, os supercomputadores evoluíram de sistemas monolíticos para arquiteturas altamente paralelas e distribuídas.
 A transição para processadores multicores e a introdução de aceleradores de hardware, como GPUs e FPGAs, permitiram um salto significativo no poder computacional.
 Esses avanços possibilitaram a execução de simulações em escalas até então inimagináveis, permitindo a modelagem de fenômenos complexos com alta resolução espacial e temporal.
 As GPUs, originalmente desenvolvidas para renderização gráfica, provaram ser extremamente eficientes para computação de propósito científico devido à sua capacidade de realizar cálculos em paralelo em milhares de núcleos em simultâneo.
-Já as FPGAs oferecem flexibilidade para a implementação de algoritmos específicos com eficiência energética elevada~\cite{Karp2025}.
+Já as FPGAs oferecem flexibilidade para a implementação de algoritmos específicos com eficiência energética elevada \parencite{Karp2025}.
 
 Nesse cenário, a integração entre algoritmos inovadores e a utilização de plataformas HPC emergentes, que combinam unidades de processamento central e aceleradores de hardware, é essencial para viabilizar simulações que reproduzam com precisão os fenômenos observados na natureza.
-Essa tendência é reforçada pelos estudos de \textcite{Davis2023}, que evidenciam a necessidade de desenvolver códigos que possam ser executados em arquiteturas diversas, garantindo escalabilidade e portabilidade sem prejuízo significativo de performance computacional.
+Esta tendência é reforçada pelos estudos de \textcite{Davis2023}, que evidenciam a necessidade de desenvolver códigos que possam ser executados em arquiteturas diversas, garantindo escalabilidade e portabilidade sem prejuízo significativo de performance computacional.
 
 O Método de Lattice Boltzmann (LBM) emergiu como uma abordagem alternativa aos métodos tradicionais de resolução das equações de Navier–Stokes para simulação de escoamentos, utilizando a teoria cinética dos gases em escala mesoscópica para simular o comportamento de escoamento de fluidos.
 Suas raízes remontam à década de 1980, com os trabalhos pioneiros que adaptaram modelos cinéticos discretos para a simulação de fluidos, inicialmente inspirados nos modelos de redes celulares e nos estudos sobre gases discretizados.
 Um dos marcos históricos foi a evolução a partir do modelo Lattice Gas Automata (LGA), que, apesar de suas limitações inerentes como ruído estatístico e a escalabilidade inadequada com o aumento do tamanho da malha, influenciou o desenvolvimento do LBM, que adota uma representação probabilística dos estados de partículas em uma malha regular através de processos de propagação (streaming) e colisão (relaxação).
-Essa abordagem permite que modelar comportamentos complexos, como a coexistência de fases vapor-líquido e a simulação de escoamentos em meios porosos ou com geometrias complexas, em processos altamente paralelizáveis~\cite{Chen1998}.
+Essa abordagem permite que modelar comportamentos complexos, como a coexistência de fases vapor-líquido e a simulação de escoamentos em meios porosos ou com geometrias complexas, em processos altamente paralelizáveis \parencite{Chen1998}.
 
-A introdução do operador de colisão contínuo para o método LBM, comumente aproximado pelo modelo BGK (Bhatnagar-Gross-Krook), proporcionou maior eficiência e flexibilidade, permitindo a recuperação das equações macroscópicas via expansão de Chapman-Enskog, e das grandezas macroscópicas através dos momentos das funções de distribuição~\cite{Bhatnagar1954}.
+A introdução do operador de colisão contínuo para o método LBM, comumente aproximado pelo modelo BGK (Bhatnagar-Gross-Krook), proporcionou maior eficiência e flexibilidade, permitindo a recuperação das equações macroscópicas via expansão de Chapman-Enskog, e das grandezas macroscópicas através dos momentos das funções de distribuição \parencite{Bhatnagar1954}.
 O modelo de colisão BGK é capaz de representar escoamentos compressíveis e foi utilizado por \textcite{Chu1965} para análise da formação de ondas de choque desde o surgimento do interesse nesse fenômeno.
 
 Com o crescente interesse dos fenômenos que permeiam os estudos de escoamento compressíveis devido ao desenvolvimento de teorias científicas e de produtos de engenharia, novas técnicas para simulação acurada dessa categoria de escoamentos foram publicadas.
@@ -49,7 +49,7 @@ Problemas com tubos de choque fornecem resultados sobre a dinâmica de gases de 
 
 Aplicações do método LBM para tubos de choque são amplamente estudadas, como mostra \textcite{Guo2020}.
 Entretanto, devido às descontinuidades nos campos das grandezas termodinâmicas do escoamento gerada pelas ondas de choque e a alteração do campo de entropia, a simulação computacional desse processo é dificultada pela presença de instabilidades numéricas próximas as descontinuidades.
-Ao utilizar técnicas de regularização no operador de colisão, assim como funções de distribuição de equilíbrio térmico, desenvolvimentos de implementações recentes do método foram capazes de simular escoamentos compressíveis em tubos de choque com camada limite~\cite{Qiu2020} e escoamentos compressíveis tridimensionais com grande variação nos campos de temperatura e de massa específica~\cite{Guo2020}.
+Ao utilizar técnicas de regularização no operador de colisão, assim como funções de distribuição de equilíbrio térmico, desenvolvimentos de implementações recentes do método foram capazes de simular escoamentos compressíveis em tubos de choque com camada limite \parencite{Qiu2020} e escoamentos compressíveis tridimensionais com grande variação nos campos de temperatura e de massa específica \parencite{Guo2020}.
 
 %---------------------------------------------------------------------------------------
 
@@ -73,24 +73,14 @@ Este trabalho tem por objetivo analisar a escalabilidade de diferentes filosofia
 
 \subsection{Objetivos específicos}\label{subsec:objetivos-especificos}
 
-Os objetivos específicos desse trabalho são listados abaixo:
-\begin{itemize}
-    \item Analisar a performance de diferentes filosofias e modelos de programação para computação heterogênea;
-    \item Comparar o ganho de performance de cada modelos de programação com o custo de desenvolvimento do mini-aplicativo ao utilizá-lo;
-    \item Analisar a escalabilidade do Método de Lattice Boltzmann para arquiteturas de computação massivamente paralelas;
-    \item Validar o Método de Lattice Boltzmann para problema de escoamento compressível em arquiteturas computacionais de próxima geração.
-\end{itemize}
+Os objetivos específicos deste trabalho compreendem: analisar a performance de diferentes filosofias e modelos de programação para computação heterogênea; comparar o ganho de performance de cada modelo de programação com o respectivo custo de desenvolvimento do mini-aplicativo; investigar a escalabilidade do Método de Lattice Boltzmann para arquiteturas de computação massivamente paralelas; e, por fim, validar o referido método para o problema de escoamento compressível em arquiteturas computacionais de próxima geração.
 
 %---------------------------------------------------------------------------------------
 
 \section{Organização do Trabalho}
 
-Este trabalho está organizado da seguinte forma:
-
-\begin{itemize}
-    \item O Capítulo 2 apresenta o referencial teórico sobre a formulação cinética do LBM, do operador de colisão BGK e variantes, e das extensões para compressibilidade, com base em \textcite{Chen1998, Guo2020, Tran2022, Rathnayake2024};
-    \item O Capítulo 3 descreve as métricas de avaliação de desempenho GLUPS, \textit{speedup} e eficiência, a estratégia de escalonamento forte e fraco, e os critérios de comparação entre as tecnologias de paralelização;
-    \item O Capítulo 4 detalha o desenho do mini-\textit{app} utilizando o método LBM para escoamentos compressíveis e as versões com diferentes modelos de programação (sequencial, OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA e MPI), discutindo decisões de engenharia de desempenho e portabilidade;
-    \item O Capítulo 5 apresenta os experimentos de desempenho e validação física no problema do tubo de choque, comparando os campos de densidade, pressão e velocidade com solução analítica de Sod e analisando a escalabilidade nas arquiteturas alvo;
-    \item Por fim, o Capítulo 6 resume a pesquisa, limitações e oportunidades de pesquisa, incluindo extensões para regimes hipersônicos e malhas maiores em arquiteturas heterogêneas de próxima geração.
-\end{itemize}
+Este trabalho está organizado da seguinte forma: o Capítulo 2 apresenta o referencial teórico sobre a formulação cinética do LBM, do operador de colisão BGK e suas variantes, além das extensões para compressibilidade, com base na literatura pertinente \parencite{Chen1998, Guo2020, Tran2022, Rathnayake2024}.
+No Capítulo 3, descrevem-se as métricas de avaliação de desempenho (GLUPS, \textit{speedup} e eficiência), a estratégia de escalonamento forte e fraco, e os critérios de comparação entre as tecnologias de paralelização.
+O Capítulo 4 detalha o desenho do mini-\textit{app} utilizando o método LBM para escoamentos compressíveis e as versões com diferentes modelos de programação (sequencial, OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA e MPI), discutindo decisões de engenharia de desempenho e portabilidade.
+O Capítulo 5 apresenta os experimentos de desempenho e validação física no problema do tubo de choque, comparando os campos de densidade, pressão e velocidade com a solução analítica de Sod e analisando a escalabilidade nas arquiteturas alvo.
+Por fim, o Capítulo 6 resume a pesquisa, abordando limitações e oportunidades de trabalhos futuros, incluindo extensões para regimes hipersônicos e malhas maiores em arquiteturas heterogêneas de próxima geração.

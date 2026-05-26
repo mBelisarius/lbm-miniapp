@@ -18,26 +18,25 @@ Os resultados demonstram (i) consistência numérica nos regimes com descontinui
 Do ponto de vista científico, a acurácia observada na razão de pressões pós-interação e a tendência de redução do EQM reforçam a viabilidade do LBM compressível como alternativa competitiva para problemas hiperbólicos com ondas de choque, preservando simplicidade algorítmica e regularidade de acesso à memória.
 Esse equilíbrio entre fidelidade física e eficiência computacional é particularmente atraente para estudos paramétricos e acoplamentos multiescala, onde o custo por simulação é crítico.
 
-Em termos de impacto acadêmico, o estudo fornece:
-- uma linha de base reprodutível para comparações entre esquemas de relaxação, discretizações em velocidade e estratégias de filtragem/dissipação controlada;
-- um perfil de desempenho que explicita gargalos práticos (largura de banda, afinidade, sincronizações), orientando pesquisas em otimização de kernels LBM no contexto de arquiteturas heterogêneas;
-- um artefato experimental útil para ensino e extensão, permitindo a estudantes e pesquisadores reproduzirem curvas de convergência e escalabilidade com esforço modesto.
+Em termos de impacto acadêmico, o estudo fornece uma linha de base reprodutível para comparações entre esquemas de relaxação, discretizações em velocidade e estratégias de filtragem ou dissipação controlada.
+Além disso, apresenta um perfil de desempenho que explicita gargalos práticos, tais como largura de banda, afinidade e sincronizações, orientando pesquisas em otimização de \textit{kernels} LBM no contexto de arquiteturas heterogêneas.
+Destaca-se também o desenvolvimento de um artefato experimental útil para ensino e extensão, permitindo a estudantes e pesquisadores a reprodução de curvas de convergência e escalabilidade com esforço modesto.
 
-Como próximos passos, propomos um roteiro de evolução tecnológica e experimental:
-1) Portabilidade e performance-portability:
-   - Reestruturação dos kernels de colisão e streaming utilizando Kokkos, explorando execution spaces (OpenMP, CUDA/HIP) e layouts de dados compatíveis com coalescência/vetorização.
-   - Variante com RAJA para avaliar abstrações alternativas de políticas de execução e tiling, comparando sobrecusto e expressividade.
-2) Paralelismo distribuído:
-   - Implementação de decomposição de domínio 1D/2D com MPI, ghost layers e comunicação não bloqueante, além de agregação de mensagens para reduzir latência.
-   - Overlap comunicação-computação via progress engine e postagens antecipadas, com estratégias de balanceamento por partições desiguais quando houver heterogeneidade.
-3) Benchmarks em ambiente HPC:
-   - Campanha de escalabilidade forte e fraca em cluster com nós CPU e GPU, variando \(N_x\)–\(N_y\) e passos de tempo, medindo: throughput (MLUPS), eficiência, roofline (AI vs. BW), e custo energético por passo (J/step) quando disponível.
-   - Estudos de sensibilidade a parâmetros físicos (Ma, \(\nu\)) e numéricos (ordem de quadratura, filtros) para mapear estabilidade/acurácia versus custo.
-4) Engenharia de desempenho:
-   - Layout SoA com blocagem espacial, prefetching e alinhamento explícito; fusão de kernels; redução de pressão na memória por compressão de distribuição ou reconstrução on-the-fly de momentos.
-   - Testes de afinidade NUMA, pinning e variação de granularidade de tarefas.
-5) Validações adicionais:
-   - Baterias de casos com choques mais fortes (Lax, Shu–Osher) e 2D (choque refletido, canal supersônico), confrontando com soluções exatas e DNS/CFD estabelecidas.
+Como trabalhos futuros, propõe-se um roteiro de evolução tecnológica e experimental estruturado em múltiplas frentes.
+Primeiramente, no âmbito de portabilidade de desempenho (\textit{performance portability}), sugere-se a reestruturação dos \textit{kernels} de colisão e \textit{streaming} utilizando a biblioteca Kokkos.
+Essa abordagem permitirá explorar espaços de execução em OpenMP, CUDA ou HIP, além de \textit{layouts} de dados compatíveis com coalescência e vetorização.
+Em paralelo, a criação de uma variante com RAJA permitirá a avaliação de abstrações alternativas de políticas de execução e particionamento (\textit{tiling}), comparando-se sobrecusto computacional e expressividade algorítmica.
+
+Na frente de paralelismo distribuído, propõe-se a implementação de decomposição de domínio multidimensional com MPI, utilizando camadas fantasmas (\textit{ghost layers}) e comunicação não bloqueante, aliadas à agregação de mensagens para mitigação de latência.
+Tal arquitetura permitirá a sobreposição de comunicação e computação através de processos assíncronos e estratégias de balanceamento de carga para partições desiguais em sistemas heterogêneos.
+
+Para uma avaliação rigorosa, faz-se necessária uma campanha extensiva de \textit{benchmarks} em ambiente de computação de alta performance.
+Isto inclui ensaios de escalabilidade forte e fraca em \textit{clusters} equipados com aceleradores de GPU e nós robustos de CPU, variando o refinamento espacial e o número de passos de tempo.
+Nestas campanhas, devem ser mensurados o \textit{throughput} (em MLUPS), a eficiência paralela, a correlação através de modelos \textit{roofline} e o custo energético.
+Complementarmente, estudos de sensibilidade a parâmetros físicos e numéricos, como filtros estabilizadores, permitirão o mapeamento do nível da estabilidade versus o custo computacional incorrido.
+
+Adicionalmente, a engenharia de desempenho do código pode ser aprimorada mediante a adoção de \textit{layout} SoA com blocagem espacial, busca antecipada (\textit{prefetching}) e alinhamento explícito, bem como fusão de \textit{kernels} para diminuição da pressão sobre a memória.
+A realização de validações físicas com problemas com descontinuidades mais severas, incluindo choques de Lax e de Shu-Osher, confrontando-se os resultados numéricos com soluções exatas ou de referência, confirmará a resiliência numérica do método LBM compressível nas condições operacionais complexas.
 
 Concluímos que o miniaplicativo alcança um ponto de maturidade que justifica a migração para um arcabouço de portabilidade e sua avaliação em infraestruturas de HPC. A expectativa é sustentar eficiência próxima ao teto de largura de banda em CPUs modernas e explorar aceleração substancial em GPUs, preservando a robustez numérica nas regimes com descontinuidades.
 Essa trajetória posiciona o LBM compressível como ferramenta de vanguarda para investigações acadêmicas e aplicações industriais que demandam alto rendimento computacional.

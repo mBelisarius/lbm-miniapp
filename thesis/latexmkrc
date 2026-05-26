@@ -6,7 +6,7 @@ $pdf_mode = 1;
 $pdflatex = 'pdflatex -interaction=nonstopmode -synctex=1 %O %S';
 
 # Run makeindex if needed
-$makeindex = 'makeindex %O -s %S.ist %S';
+$makeindex = 'makeindex %O %S';
 
 # Cleanup extensions on latexmk -c
 @generated_exts = (@generated_exts, 'bbl', 'bcf', 'blg', 'run.xml');

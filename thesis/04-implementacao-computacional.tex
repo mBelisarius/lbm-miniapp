@@ -93,18 +93,15 @@ A versão sequencial, referida no código como \textit{Plain}, estabelece a refe
 Ela implementa o modelo LBM compressível seguindo a formulação de \textcite{Tran2022}, utilizando as classes de tensores da biblioteca Eigen para manipulação de dados multidimensionais em C++.
 
 O objetivo desta implementação, além de fornecer uma referência para validação científica, é servir como um modelo de arquitetura para as demais implementações.
-Por esta razão, o código evita construções excessivamente específicas de CPU, como o uso de listas ligadas ou ponteiros complexos, preferindo uma estrutura de dados linear e laços de repetição simples que podem ser facilmente portados para outras tecnologias HPC\@.
+Por esta razão, o código evita construções excessivamente específicas de CPU, como o uso de listas ligadas ou ponteiros complexos, preferindo uma estrutura de dados linear e laços de repetição simples que podem ser facilmente portados para outras tecnologias HPC.
 
 A estrutura principal de dados utiliza o \textit{layout} SoA (\textit{Structure of Arrays}), onde as distribuições de probabilidade $f_i$ e $g_i$ para cada uma das $Q=9$ velocidades da rede D2Q9 são armazenadas em buffers contíguos.
 Esta escolha visa facilitar a vetorização por parte do compilador e serve como base para o acesso coalescido de memória nas variantes de aceleradores.
-O algoritmo principal é dividido em etapas discretas encapsuladas na classe \texttt{lbmini::plain::LbmTube}:
-
-\begin{enumerate}
-    \item \textbf{Cálculo de grandezas macroscópicas}: reconstrução de $\rho$, $\mathbf{u}$, $T$ e $p$ a partir dos momentos de $f_i$ e $g_i$, em que $\mathbf{u}$ é o vetor velocidade e $p$ a pressão local.
-    \item \textbf{Colisão e equilíbrio}: aplicação do operador BGK e cálculo das distribuições de equilíbrio $f_i^{eq}$ e $g_i^{eq}$.
-    Esta etapa é a mais custosa computacionalmente devido à solução iterativa utilizando Newton-Raphson.
-    \item \textbf{Streaming}: transporte das distribuições entre nós vizinhos da malha utilizando interpolação por pesos de distância inversa (\textit{Inverse Distance Weighting}, IDW).
-\end{enumerate}
+O algoritmo principal é dividido em etapas discretas encapsuladas na classe \texttt{lbmini::plain::LbmTube}.
+Primeiramente, realiza-se o cálculo de grandezas macroscópicas, compreendendo a reconstrução de $\rho$, $\mathbf{u}$, $T$ e $p$ a partir dos momentos de $f_i$ e $g_i$, onde $\mathbf{u}$ é o vetor velocidade e $p$ a pressão local.
+Em seguida, executa-se a colisão e o cálculo de equilíbrio, aplicando o operador BGK e determinando as distribuições de equilíbrio $f_i^{eq}$ e $g_i^{eq}$.
+Esta etapa é a mais custosa computacionalmente devido à solução iterativa utilizando o método de Newton-Raphson.
+Por fim, efetua-se o \textit{streaming}, que consiste no transporte das distribuições entre nós vizinhos da malha utilizando interpolação por pesos de distância inversa (\textit{Inverse Distance Weighting}, IDW).
 
 A etapa de colisão é dividida em dois subproblemas: a determinação do equilíbrio para o campo de densidade ($f_i^{eq}$) e para o campo de energia total ($g_i^{eq}$). Enquanto $f_i^{eq}$ é calculado via forma de produto fatorado, a determinação de $g_i^{eq}$ exige a solução de um sistema não linear para garantir a conservação de energia em regimes compressíveis.
 Na implementação computacional, isto é feito através de um laço fixo de iterações Newton-Raphson, conforme mostrado no Código~\ref{lst:plain-newton}.
@@ -227,7 +224,7 @@ Dada a natureza do algoritmo LBM, que é limitado por largura de banda de memór
 
 Uma das principais otimizações é o uso de memória constante para armazenar as velocidades discretas da rede ($c_x, c_y$) e os pesos.
 Como estes dados são lidos simultaneamente por todas as \textit{threads} de um \textit{warp}, o uso de cache constante reduz a latência de acesso em comparação com a memória global.
-Além disso, utiliza-se a memória compartilhada (\textit{shared memory}) em etapas específicas para reduzir o tráfego com a memória global (\textit{VRAM}), embora a implementação atual priorize o uso de registradores devido à baixa complexidade geométrica da malha.
+Além disso, utiliza-se a memória compartilhada (\textit{shared memory}) em etapas específicas para reduzir o tráfego com a memória global (\textit{VRAM}), embora a implementação atual priorize o uso de registradores due à baixa complexidade geométrica da malha.
 
 A implementação utiliza \textit{double buffering} para as distribuições $f$ e $g$, eliminando dependências de escrita durante o \textit{streaming}.
 Além disso, emprega-se a técnica de \textit{loop unrolling} manual via \texttt{\#pragma unroll} nos laços internos de velocidades ($Q=9$), o que permite ao compilador \texttt{nvcc} otimizar o uso de registradores e reduzir o custo de controle de fluxo.
@@ -268,7 +265,7 @@ Para minimizar a latência de lançamento de kernels, as etapas de colisão e \t
 %---------------------------------------------------------------------------------------
 
 O módulo OpenCL provê portabilidade funcional para diversos aceleradores, incluindo GPUs de diferentes fabricantes (NVIDIA, AMD, Intel) e FPGAs.
-A implementação utiliza a API C++ de alto nível para gerenciar a complexidade do padrão OpenCL\@, abstraindo a criação de contextos, filas de comando e gerenciamento de buffers, o que reduz a verbosidade do código principal.
+A implementação utiliza a API C++ de alto nível para gerenciar a complexidade do padrão OpenCL, abstraindo a criação de contextos, filas de comando e gerenciamento de buffers, o que reduz a verbosidade do código principal.
 
 Diferente do CUDA, onde a paralelização é integrada ao compilador da linguagem, o OpenCL adota um modelo de plataforma e dispositivo.
 A arquitetura do simulador lida com isso através da compilação JIT (\textit{Just-In-Time}). Os kernels são escritos em linguagem OpenCL C (baseada em C99) e fornecidos como cadeias de caracteres ou arquivos externos, sendo compilados apenas durante a fase de inicialização do programa.
@@ -286,7 +283,7 @@ __kernel void collisionKernel(__global Scalar* pF, __global Scalar* pG, int N) {
 }
 \end{lstlisting}
 Diferente do CUDA, onde a sintaxe é integrada ao C++, no OpenCL a paralelização é expressa no kernel utilizando funções intrínsecas para obter o índice global de execução, como demonstrado no Código~\ref{lst:opencl-kernel}.
-A complexidade da implementação OpenCL reside principalmente no gerenciamento explícito da sincronização entre o sistema principal e o dispositivo de aceleração de \textit{hardware} através de eventos (\texttt{cl::Event}), que são utilizados no código para enfileirar as etapas da marcha no tempo sem bloqueios desnecessários da CPU\@.
+A complexidade da implementação OpenCL reside principalmente no gerenciamento explícito da sincronização entre o sistema principal e o dispositivo de aceleração de \textit{hardware} através de eventos (\texttt{cl::Event}), que são utilizados no código para enfileirar as etapas da marcha no tempo sem bloqueios desnecessários da CPU.
 \begin{lstlisting}[language=C++, caption={Gerenciamento de buffers e kernels via API C++ do OpenCL.}, label={lst:opencl-cpp}, float=ht]
 // Criacao de buffers no dispositivo
 cl::Buffer bufF(context, CL_MEM_READ_WRITE, sizeInBytes);
