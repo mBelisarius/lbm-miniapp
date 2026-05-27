@@ -268,8 +268,8 @@
 \newcommand{\insereFichaCatalografica}{ 
  \begin{fichacatalografica}%\color{blue}
 
- \IfFileExists{metadados/FichaC.pdf}
-    {\includepdf[pages=-]{metadados/FichaC}}
+ \IfFileExists{arquivos/FichaC1.pdf}
+    {\includepdf[pages=-]{arquivos/FichaC1}}
     {
 	\vspace*{\fill}					% Posição vertical
 	\hrule							% Linha horizontal
@@ -360,6 +360,8 @@
 
 	\newenvironment{sortedList}{%
 		\DTLifdbexists{list}{\DTLcleardb{list}}{\DTLnewdb{list}}%
+		\DTLaddcolumn{list}{label}%
+		\DTLaddcolumn{list}{description}%
 	}
 	{
 		\DTLsort{label}{list}%
@@ -399,8 +401,8 @@
 
 % Folha de Aprovação
 \newcommand{\insereAprovacao}{
-\IfFileExists{metadados/TermoA.pdf}
-    {\includepdf[pages=-]{metadados/TermoA.pdf}}{
+\IfFileExists{arquivos/TermoA1.pdf}
+    {\includepdf[pages=-]{arquivos/TermoA1.pdf}}{
     \begin{folhadeaprovacao}%\color{blue}
     
       \begin{center}
