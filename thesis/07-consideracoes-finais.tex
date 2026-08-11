@@ -5,6 +5,7 @@
 %---------------------------------------------------------------------------------------
 
 % Lista de abreviaturas e de siglas
+\criarsigla{HIP}{\textit{Heterogeneous Interface for Portability}}
 
 %---------------------------------------------------------------------------------------
 
@@ -12,31 +13,58 @@
 
 %---------------------------------------------------------------------------------------
 
-Este trabalho apresentou um miniaplicativo que implementa o método de Lattice–Boltzmann para escoamentos compressíveis, validado no problema do tubo de choque de Sod e avaliado quanto à escalabilidade em CPUs multinúcleo.
-Os resultados demonstram (i) consistência numérica nos regimes com descontinuidades, com taxa efetiva próxima da primeira ordem em normas globais, e (ii) bom aproveitamento de paralelismo de memória compartilhada para tamanhos de problema moderados a grandes, com eficiência elevada até o limite imposto por largura de banda e sincronizações.
+\section{Síntese dos Resultados Obtidos}\label{sec:sintese-dos-resultados-obtidos}
 
-Do ponto de vista científico, a acurácia observada na razão de pressões pós-interação e a tendência de redução do EQM reforçam a viabilidade do LBM compressível como alternativa competitiva para problemas hiperbólicos com ondas de choque, preservando simplicidade algorítmica e regularidade de acesso à memória.
-Esse equilíbrio entre fidelidade física e eficiência computacional é particularmente atraente para estudos paramétricos e acoplamentos multiescala, onde o custo por simulação é crítico.
+Este trabalho apresentou um miniaplicativo que implementa o método de Lattice Boltzmann para escoamentos compressíveis, validado no problema do tubo de choque de Sod e avaliado quanto à escalabilidade em CPUs multinúcleo e em aceleradores gráficos.
+Os achados do Capítulo~\ref{ch:resultados} permitem responder de forma direta aos objetivos específicos enunciados na Seção~\ref{subsec:objetivos-especificos}.
 
-Em termos de impacto acadêmico, o estudo fornece uma linha de base reprodutível para comparações entre esquemas de relaxação, discretizações em velocidade e estratégias de filtragem ou dissipação controlada.
-Além disso, apresenta um perfil de desempenho que explicita gargalos práticos, tais como largura de banda, afinidade e sincronizações, orientando pesquisas em otimização de \textit{kernels} LBM no contexto de arquiteturas heterogêneas.
-Destaca-se também o desenvolvimento de um artefato experimental útil para ensino e extensão, permitindo a estudantes e pesquisadores a reprodução de curvas de convergência e escalabilidade com esforço modesto.
+Quanto ao primeiro objetivo específico, relativo à validação da implementação, os perfis de massa específica, de velocidade e de pressão obtidos acompanham a solução analítica do problema de Riemann nas regiões suaves do escoamento e posicionam corretamente a cabeça e a cauda da rarefação, a descontinuidade de contato e a frente de choque.
+O estudo de refinamento indicou taxa de convergência efetiva próxima da primeira ordem em normas globais, resultado esperado e coerente com a presença de descontinuidades que dominam a norma do erro, ainda que o esquema de propagação seja formalmente de segunda ordem em regiões contínuas.
+Os estudos de sensibilidade acrescentaram a esse quadro dois limites práticos de operação: o crescimento monotônico do erro com a razão de pressões inicial, até a perda de estabilidade nas proximidades de $\Pi = 20$, e a existência de uma faixa intermediária de viscosidade que minimiza o erro, situada entre o excesso de dissipação e a instabilidade associada ao limite inferior do tempo de relaxação.
 
-Como trabalhos futuros, propõe-se um roteiro de evolução tecnológica e experimental estruturado em múltiplas frentes.
-Primeiramente, no âmbito de portabilidade de desempenho (\textit{performance portability}), sugere-se a reestruturação dos \textit{kernels} de colisão e \textit{streaming} utilizando a biblioteca Kokkos.
-Essa abordagem permitirá explorar espaços de execução em OpenMP, CUDA ou HIP, além de \textit{layouts} de dados compatíveis com coalescência e vetorização.
-Em paralelo, a criação de uma variante com RAJA permitirá a avaliação de abstrações alternativas de políticas de execução e particionamento (\textit{tiling}), comparando-se sobrecusto computacional e expressividade algorítmica.
+Quanto ao segundo objetivo específico, referente à análise de desempenho das diferentes filosofias de programação, verificou-se que as tecnologias voltadas a CPU multinúcleo convergem para acelerações da mesma ordem de grandeza no regime de malhas grandes, o que indica que a escolha entre elas afeta primariamente a portabilidade e o esforço de desenvolvimento, e apenas secundariamente o desempenho alcançável.
+O uso de aceleradores gráficos, por sua vez, proporciona ganhos de ordem de grandeza superior, condicionados a malhas suficientemente refinadas para amortizar a latência de lançamento dos \textit{kernels} e a transferência inicial de dados, o que evidencia o potencial das arquiteturas heterogêneas para o LBM compressível.
 
-Na frente de paralelismo distribuído, propõe-se a implementação de decomposição de domínio multidimensional com MPI, utilizando camadas fantasmas (\textit{ghost layers}) e comunicação não bloqueante, aliadas à agregação de mensagens para mitigação de latência.
-Tal arquitetura permitirá a sobreposição de comunicação e computação através de processos assíncronos e estratégias de balanceamento de carga para partições desiguais em sistemas heterogêneos.
+Quanto ao terceiro objetivo específico, relativo à escalabilidade, a investigação demonstrou que o algoritmo é limitado primordialmente pela largura de banda de memória, e não pela capacidade de cálculo aritmético.
+A eficiência paralela permanece elevada enquanto o conjunto de trabalho se acomoda nos níveis mais rápidos da hierarquia de memória e degrada-se à medida que a malha cresce, quando a contenção do barramento compartilhado entre os núcleos passa a dominar o comportamento observado, efeito que a lei de Amdahl, isoladamente, não explica.
 
-Para uma avaliação rigorosa, faz-se necessária uma campanha extensiva de \textit{benchmarks} em ambiente de computação de alta performance.
-Isto inclui ensaios de escalabilidade forte e fraca em \textit{clusters} equipados com aceleradores de GPU e nós robustos de CPU, variando o refinamento espacial e o número de passos de tempo.
-Nestas campanhas, devem ser mensurados o \textit{throughput} (em MLUPS), a eficiência paralela, a correlação através de modelos \textit{roofline} e o custo energético.
-Complementarmente, estudos de sensibilidade a parâmetros físicos e numéricos, como filtros estabilizadores, permitirão o mapeamento do nível da estabilidade versus o custo computacional incorrido.
+Quanto ao quarto objetivo específico, que confronta desempenho e custo de desenvolvimento, a contagem de linhas de código mostrou que as tecnologias baseadas em diretivas oferecem a melhor relação de compromisso quando o prazo de desenvolvimento é restritivo, ao passo que os modelos de baixo nível, como o CUDA e o OpenCL, exigem investimento consideravelmente maior em código e em manutenção para extrair o desempenho de pico.
+As camadas de abstração situam-se em posição intermediária e mostram-se a escolha mais equilibrada quando o mesmo código precisa atender simultaneamente a CPUs e a aceleradores de fabricantes distintos.
 
-Adicionalmente, a engenharia de desempenho do código pode ser aprimorada mediante a adoção de \textit{layout} SoA com blocagem espacial, busca antecipada (\textit{prefetching}) e alinhamento explícito, bem como fusão de \textit{kernels} para diminuição da pressão sobre a memória.
-A realização de validações físicas com problemas com descontinuidades mais severas, incluindo choques de Lax e de Shu-Osher, confrontando-se os resultados numéricos com soluções exatas ou de referência, confirmará a resiliência numérica do método LBM compressível nas condições operacionais complexas.
+%---------------------------------------------------------------------------------------
 
-Concluímos que o miniaplicativo alcança um ponto de maturidade que justifica a migração para um arcabouço de portabilidade e sua avaliação em infraestruturas de HPC. A expectativa é sustentar eficiência próxima ao teto de largura de banda em CPUs modernas e explorar aceleração substancial em GPUs, preservando a robustez numérica nas regimes com descontinuidades.
-Essa trajetória posiciona o LBM compressível como ferramenta de vanguarda para investigações acadêmicas e aplicações industriais que demandam alto rendimento computacional.
+\section{Contribuições do Trabalho}\label{sec:contribuicoes-do-trabalho}
+
+Em termos de contribuição acadêmica, o estudo fornece uma linha de base reprodutível para comparações entre operadores de colisão, discretizações do espaço de velocidades e estratégias de filtragem ou de dissipação controlada no LBM compressível.
+Apresenta, além disso, um perfil de desempenho que explicita gargalos práticos, como a largura de banda de memória e as sobrecargas de sincronização, o que orienta pesquisas futuras em otimização de \textit{kernels} em arquiteturas heterogêneas.
+Destaca-se também o desenvolvimento de um miniaplicativo estruturado, que serve como artefato experimental útil para o ensino de computação de alto desempenho e para a prototipagem de novos modelos físicos.
+
+%---------------------------------------------------------------------------------------
+
+\section{Limitações Identificadas}\label{sec:limitacoes-identificadas}
+
+Reconhece-se honestamente que este trabalho apresenta limitações decorrentes do ambiente experimental e do estágio atual de desenvolvimento do resolvedor.
+Os ensaios foram conduzidos em uma única máquina, equipada com um processador Intel Core 7 240H e uma GPU dedicada, sem acesso a agrupamentos de computadores (\textit{clusters}) que permitiriam avaliar a escalabilidade distribuída em larga escala via MPI.
+Adicionalmente, parte das comparações entre tecnologias em GPU para malhas extremamente refinadas permanece como expectativa teórica a confirmar, dada a necessidade de recursos de memória de vídeo superiores aos disponíveis no sistema de ensaio.
+A ausência de testes com descontinuidades mais severas ou escoamentos multidimensionais também delimita o escopo da validação realizada.
+
+%---------------------------------------------------------------------------------------
+
+\section{Trabalhos Futuros}\label{sec:trabalhos-futuros}
+
+Como trabalhos futuros, propõe-se um roteiro de evolução estruturado em quatro frentes, cada uma delas respondendo a uma das limitações reconhecidas na seção anterior.
+
+Na frente de portabilidade de desempenho, sugere-se estender as implementações em Kokkos e em RAJA a espaços de execução ainda não avaliados, em particular HIP e SYCL, de modo a verificar se as conclusões obtidas para GPUs NVIDIA se mantêm em aceleradores de outros fabricantes.
+Recomenda-se, no mesmo esforço, investigar disposições de dados alternativas, com blocagem espacial, alinhamento explícito e busca antecipada, que possam reduzir a pressão sobre o subsistema de memória identificada como fator limitante do desempenho.
+
+Na frente de paralelismo distribuído, propõe-se estender a decomposição de domínio unidimensional atualmente implementada para uma decomposição multidimensional, aliada à agregação de mensagens para mitigação de latência e a estratégias de balanceamento de carga para partições desiguais em sistemas heterogêneos.
+Propõe-se ainda avaliar a combinação da MPI com as implementações voltadas a aceleradores, configuração híbrida que explora simultaneamente o paralelismo de grão fino no interior de cada dispositivo e o paralelismo de grão grosso entre nós de computação.
+
+Na frente experimental, faz-se necessária uma campanha extensiva de ensaios em ambiente de computação de alto desempenho, incluindo estudos de escalabilidade forte e fraca em agrupamentos equipados com aceleradores e com nós de CPU de maior contagem de núcleos, variando o refinamento espacial e o número de passos de tempo.
+Nessas campanhas, devem ser medidos a taxa de atualização de nós, a eficiência paralela, o posicionamento em relação ao modelo \textit{roofline} e o custo energético, métrica cuja relevância cresce nos grandes centros de computação.
+
+Na frente física e numérica, recomenda-se a validação com descontinuidades mais severas, entre elas os problemas de Lax e de Shu-Osher, confrontadas com soluções exatas ou de referência, e a extensão dos ensaios a configurações bidimensionais e tridimensionais, nas quais o padrão de acesso à memória da etapa de propagação torna-se substancialmente mais exigente.
+Estudos de sensibilidade a parâmetros numéricos, como a intensidade da regularização e o número de iterações do resolvedor local de temperatura, permitirão ainda mapear o compromisso entre estabilidade e custo computacional.
+
+Este trabalho conclui que o miniaplicativo alcançou um grau de maturidade que justifica sua aplicação em infraestruturas de computação de alto desempenho de maior porte.
+A trajetória percorrida posiciona o LBM compressível como uma ferramenta promissora para investigações que demandam alta fidelidade física e eficiência computacional em arquiteturas heterogêneas.

@@ -38,6 +38,20 @@
 #include "Lbm/Cuda/Gpu/LbmTube.hpp"
 #endif
 
+#ifdef USE_KOKKOS
+#include "Lbm/Kokkos/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/Kokkos/Cpu/LbmTube.hpp"
+#include "Lbm/Kokkos/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/Kokkos/Gpu/LbmTube.hpp"
+#endif
+
+#ifdef USE_RAJA
+#include "Lbm/Raja/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/Raja/Cpu/LbmTube.hpp"
+#include "Lbm/Raja/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/Raja/Gpu/LbmTube.hpp"
+#endif
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -243,6 +257,60 @@ Executor<Scalar>::Executor(
       lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
       #else
       throw std::runtime_error("CUDA backend not enabled (compile with nvcc).");
+      #endif
+      break;
+    }
+    case lbmini::BackendEnum::Kokkos: {
+      #ifdef USE_KOKKOS
+      switch (performance.target) {
+        case lbmini::TargetEnum::CPU: {
+          using LbmLattice = lbmini::kokkos::cpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::kokkos::cpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          break;
+        }
+        case lbmini::TargetEnum::GPU: {
+          if (!lbmini::kokkos::gpu::kHasDeviceBackend) {
+            std::cerr << "Kokkos was built without a device backend (CUDA/HIP/SYCL): "
+              "the GPU target falls back to the host execution space." << std::endl;
+          }
+          using LbmLattice = lbmini::kokkos::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::kokkos::gpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          break;
+        }
+        default:
+          throw std::runtime_error("Invalid target for Kokkos backend.");
+      }
+      #else
+      throw std::runtime_error("Kokkos backend not enabled.");
+      #endif
+      break;
+    }
+    case lbmini::BackendEnum::RAJA: {
+      #ifdef USE_RAJA
+      switch (performance.target) {
+        case lbmini::TargetEnum::CPU: {
+          using LbmLattice = lbmini::raja::cpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::raja::cpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          break;
+        }
+        case lbmini::TargetEnum::GPU: {
+          if (!lbmini::raja::gpu::kHasDeviceBackend) {
+            std::cerr << "RAJA was built without a device backend (CUDA/HIP): "
+              "the GPU target falls back to the host execution policy." << std::endl;
+          }
+          using LbmLattice = lbmini::raja::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::raja::gpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(reinterpret_cast<ILbmTubeT*>(new LbmTube(fluid, mesh, control, performance)));
+          break;
+        }
+        default:
+          throw std::runtime_error("Invalid target for RAJA backend.");
+      }
+      #else
+      throw std::runtime_error("RAJA backend not enabled.");
       #endif
       break;
     }

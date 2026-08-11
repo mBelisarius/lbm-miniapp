@@ -5,6 +5,14 @@
 %---------------------------------------------------------------------------------------
 
 % Lista de abreviaturas e de siglas
+\criarsigla{DSP}{\textit{Digital Signal Processor}}
+\criarsigla{GLUPS}{\textit{Giga Lattice Updates Per Second}}
+\criarsigla{LBE}{\textit{Lattice Boltzmann Equation}}
+\criarsigla{MLUPS}{\textit{Mega Lattice Updates Per Second}}
+\criarsigla{OpenACC}{\textit{Open Accelerators}}
+\criarsigla{OpenCL}{\textit{Open Computing Language}}
+\criarsigla{OpenMP}{\textit{Open Multi-Processing}}
+\criarsigla{SYCL}{\textit{Standard C++ for Heterogeneous Computing}}
 
 %---------------------------------------------------------------------------------------
 
@@ -12,140 +20,157 @@
 
 %---------------------------------------------------------------------------------------
 
-Neste capítulo, apresenta-se a fundamentação teórica e o arcabouço metodológico empregados no desenvolvimento desta pesquisa.
-A abordagem baseia-se no Método de Lattice Boltzmann (LBM), uma técnica de dinâmica dos fluidos computacional (CFD) fundamentada na mecânica estatística, que descreve a evolução de um fluido por meio da propagação e colisão de funções de distribuição de probabilidade.
-Diferente das abordagens macroscópicas tradicionais que resolvem as equações de Navier-Stokes via discretização direta, o LBM opera em uma escala mesoscópica, o que confere vantagens intrínsecas na paralelização algorítmica e no tratamento de condições de contorno complexas.
+A estrutura metodológica desta pesquisa apoia-se no método de Lattice Boltzmann (LBM), técnica de dinâmica dos fluidos computacional (CFD) fundamentada na mecânica estatística, que descreve a evolução de um fluido por meio da propagação e da colisão de funções de distribuição de probabilidade.
+Diferentemente das abordagens macroscópicas tradicionais, que resolvem as equações de Navier-Stokes por discretização direta, o LBM opera em escala mesoscópica, o que confere vantagens intrínsecas na paralelização do algoritmo e no tratamento de condições de contorno complexas.
+Essa característica é o que torna o método adequado ao propósito deste trabalho, no qual o objeto de investigação é menos o escoamento simulado do que o comportamento computacional do algoritmo em diferentes tecnologias de paralelização.
+O modelo é apresentado aqui na extensão necessária à compreensão do procedimento experimental, ficando a dedução completa e o detalhamento de seus operadores para o Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
+
+%---------------------------------------------------------------------------------------
+
+\section{Delineamento da Pesquisa}\label{sec:delineamento-da-pesquisa}
+
+A pesquisa caracteriza-se como um estudo experimental de natureza aplicada, no qual o objeto de investigação não é o fenômeno físico em si, já amplamente documentado, mas o comportamento computacional de um mesmo algoritmo quando expresso em diferentes tecnologias de paralelização.
+Essa distinção orienta todas as decisões metodológicas descritas neste capítulo, pois exige que a física simulada permaneça rigorosamente constante entre os ensaios, de modo que as diferenças de desempenho observadas possam ser atribuídas exclusivamente ao modelo de execução empregado.
+
+O trabalho foi conduzido em cinco etapas encadeadas.
+A primeira consistiu na seleção e no estudo do modelo físico e numérico, culminando na escolha da formulação de dupla distribuição com redes deslocadas, apropriada a escoamentos compressíveis com ondas de choque.
+A segunda etapa correspondeu à implementação da versão sequencial de referência, que estabelece o comportamento numérico esperado e serve de base para o cálculo da aceleração das demais versões.
+A terceira etapa compreendeu a verificação e a validação dessa versão de referência, confrontando os campos calculados com a solução analítica do problema do tubo de choque de Sod.
+A quarta etapa consistiu na reimplementação do mesmo núcleo de cálculo em cada uma das tecnologias de paralelização avaliadas, preservando a disposição dos dados em memória e a sequência de operações.
+A quinta e última etapa reuniu a campanha de medições de desempenho, de escalabilidade e de complexidade de código, cujos resultados são discutidos no Capítulo~\ref{ch:resultados}.
+A \autoref{fig:fluxograma-metodologia} sintetiza esse encadeamento.
+
+\begin{figure}[H]
+    \centering
+    \caption{Etapas metodológicas da pesquisa, da seleção do modelo à campanha de medições de desempenho.}
+    \label{fig:fluxograma-metodologia}
+    \fbox{\begin{minipage}{0.85\textwidth}
+        \centering
+        \vspace{2cm}
+        [Espaço reservado para figura: fluxograma das etapas da pesquisa, dispostas verticalmente. Do topo para a base, os blocos devem indicar a seleção do modelo físico e numérico, a implementação sequencial de referência, a verificação e validação contra a solução analítica de Sod, a reimplementação em cada tecnologia de paralelização e a campanha de medições de desempenho e de complexidade. Uma seta de retorno deve ligar o bloco de reimplementação ao bloco de validação, indicando que cada nova versão é validada antes de ser medida.]
+        \vspace{2cm}
+    \end{minipage}}
+    \fonte{O autor (2026).}
+\end{figure}
+
+O critério de comparação justa entre as implementações merece destaque, por ser condição necessária à validade das conclusões.
+Todas as versões partem da mesma formulação matemática, empregam a mesma disposição de memória por estrutura de vetores, percorrem a malha na mesma ordem, executam o mesmo número de iterações do resolvedor local de Newton-Raphson e utilizam precisão dupla.
+A equivalência numérica entre as versões é verificada pela comparação dos campos macroscópicos ao final da simulação, exigindo-se concordância dentro da tolerância associada à ordem de execução das operações de ponto flutuante em cada arquitetura.
+Apenas após essa verificação uma implementação é admitida na campanha de medições.
+
+%---------------------------------------------------------------------------------------
 
 \section{Fundamentos do Método de Lattice Boltzmann Compressível}\label{sec:fundamentos-lbm}
 
-O ponto de partida do LBM é a equação de Boltzmann contínua, que descreve a evolução da função de distribuição $f(\mathbf{x}, \mathbf{v}, t)$.
-No limite de baixos números de Mach e Knudsen, as equações macroscópicas de conservação podem ser recuperadas via expansão de Chapman-Enskog.
-Para aplicações em regimes compressíveis, a discretização do espaço de velocidades é crítica.
-O fluido é representado por funções de distribuição discretas $f_i(\mathbf{x}, t)$, associadas a um conjunto de direções de velocidade $\{\mathbf{c}_i\}_{i=0}^{Q-1}$ em uma malha regular.
-A dinâmica fundamental é regida pela equação de Boltzmann discretizada (LBE), frequentemente aproximada pelo operador de colisão de tempo de relaxação único, o modelo Bhatnagar--Gross--Krook (BGK) \parencite{Bhatnagar1954}:
+O ponto de partida do LBM é a equação de Boltzmann contínua, que descreve a evolução da função de distribuição $f(\mathbf{x}, \mathbf{v}, t)$, das quais as equações macroscópicas de conservação são recuperadas no limite de baixo número de Knudsen.
+O fluido é representado por funções de distribuição discretas $f_i(\mathbf{x}, t)$, associadas a um conjunto de direções de velocidade $\{\mathbf{c}_i\}_{i=0}^{Q-1}$ definidas sobre uma malha regular.
+A dinâmica é regida pela equação de Lattice Boltzmann (\textit{Lattice Boltzmann Equation}, LBE), frequentemente aproximada pelo operador de colisão de tempo de relaxação único, o modelo Bhatnagar-Gross-Krook (BGK) \parencite{Bhatnagar1954}:
 \begin{equation}
-    f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i(\mathbf{x}, t) - \frac{\Delta t}{\tau} \left[ f_i(\mathbf{x}, t) - f_i^{\text{eq}}(\rho, \mathbf{u}, T) \right], \label{eq:lbm_bgk}
+    f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i(\mathbf{x}, t) - \frac{\Delta t}{\tau} \left[ f_i(\mathbf{x}, t) - f_i^{\text{eq}}(\rho, \mathbf{u}, T) \right], \label{eq:lbm-bgk}
 \end{equation}
 em que $\tau$ representa o tempo de relaxação característico.
-Este parâmetro é fisicamente vinculado à viscosidade cinemática do fluido $\nu$ através da relação $\nu = c_s^2 (\tau - \Delta t / 2)$, onde $c_s$ denota a velocidade do som no reticulado.
-A distribuição de equilíbrio $f_i^{\text{eq}}$ é o componente central que assegura a recuperação das equações macroscópicas de Euler ou Navier-Stokes.
+Esse parâmetro está vinculado à viscosidade cinemática do fluido $\nu$ pela relação $\nu = c_s^2 (\tau - \Delta t / 2)$, onde $c_s$ denota a velocidade do som na rede.
+A distribuição de equilíbrio $f_i^{\text{eq}}$ é o componente central que assegura a recuperação das equações macroscópicas de Euler ou de Navier-Stokes.
 
-As grandezas macroscópicas conservadas --- densidade $\rho$, momento linear $\rho \mathbf{u}$ e energia total por unidade de massa $E$ --- são obtidas como momentos estatísticos das funções de distribuição:
+As grandezas macroscópicas conservadas, a saber, a massa específica $\rho$, a quantidade de movimento $\rho \mathbf{u}$ e a energia total por unidade de massa $E$, são obtidas como momentos estatísticos das funções de distribuição:
 \begin{equation}
-    \rho = \sum_i f_i, \quad \rho \mathbf{u} = \sum_i f_i \mathbf{c}_i, \quad \rho E = \sum_i g_i, \label{eq:momentos_macroscopicos}
+    \rho = \sum_i f_i, \quad \rho \mathbf{u} = \sum_i f_i \mathbf{c}_i, \quad 2 \rho E = \sum_i g_i, \label{eq:momentos-macroscopicos}
 \end{equation}
-onde $g_i$ representa uma função de distribuição auxiliar.
-A utilização de uma distribuição de energia independente é uma estratégia fundamental para desacoplar a evolução térmica da dinâmica de massa e momento, permitindo a simulação de escoamentos com variação significativa de temperatura e razão de calores específicos $\gamma$ arbitrária \parencite{Guo2020}.
+onde $g_i$ representa a função de distribuição de energia, cujo momento de ordem zero fornece o dobro da energia total por unidade de volume na normalização adotada no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
+O emprego de uma distribuição de energia independente é estratégia fundamental para desacoplar a evolução térmica da dinâmica de massa e de quantidade de movimento, permitindo simular escoamentos com variação significativa de temperatura e com razão de calores específicos $\gamma$ arbitrária \parencite{Tran2022}.
 
-Para escoamentos compressíveis, a expansão de segunda ordem da distribuição de equilíbrio, comum em modelos incompressíveis, torna-se insuficiente.
-A correta captura da física de ondas de choque exige que os momentos de ordem superior da distribuição de equilíbrio satisfaçam as tensões de Maxwell--Boltzmann.
-Especificamente, $f_i^{\text{eq}}$ deve ser formulada de modo que:
-\begin{equation}
-    \sum_i f_i^{\text{eq}} Q(\mathbf{c}_i) = \int \psi(\mathbf{v}) Q(\mathbf{v}) d\mathbf{v},
-\end{equation}
-para um conjunto de polinômios $Q(\mathbf{c}_i)$ que incluam termos de ordem cúbica e superior, garantindo a Galileu-invariância e a consistência termodinâmica em altas velocidades.
-
-Adicionalmente, o tratamento de descontinuidades acentuadas, típicas de regimes supersônicos, requer mecanismos de estabilização numérica.
-Neste trabalho, emprega-se a técnica de regularização iterativa \parencite{Tran2022}, que atua sobre a parte de não-equilíbrio $f_i^{\text{neq}} = f_i - f_i^{\text{eq}}$.
-A hipótese subjacente é que apenas as contribuições que satisfazem a expansão de Chapman-Enskog devem ser propagadas, filtrando componentes não-físicas oriundas de erros de truncamento e instabilidades de Gibbs.
-Esta filtragem ocorre pela projeção do tensor de tensões fora do equilíbrio em um espaço de polinômios de Hermite ortogonais, garantindo que o esquema mantenha robustez sem introduzir difusão numérica excessiva.
+Para escoamentos compressíveis, a expansão de segunda ordem da distribuição de equilíbrio, usual em modelos incompressíveis, torna-se insuficiente, pois a captura correta da física das ondas de choque exige que os momentos de ordem superior reproduzam aqueles da distribuição de Maxwell-Boltzmann, requisito do qual dependem a invariância de Galileu e a consistência termodinâmica em altas velocidades.
+O tratamento de descontinuidades acentuadas, típicas de regimes supersônicos, requer ainda mecanismos de estabilização numérica.
+Neste trabalho adota-se a formulação de \textcite{Tran2022}, na qual a distribuição de equilíbrio da energia é obtida iterativamente por maximização de entropia, o que assegura populações positivas em qualquer regime, e o fator de relaxação é modulado localmente em função do afastamento medido em relação ao equilíbrio.
+A hipótese subjacente é que a dissipação adicional deve incidir apenas onde há não equilíbrio acentuado, isto é, nas vizinhanças das descontinuidades, preservando a viscosidade física no restante do domínio.
+A dedução dessas expressões, desde a formulação clássica até a de dupla distribuição em rede deslocada, é desenvolvida no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
 
 %---------------------------------------------------------------------------------------
 
 \section{Problema do Tubo de Choque de Sod}\label{sec:problema-do-tubo-de-choque-de-sod}
 
-O problema do tubo de choque de Sod \parencite{Sod1978} constitui um caso de teste canônico e fundamental na dinâmica dos fluidos computacional.
-Sua relevância reside na capacidade de avaliar a aptidão de esquemas numéricos em capturar, simultaneamente, descontinuidades agudas, como frentes de choque e descontinuidades de contato, e estruturas suaves, como ventiladores de rarefação isentrópicos.
+O problema do tubo de choque de Sod \parencite{Sod1978} constitui caso de teste canônico em dinâmica dos fluidos computacional.
+Sua relevância reside na capacidade de avaliar a aptidão de esquemas numéricos para capturar, simultaneamente, descontinuidades agudas, como frentes de choque e descontinuidades de contato, e estruturas suaves, como leques de rarefação isentrópicos.
 Fisicamente, o problema é definido por um tubo unidimensional de comprimento finito, hermeticamente fechado, preenchido por um gás ideal e dividido inicialmente em duas câmaras por uma membrana situada em $x = x_0$.
 
-As hipóteses fundamentais assumem que o fluido comporta-se como um gás caloricamente perfeito, onde a pressão $p$, a densidade $\rho$ e a temperatura $T$ são vinculadas pela equação de estado dos gases ideais:
+As hipóteses fundamentais admitem que o fluido comporta-se como gás caloricamente perfeito, no qual a pressão $p$, a massa específica $\rho$ e a temperatura $T$ vinculam-se pela equação de estado dos gases ideais:
 \begin{equation}
-    p = \rho R T = (\gamma - 1) \rho \left( E - \frac{1}{2} |\mathbf{u}|^2 \right), \label{eq:gas_ideal}
+    p = \rho R T = (\gamma - 1) \rho \left( E - \frac{1}{2} |\mathbf{u}|^2 \right), \label{eq:gas-ideal}
 \end{equation}
-onde $R$ é a constante específica do gás e $\gamma$ é a razão entre os calores específicos ($C_p/C_v$).
-Assume-se que o gás é invíscido e que o processo de expansão na rarefação é adiabático e reversível, enquanto a transição através do choque é inerentemente irreversível.
+onde $R$ é a constante específica do gás e $\gamma$ é a razão entre os calores específicos $C_p/C_v$.
+Assume-se que o gás é invíscido, que a expansão na rarefação é adiabática e reversível e que a transição através do choque é irreversível.
 
-As condições iniciais definem dois estados macroscópicos distintos em repouso ($\mathbf{u} = 0$): um estado de alta pressão e alta densidade à esquerda ($L$) e um estado de baixa pressão e baixa densidade à direita ($R$).
-Em conformidade com a literatura padrão, utilizam-se as seguintes grandezas adimensionais:
+As condições iniciais definem dois estados macroscópicos distintos em repouso ($\mathbf{u} = 0$): um estado de alta pressão e alta massa específica à esquerda ($L$) e um estado de baixa pressão e baixa massa específica à direita ($R$).
+Em conformidade com a literatura, utilizam-se as seguintes grandezas adimensionais:
 \begin{equation}
-    (\rho_L, p_L) = (1.0, 1.0), \quad (\rho_R, p_R) = (0.125, 0.1), \quad \gamma = 1.4.
+    (\rho_L;\ p_L) = (1{,}0;\ 1{,}0), \quad (\rho_R;\ p_R) = (0{,}125;\ 0{,}1), \quad \gamma = 1{,}4.
 \end{equation}
-Ao tempo $t=0$, a membrana é removida instantaneamente, desencadeando a evolução dinâmica do sistema.
-O desequilíbrio de pressão resulta na propagação de três ondas principais:
-\begin{itemize}
-    \item Uma onda de rarefação que se propaga para a esquerda, expandindo o gás de alta pressão e reduzindo sua densidade de forma contínua e isentrópica.
-    \item Uma descontinuidade de contato, que se desloca para a direita, separando as massas de fluido originalmente presentes em cada câmara. Através desta interface, a pressão e a velocidade normal são contínuas, contudo, observam-se saltos discretos na densidade e na temperatura.
-    \item Uma onda de choque que se propaga para a direita com velocidade supersônica em relação ao gás à frente. Esta frente comprime o fluido de forma abrupta e irreversível, elevando sua energia interna e entropia.
-\end{itemize}
-A configuração física inicial e o perfil resultante são ilustrados na \autoref{fig:esquema-tubo-sod}.
+No instante $t=0$, a membrana é removida de forma instantânea, desencadeando a evolução dinâmica do sistema.
+O desequilíbrio de pressão resulta na propagação de três ondas principais: uma onda de rarefação que se desloca para a esquerda, expandindo o gás de alta pressão e reduzindo sua massa específica de forma contínua e isentrópica; uma descontinuidade de contato que se desloca para a direita, separando as massas de fluido originalmente presentes em cada câmara, através da qual a pressão e a velocidade normal permanecem contínuas, ainda que se observem saltos na massa específica e na temperatura; e uma onda de choque que se propaga para a direita com velocidade supersônica em relação ao gás à frente, comprimindo o fluido de forma abrupta e irreversível e elevando sua energia interna e sua entropia.
+A configuração física inicial é ilustrada na \autoref{fig:esquema-tubo-sod}.
 
-\begin{figure}[ht]
+\begin{figure}[H]
     \centering
-    % PLACEHOLDER: Imagem do Tubo de Choque de Sod
-    % Conteúdo da imagem: Um diagrama de um tubo 1D dividido por uma membrana em x0.
-    % À esquerda (x < x0), etiquetas para densidade alta (rho_L), pressão alta (p_L) e velocidade zero.
-    % À direita (x > x0), etiquetas para densidade baixa (rho_R), pressão baixa (p_R) e velocidade zero.
-    % Abaixo, um gráfico esquemático da pressão ou densidade mostrando o degrau inicial.
-    \fbox{\begin{minipage}{0.8\textwidth}
+    \caption{Condições iniciais do problema do tubo de choque de Sod, em que $p_L$ e $\rho_L$ são a pressão e a massa específica à esquerda e $p_R$ e $\rho_R$ são os valores à direita da membrana situada em $x_0$.}
+    \label{fig:esquema-tubo-sod}
+    \fbox{\begin{minipage}{0.85\textwidth}
         \centering
         \vspace{2cm}
-        [Placeholder: Esquema do Problema do Tubo de Choque de Sod]
+        [Espaço reservado para figura: diagrama de um tubo unidimensional dividido por uma membrana na posição $x_0$. À esquerda da membrana devem constar as indicações de massa específica alta, pressão alta e velocidade nula; à direita, massa específica baixa, pressão baixa e velocidade nula. Abaixo do tubo, um gráfico esquemático da pressão ao longo de $x$ deve mostrar o degrau inicial.]
         \vspace{2cm}
     \end{minipage}}
-    \caption{Representação esquemática das condições iniciais do problema do tubo de choque de Sod, onde $p_L$ e $\rho_L$ são a pressão e densidade à esquerda, e $p_R$ e $\rho_R$ são os valores à direita da membrana em $x_0$.}
-    \label{fig:esquema-tubo-sod}
+    \fonte{Adaptado de \textcite{Sod1978}.}
 \end{figure}
 
-\begin{figure}[ht]
+\begin{figure}[H]
     \centering
-    % PLACEHOLDER: Evolução do Tubo de Choque de Sod (t > 0)
-    \fbox{\begin{minipage}{0.8\textwidth}
+    \caption{Ondas e regiões formadas após o rompimento da membrana. As regiões de 1 a 5 descrevem os estados do gás delimitados pelas frentes de rarefação, de contato e de choque.}
+    \label{fig:esquema-tubo-sod-evolucao}
+    \fbox{\begin{minipage}{0.85\textwidth}
         \centering
         \vspace{2cm}
-        [Placeholder: Evolução das Ondas e Regiões no Tubo de Sod ($t > 0$)]
+        [Espaço reservado para figura: diagrama das ondas e regiões formadas após o rompimento da membrana, para um instante $t > 0$. Devem ser indicadas, da esquerda para a direita, a região 1 (estado à esquerda), a região 2 (leque de rarefação, delimitado por cabeça e cauda), a região 3 (estado intermediário à esquerda), a descontinuidade de contato, a região 4 (estado intermediário à direita), a frente de choque e a região 5 (estado à direita).]
         \vspace{2cm}
     \end{minipage}}
-    \caption{Representação das ondas e regiões formadas após o rompimento da membrana. As regiões de 1 a 5 descrevem os estados do gás e as frentes de onda: rarefação, contato e choque.}
-    \label{fig:esquema-tubo-sod-evolucao}
+    \fonte{Adaptado de \textcite{Sod1978}.}
 \end{figure}
 
 Os estados macroscópicos que compõem o sistema após o rompimento da membrana são ilustrados na \autoref{fig:esquema-tubo-sod-evolucao}.
-A evolução temporal dá origem a um padrão de escoamento auto-semelhante, o que implica que os perfis das variáveis macroscópicas mantêm a mesma forma funcional quando expressos em termos da variável de similaridade $\xi = x/t$.
-Este padrão divide o domínio em cinco regiões distintas.
-A Região 1 (Estado à Esquerda, $L$) preserva o gás em repouso sob alta pressão ($p_L$) e alta densidade ($\rho_L$).
-A Região 2 compreende o ventilador de rarefação, uma zona de transição suave onde as propriedades termodinâmicas variam continuamente.
-A Região 3 (Estado Intermediário à Esquerda) contém o gás acelerado e expandido, situando-se entre a rarefação e a descontinuidade de contato.
-A Região 4 (Estado Intermediário à Direita) caracteriza-se pelo gás acelerado e comprimido entre a descontinuidade de contato e a frente de choque.
-Por fim, a Região 5 (Estado à Direita, $R$) denota o gás original em repouso sob baixa pressão ($p_R$) e densidade ($\rho_R$).
+A evolução temporal dá origem a um padrão de escoamento autossemelhante, o que implica que os perfis das variáveis macroscópicas mantêm a mesma forma funcional quando expressos em termos da variável de similaridade $\xi = x/t$.
+Esse padrão divide o domínio em cinco regiões distintas.
+A região 1, correspondente ao estado à esquerda, preserva o gás em repouso sob alta pressão ($p_L$) e alta massa específica ($\rho_L$).
+A região 2 compreende o leque de rarefação, zona de transição suave na qual as propriedades termodinâmicas variam de forma contínua.
+A região 3, estado intermediário à esquerda, contém o gás acelerado e expandido, situando-se entre a rarefação e a descontinuidade de contato.
+A região 4, estado intermediário à direita, caracteriza-se pelo gás acelerado e comprimido entre a descontinuidade de contato e a frente de choque.
+Por fim, a região 5, estado à direita, denota o gás original em repouso sob baixa pressão ($p_R$) e baixa massa específica ($\rho_R$).
 
 As frentes de onda que delimitam essas regiões possuem naturezas físicas contrastantes.
-A onda de rarefação, movendo-se para a esquerda, é uma estrutura expansiva delimitada por uma cabeça e uma cauda.
-A cabeça da rarefação propaga-se na velocidade do som do estado $L$, enquanto a espessura da onda cresce linearmente com o tempo.
-A descontinuidade de contato, ao deslocar-se para a direita, atua como uma interface material.
-Através dela, a velocidade $u$ e a pressão $p$ permanecem contínuas ($u_3 = u_4 = u^\ast$ e $p_3 = p_4 = p^\ast$), garantindo o equilíbrio cinemático e dinâmico, embora a densidade e a temperatura apresentem saltos acentuados.
+A onda de rarefação, que se move para a esquerda, é uma estrutura expansiva delimitada por uma cabeça e uma cauda.
+A cabeça da rarefação propaga-se com velocidade $u_L - a_L$, isto é, com a velocidade do som do estado $L$ medida em relação ao fluido em repouso, enquanto a espessura da onda cresce linearmente com o tempo.
+A descontinuidade de contato, ao deslocar-se para a direita, atua como interface material: através dela, a velocidade $u$ e a pressão $p$ permanecem contínuas ($u_3 = u_4 = u^\ast$ e $p_3 = p_4 = p^\ast$), garantindo o equilíbrio cinemático e dinâmico, embora a massa específica e a temperatura apresentem saltos acentuados.
 A onda de choque, por sua vez, é uma frente compressiva que se propaga de forma supersônica em direção ao gás de baixa pressão.
-Esta frente eleva instantaneamente a pressão e a densidade do fluido na Região 5 para os níveis da Região 4, dissipando energia mecânica em calor conforme descrito pelas relações de Rankine-Hugoniot.
+Essa frente eleva de forma abrupta a pressão e a massa específica do fluido da região 5 aos níveis da região 4, dissipando energia mecânica em calor conforme descrito pelas relações de Rankine-Hugoniot.
 
 O desafio numérico reside na captura precisa dessas frentes.
 Esquemas de baixa ordem tendem a introduzir difusão excessiva, degradando a nitidez do choque e da descontinuidade de contato.
-Inversamente, esquemas de alta ordem podem gerar oscilações espúrias decorrentes do fenômeno de Gibbs em proximidade às descontinuidades, exigindo estratégias de estabilização como a regularização iterativa mencionada anteriormente.
+Esquemas de alta ordem, em contrapartida, podem gerar oscilações espúrias decorrentes do fenômeno de Gibbs nas proximidades das descontinuidades, o que exige estratégias de estabilização como a relaxação dependente do não equilíbrio local mencionada anteriormente.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Solução Analítica}\label{subsec:solucao-analitica}
 
-A solução analítica do problema do tubo de choque de Sod fornece um padrão de referência exato para as equações de Euler compressíveis.
-Sob a hipótese de um escoamento unidimensional, invíscido e adiabático, a evolução do sistema é governada pelas leis de conservação de massa, quantidade de movimento e energia.
-O desafio central reside em determinar o estado intermediário ($p^\ast, u^\ast$) que surge entre a onda de rarefação e a frente de choque, além de descrever os perfis internos de cada zona de transição.
+A solução analítica do problema do tubo de choque de Sod fornece referência exata para as equações de Euler compressíveis.
+Sob as hipóteses de escoamento unidimensional, invíscido e adiabático, a evolução do sistema é governada pelas leis de conservação de massa, de quantidade de movimento e de energia.
+O desafio central reside em determinar o estado intermediário ($p^\ast;\ u^\ast$) que surge entre a onda de rarefação e a frente de choque, além de descrever os perfis internos de cada zona de transição.
 
 Para a onda de rarefação, que se propaga para a esquerda em direção ao estado $L$, o escoamento é considerado isentrópico.
-As propriedades do fluido são relacionadas pelas Invariantes de Riemann ao longo das características $C_\pm: dx/dt = u \pm a$.
-Para a onda que se desloca para a esquerda, a característica $C_-$ carrega a informação da rarefação, enquanto a invariante $J_+$ mantém-se constante em todo o ventilador:
+As propriedades do fluido são relacionadas pelas invariantes de Riemann ao longo das características $C_\pm: dx/dt = u \pm a$, em que $a = \sqrt{\gamma p / \rho}$ é a velocidade local do som.
+Para a onda que se desloca para a esquerda, a característica $C_-$ carrega a informação da rarefação, enquanto a invariante $J_+$ mantém-se constante em todo o leque:
 \begin{equation}
-    J_+ = u + \frac{2a}{\gamma - 1} = u_L + \frac{2 a_L}{\gamma - 1}. \label{eq:invariante_riemann}
+    J_+ = u + \frac{2a}{\gamma - 1} = u_L + \frac{2 a_L}{\gamma - 1}. \label{eq:invariante-riemann}
 \end{equation}
-Dentro do ventilador de rarefação (Região 2), o escoamento é auto-semelhante e governado pela característica $dx/dt = u - a = \xi$.
-Combinando esta relação com a \eqref{eq:invariante_riemann}, é possível deduzir os perfis locais de velocidade e velocidade do som em função da coordenada de similaridade $\xi = x/t$:
+No interior do leque de rarefação, correspondente à região 2, o escoamento é autossemelhante e governado pela característica $dx/dt = u - a = \xi$.
+Combinando essa relação com a \eqref{eq:invariante-riemann}, deduzem-se os perfis locais de velocidade e de velocidade do som em função da coordenada de similaridade $\xi = x/t$:
 \begin{equation}
     u(\xi) = \frac{2}{\gamma+1} \left( a_L + \frac{\gamma-1}{2} u_L + \xi \right), \quad a(\xi) = u(\xi) - \xi.
 \end{equation}
@@ -153,89 +178,214 @@ As demais variáveis termodinâmicas no interior da rarefação seguem as relaç
 \begin{equation}
     \rho(\xi) = \rho_L \left( \frac{a(\xi)}{a_L} \right)^{\frac{2}{\gamma-1}}, \quad p(\xi) = p_L \left( \frac{\rho(\xi)}{\rho_L} \right)^\gamma.
 \end{equation}
-Ao final da expansão, no limite da Região 3, a velocidade $u^\ast$ pode ser expressa em função da pressão $p^\ast$:
+Ao final da expansão, no limite da região 3, a velocidade $u^\ast$ pode ser expressa em função da pressão $p^\ast$:
 \begin{equation}
-    u^\ast = u_L - \frac{2 a_L}{\gamma - 1} \left[ \left( \frac{p^\ast}{p_L} \right)^{\frac{\gamma - 1}{2\gamma}} - 1 \right]. \label{eq:rarefacao_analitica}
+    u^\ast = u_L - \frac{2 a_L}{\gamma - 1} \left[ \left( \frac{p^\ast}{p_L} \right)^{\frac{\gamma - 1}{2\gamma}} - 1 \right]. \label{eq:rarefacao-analitica}
 \end{equation}
 
-Em contraste, a frente de choque que se propaga para a direita introduz uma descontinuidade governada pelas relações de Rankine--Hugoniot.
-Essas relações decorrem da integração das equações de Euler em uma superfície de controle que se desloca com a frente de choque a uma velocidade $W$.
-A conservação de massa e momento linear através da descontinuidade resulta na seguinte relação entre a velocidade $u^\ast$ e a pressão $p^\ast$:
+A frente de choque que se propaga para a direita, em contraste, introduz uma descontinuidade governada pelas relações de Rankine-Hugoniot.
+Essas relações decorrem da integração das equações de Euler em uma superfície de controle que se desloca com a frente de choque à velocidade $W$.
+A conservação de massa e de quantidade de movimento através da descontinuidade resulta na seguinte relação entre a velocidade $u^\ast$ e a pressão $p^\ast$:
 \begin{equation}
-    u^\ast = u_R + (p^\ast - p_R) \sqrt{ \frac{1 - \alpha}{\rho_R (p^\ast + \alpha p_R)} }, \quad \alpha = \frac{\gamma - 1}{\gamma + 1}. \label{eq:choque_analitico}
+    u^\ast = u_R + (p^\ast - p_R) \sqrt{ \frac{1 - \alpha}{\rho_R (p^\ast + \alpha p_R)} }, \quad \alpha = \frac{\gamma - 1}{\gamma + 1}. \label{eq:choque-analitico}
 \end{equation}
-O parâmetro $\alpha$ é uma constante geométrica do reticulado termodinâmico que depende exclusivamente da razão de calores específicos $\gamma$.
-Note-se que, ao contrário da rarefação, o choque é um processo dissipativo onde a entropia aumenta através da frente de compressão, o que justifica a dependência algébrica distinta em comparação à forma exponencial/polinomial da rarefação.
+O parâmetro $\alpha$ depende exclusivamente da razão de calores específicos $\gamma$.
+Diferentemente da rarefação, o choque é um processo dissipativo no qual a entropia aumenta através da frente de compressão, o que justifica a dependência algébrica distinta em relação à forma obtida para a rarefação.
 
-A condição de equilíbrio mecânico na descontinuidade de contato exige que tanto a pressão quanto a velocidade sejam contínuas entre as regiões 3 e 4, uma vez que não há fluxo de massa através desta interface.
-Portanto, igualando as equações \eqref{eq:rarefacao_analitica} e \eqref{eq:choque_analitico}, obtém-se a equação transcendente fundamental para a pressão intermediária $p^\ast$:
+A condição de equilíbrio mecânico na descontinuidade de contato exige que tanto a pressão quanto a velocidade sejam contínuas entre as regiões 3 e 4, uma vez que não há fluxo de massa através dessa interface.
+Igualando as equações \eqref{eq:rarefacao-analitica} e \eqref{eq:choque-analitico}, obtém-se a equação transcendente fundamental para a pressão intermediária $p^\ast$:
 \begin{equation}
-    f_L(p^\ast) + f_R(p^\ast) + (u_R - u_L) = 0, \label{eq:equacao_transcedente}
+    f_L(p^\ast) + f_R(p^\ast) + (u_R - u_L) = 0, \label{eq:equacao-transcendente}
 \end{equation}
-em que as funções $f_L$ e $f_R$ condensam a física da onda esquerda (rarefação) e da onda direita (choque), respectivamente.
-Dada a monotonicidade estrita de $f(p^\ast)$ para gases ideais, a resolução desta equação via método de Newton--Raphson converge rapidamente, fornecendo o valor de $p^\ast$ que ancora toda a estrutura da solução.
+em que as funções $f_L$ e $f_R$ condensam a física da onda à esquerda, de rarefação, e da onda à direita, de choque, respectivamente.
+Para a configuração de Sod, na qual a onda à esquerda é sempre de rarefação e a onda à direita é sempre de choque, essas funções assumem a forma
+\begin{equation}
+    f_L(p^\ast) = \frac{2 a_L}{\gamma - 1} \left[ \left( \frac{p^\ast}{p_L} \right)^{\frac{\gamma - 1}{2\gamma}} - 1 \right], \quad f_R(p^\ast) = (p^\ast - p_R) \sqrt{ \frac{1 - \alpha}{\rho_R (p^\ast + \alpha p_R)} }, \label{eq:funcoes-onda}
+\end{equation}
+de modo que $u^\ast = u_L - f_L(p^\ast) = u_R + f_R(p^\ast)$, o que recupera as equações \eqref{eq:rarefacao-analitica} e \eqref{eq:choque-analitico}.
+No caso geral, cada função assume a expressão de rarefação quando $p^\ast$ é inferior à pressão do estado correspondente e a expressão de choque no caso contrário, o que garante a continuidade da derivada primeira na transição entre os dois ramos.
+Dada a monotonicidade estrita de $f(p^\ast) = f_L + f_R + (u_R - u_L)$ para gases ideais, a solução dessa equação pelo método de Newton-Raphson converge rapidamente, fornecendo o valor de $p^\ast$ que ancora toda a estrutura da solução.
 
-Uma vez determinada a pressão $p^\ast$, as densidades nas regiões intermediárias são prontamente obtidas.
-Para a região 3 (estado pós-rarefação), utiliza-se a relação isentrópica:
+Determinada a pressão $p^\ast$, as massas específicas nas regiões intermediárias são prontamente obtidas.
+Para a região 3, correspondente ao estado posterior à rarefação, utiliza-se a relação isentrópica:
 \begin{equation}
     \rho_3 = \rho_L \left( \frac{p^\ast}{p_L} \right)^{1/\gamma}.
 \end{equation}
-Para a região 4 (estado pós-choque), a densidade é calculada via relação de salto de Rankine--Hugoniot, que impõe um limite superior para a compressão ($\rho_4/\rho_R \to (\gamma+1)/(\gamma-1)$ quando $p^\ast/p_R \to \infty$):
+Para a região 4, estado posterior ao choque, a massa específica é calculada pela relação de salto de Rankine-Hugoniot, que impõe um limite superior à compressão, dado por $\rho_4/\rho_R \to (\gamma+1)/(\gamma-1)$ quando $p^\ast/p_R \to \infty$:
 \begin{equation}
     \rho_4 = \rho_R \left[ \frac{p^\ast / p_R + \alpha}{\alpha p^\ast / p_R + 1} \right].
 \end{equation}
 
 As velocidades de propagação das frentes definem a cronologia e a extensão espacial do escoamento.
-A velocidade da frente de choque $W$ é calculada a partir da conservação de massa:
+A velocidade da frente de choque $W$ é obtida a partir da conservação de massa:
 \begin{equation}
     W = u_R + a_R \sqrt{ \frac{\gamma + 1}{2\gamma} \left( \frac{p^\ast}{p_R} - 1 \right) + 1 }.
 \end{equation}
-A cabeça e a cauda da rarefação deslocam-se, respectivamente, com velocidades $x/t = u_L - a_L$ e $x/t = u^\ast - a^\ast$, onde $a^\ast = a_L (p^\ast/p_L)^{(\gamma-1)/2\gamma}$.
-Este conjunto completo de equações permite a reconstrução dos perfis de densidade, pressão e velocidade para qualquer instante $t > 0$, servindo como o \textit{gold standard} para a validação do método LBM desenvolvido.
-A implementação desta solução analítica foi realizada em Python, utilizando o módulo \texttt{scipy.optimize} para a inversão da \autoref{eq:equacao_transcedente}.
+A cabeça e a cauda da rarefação deslocam-se, respectivamente, com velocidades $x/t = u_L - a_L$ e $x/t = u^\ast - a^\ast$, onde $a^\ast = a_L \left( p^\ast / p_L \right)^{\frac{\gamma-1}{2\gamma}}$ é a velocidade do som na região 3.
+Esse conjunto de equações permite reconstruir os perfis de massa específica, de pressão e de velocidade para qualquer instante $t > 0$, servindo como referência para a validação do método LBM desenvolvido.
+A implementação da solução analítica foi realizada em Python, utilizando o módulo \texttt{scipy.optimize} para a solução da \autoref{eq:equacao-transcendente}.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Solução Numérica Utilizando o Método LBM}\label{subsec:solucao-numerica-utilizando-o-metodo-lbm}
 
-Para o tubo de choque 3D com perturbação unidimensional, utiliza-se um contorno permissivo (saída não refletiva) nas extremidades longitudinais, onde as distribuições que advêm do exterior do domínio são reconstruídas a partir do estado macroscópico adjacente (extrapolação de primeira ordem) ou de um estado-alvo suave, minimizando reflexões espúrias.
-Aplica-se periodicidade nas demais direções (transversais), obtida copiando as distribuições que saem por uma face para a face oposta.
-A inicialização ocorre com os estados esquerdo/direito ($L/R$) separados por uma membrana em $x_0$, impondo $(\rho,p,\mathbf{u})$ distintos nos respectivos subdomínios.
+A solução numérica do problema é obtida pelo miniaplicativo desenvolvido, que resolve a equação de Lattice Boltzmann na formulação de dupla distribuição descrita na Seção~\ref{sec:fundamentos-lbm}.
+O domínio físico é um retângulo de arestas unitárias discretizado por uma malha cartesiana regular de $N_x \times N_y$ nós, sobre a qual atua o modelo bidimensional D2Q9 descrito no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
+Embora o problema de Sod seja unidimensional, com gradientes exclusivamente na direção longitudinal, a malha é mantida bidimensional e a direção transversal recebe $N_y = N_x/100$ nós, valor que reproduz o padrão de acesso à memória usual das malhas empregadas em simulações bidimensionais.
+Essa escolha é deliberada: o objeto de investigação é o comportamento computacional do algoritmo, e o número de nós na direção transversal determina o comprimento das sequências contíguas de memória percorridas em cada percurso da malha, o que condiciona a eficiência do acesso à memória e a granularidade da distribuição de trabalho entre os fluxos de execução.
+A solução física permanece invariante ao longo de $y$, o que permite comparar cada linha da malha com a solução analítica unidimensional sem prejuízo da validação.
+
+A inicialização ocorre com os estados esquerdo e direito separados pela membrana em $x_0$, impondo valores distintos de $(\rho;\ p;\ \mathbf{u})$ nos respectivos subdomínios.
+As funções de distribuição são inicializadas em seus valores de equilíbrio correspondentes ao estado macroscópico local, o que corresponde a admitir ausência de gradientes no instante inicial.
+Essa hipótese introduz um transitório de curta duração nos primeiros passos de tempo, durante o qual a parcela de não equilíbrio se estabelece, efeito que se dissipa antes que as frentes de onda percorram uma fração significativa do domínio e que, portanto, não compromete a comparação com a solução analítica nos instantes analisados.
+
+Para o tubo de choque bidimensional com perturbação unidimensional, utiliza-se contorno permissivo, isto é, saída não reflexiva, nas extremidades longitudinais, onde as distribuições provenientes do exterior do domínio são reconstruídas a partir do estado macroscópico adjacente, por extrapolação de primeira ordem, ou de um estado alvo suave, minimizando reflexões espúrias.
+Nas direções transversais aplica-se periodicidade, obtida pela cópia das distribuições que saem por uma face para a face oposta.
+A escolha do contorno permissivo é determinante para a qualidade da validação, pois uma reflexão espúria na extremidade direita retornaria ao domínio como uma onda de pressão inexistente na solução analítica, contaminando o cálculo do erro nos instantes finais.
+O tempo final da simulação é escolhido de modo que nem a frente de choque nem a cabeça da rarefação alcancem as extremidades do tubo, condição que assegura a validade da solução autossemelhante empregada como referência.
+
+Os parâmetros da simulação de referência estão reunidos na \autoref{tab:parametros-simulacao} e correspondem aos valores definidos no arquivo de configuração do miniaplicativo, descrito na Seção~\ref{sec:compilacao-configuracao}.
+Os valores adotados para os estados inicial esquerdo e direito reproduzem a configuração clássica de Sod, enquanto o número de Prandtl e a razão entre os calores específicos correspondem aos do ar em condições ambientes.
+A velocidade de referência da rede deslocada foi fixada em $0{,}25$ em unidades da rede, valor próximo da velocidade média do escoamento após o rompimento da membrana, o que centra a quadratura na região de maior densidade de probabilidade do espaço de velocidades, conforme será discutido na Seção~\ref{sec:lbm-dupla-distribuicao}.
+
+\begin{table}[H]
+    \centering
+    \caption{Parâmetros da simulação de referência do tubo de choque de Sod}
+    \label{tab:parametros-simulacao}
+    \begin{tabular}{llc}
+        \toprule
+        Grupo & Parâmetro & Valor \\
+        \midrule
+        Fluido & Massa específica à esquerda, $\rho_L$ & 1{,}0 \\
+         & Pressão à esquerda, $p_L$ & 1{,}0 \\
+         & Massa específica à direita, $\rho_R$ & 0{,}125 \\
+         & Pressão à direita, $p_R$ & 0{,}1 \\
+         & Viscosidade dinâmica, $\mu$ & $1{,}0 \times 10^{-2}$ \\
+         & Número de Prandtl, $Pr$ & 0{,}71 \\
+         & Razão entre os calores específicos, $\gamma$ & 1{,}4 \\
+        \midrule
+        Malha & Comprimento do domínio, $L_x = L_y$ & 1{,}0 \\
+         & Número de nós longitudinais, $N_x$ & variável \\
+         & Número de nós transversais, $N_y$ & $N_x/100$ \\
+        \midrule
+        Controle & Tempo final, $t_{max}$ & 0{,}2 \\
+         & Velocidade de referência, $\mathbf{U}_{ref}$ & $(0{,}25;\ 0)$ \\
+         & Intervalo de gravação, em passos & 20 \\
+        \bottomrule
+    \end{tabular}
+    \fonte{Adaptado de \textcite{Sod1978}.}
+\end{table}
+
+Nos ensaios de convergência e de desempenho, o número de nós longitudinais $N_x$ é o único parâmetro variado, percorrendo valores entre $10^2$ e $10^6$, enquanto as demais grandezas permanecem fixas nos valores da \autoref{tab:parametros-simulacao} e o número de nós transversais acompanha $N_x$ pela razão fixada.
+Como o passo de tempo em unidades da rede é unitário, a variação de $N_x$ altera simultaneamente a resolução espacial e o número de passos necessários para atingir $t_{max}$, o que deve ser considerado na interpretação dos tempos de execução medidos.
 
 %---------------------------------------------------------------------------------------
 
-\section{Escalabilidade e Complexidade Algorítmica}\label{sec:analise-de-escalabilidade-e-complexidade}
+\section{Escalabilidade e Complexidade Algorítmica}\label{sec:escalabilidade-e-complexidade}
 
-A avaliação do desempenho computacional de implementações LBM para escoamentos compressíveis exige o emprego de métricas padronizadas e metodologias rigorosas.
-Neste estudo, a escalabilidade é analisada sob as perspectivas de escalonamento forte (\textit{strong scaling}) e fraco (\textit{weak scaling}).
-O escalonamento forte investiga a redução do tempo de processamento para um problema de dimensões fixas à medida que o número de núcleos de execução aumenta, sendo essencial para identificar gargalos de comunicação e latência.
-Já o escalonamento fraco avalia a capacidade do sistema em processar problemas proporcionalmente maiores com o aumento dos recursos computacionais, mantendo a carga de trabalho por núcleo constante.
+A avaliação do desempenho computacional de implementações do LBM para escoamentos compressíveis exige métricas padronizadas e metodologia rigorosa.
+Neste estudo, a escalabilidade é analisada sob as perspectivas de escalabilidade forte (\textit{strong scaling}) e de escalabilidade fraca (\textit{weak scaling}).
+A escalabilidade forte investiga a redução do tempo de processamento para um problema de dimensões fixas à medida que o número de núcleos de execução aumenta, sendo essencial para identificar gargalos de comunicação e de latência.
+A escalabilidade fraca avalia a capacidade do sistema de processar problemas proporcionalmente maiores com o aumento dos recursos computacionais, mantendo constante a carga de trabalho por núcleo.
 
-As métricas fundamentais para esta análise são o \textit{speedup} $S$ e a eficiência paralela $\eta$.
-O \textit{speedup} é definido como a razão entre o tempo de execução serial $T_1$ e o tempo de execução paralelo em $P$ processadores $T_P$, de modo que $S = T_1 / T_P$.
-Consequentemente, a eficiência paralela é expressa por $\eta = S/P$, refletindo a fração do tempo em que os processadores são efetivamente utilizados para computação útil.
+As métricas fundamentais dessa análise são a aceleração $S$ (\textit{speedup}) e a eficiência paralela $\eta$.
+A aceleração é definida como a razão entre o tempo de execução sequencial $T_1$ e o tempo de execução paralela $T_P$ em $P$ processadores, de modo que $S = T_1 / T_P$.
+A eficiência paralela é expressa por $\eta = S/P$, refletindo a fração do tempo em que os processadores são efetivamente empregados em cálculo útil.
 
-Para o método LBM, uma métrica de desempenho amplamente aceita é o \textit{throughput} em MLUPS ou GLUPS (\textit{Giga-Lattice Updates Per Second}).
-Esta grandeza quantifica o número de bilhões de atualizações de nós da malha processadas por segundo, permitindo uma comparação direta entre diferentes arquiteturas de hardware e modelos de programação.
-Resultados de referência na literatura indicam que implementações otimizadas em GPU podem atingir frações significativas da largura de banda de memória teórica, frequentemente entre 60\% e 80\% do pico do dispositivo, evidenciando que o LBM é um algoritmo majoritariamente limitado pela memória (\textit{memory-bound}) \parencite{Tomczak2021}.
+Para o LBM, a métrica de desempenho amplamente aceita é a taxa de atualização de nós da malha por segundo (\textit{Lattice Updates Per Second}), usualmente expressa em milhões (MLUPS) ou em bilhões (GLUPS) de atualizações por segundo.
+Essa grandeza permite comparação direta entre diferentes arquiteturas de \textit{hardware} e modelos de programação.
+Resultados de referência indicam que implementações otimizadas em GPU podem atingir frações significativas da largura de banda de memória teórica, frequentemente entre 60\% e 80\% do pico do dispositivo, o que evidencia que o LBM é um algoritmo majoritariamente limitado pela memória (\textit{memory-bound}) \parencite{Tomczak2021}.
 
-Além das métricas de tempo, a complexidade do código é avaliada pela contagem de linhas de código fonte (LOC) e pelo esforço de implementação associado a cada tecnologia de portabilidade.
-Este critério é fundamental para mensurar a produtividade do desenvolvedor e a mantenabilidade do software em ambientes de computação de alto desempenho (HPC).
-A análise é complementada pelo uso de ferramentas de \textit{profiling}, que permitem diagnosticar a utilização de cache e o consumo de largura de banda de memória.
+Além das métricas de tempo, a complexidade do código é avaliada pela contagem de linhas de código (\textit{Lines of Code}, LOC) e pelo esforço de implementação associado a cada tecnologia de portabilidade.
+Esse critério é relevante para mensurar a produtividade do desenvolvedor e a facilidade de manutenção do \textit{software} em ambientes de HPC.
+A contagem considera apenas os módulos responsáveis pela colisão, pela propagação e pelo gerenciamento de memória de cada tecnologia, excluindo linhas em branco, comentários e o código comum a todas as versões, como a leitura da configuração e a exportação dos resultados.
+Essa delimitação evita que a infraestrutura compartilhada dilua as diferenças entre as tecnologias, que são justamente o objeto da comparação.
+A análise é complementada pelo uso de ferramentas de análise de desempenho (\textit{profiling}), que permitem diagnosticar a utilização de \textit{cache} e o consumo de largura de banda de memória.
 
-\section{Tecnologias de Paralelização e Portabilidade de Desempenho}\label{sec:selecao-de-tecnologias-para-implementacao-computacional}
+A contagem de linhas, contudo, é um indicador incompleto do custo de adotar uma tecnologia, uma vez que trata como equivalentes linhas de dificuldade muito distinta.
+Por essa razão, a comparação incorpora também atributos qualitativos observados ao longo do próprio desenvolvimento do miniaplicativo, registrados de forma sistemática à medida que cada versão era escrita, depurada e ajustada.
+O primeiro atributo é a quantidade de construções específicas da tecnologia, isto é, diretivas, tipos, políticas de execução e chamadas de interface que não pertencem à linguagem C++ padrão e que, portanto, precisam ser aprendidas e mantidas.
+O segundo é o grau de invasão da tecnologia sobre o núcleo de cálculo, medido pela necessidade de alterar a estrutura do laço, a disposição dos dados ou a assinatura das funções, em oposição a acréscimos que deixam o código original intacto.
+O terceiro é a legibilidade do resultado, entendida como a facilidade com que um leitor familiarizado com o método, mas não com a tecnologia, reconhece as etapas de colisão e de propagação no código escrito.
 
-A diversidade de arquiteturas computacionais modernas --- abrangendo CPUs multi-core e aceleradores como GPUs de diversos fabricantes --- motiva a adoção de camadas de abstração que garantam a portabilidade de desempenho.
-Bibliotecas como Kokkos e RAJA fornecem abstrações em C++ para o gerenciamento de layouts de memória e políticas de execução, permitindo que um núcleo de cálculo único seja compilado para diferentes plataformas alvo, como CUDA, OpenMP ou SYCL, sem a necessidade de reescrita do código fonte.
+O esforço de diagnóstico de erros reúne os demais atributos considerados.
+Registram-se a qualidade das mensagens do compilador, particularmente crítica nas camadas de abstração baseadas em \textit{templates}, nas quais um erro simples produz diagnósticos extensos, e a disponibilidade de depuradores capazes de inspecionar o estado do cálculo no acelerador, cuja ausência obriga a recorrer à inserção de instruções de impressão ou à cópia de campos inteiros para a memória principal.
+Consideram-se ainda a existência de ferramentas de análise de desempenho que reconheçam as abstrações da tecnologia, o tempo de compilação e o volume de configuração exigido pelo sistema de construção, que no caso das camadas de abstração inclui a obtenção e a compilação da própria biblioteca.
+Esses atributos são descritos qualitativamente no Capítulo~\ref{ch:implementacao-computacional}, junto à apresentação de cada implementação, e retomados de forma comparativa no Capítulo~\ref{ch:resultados}, ao lado da contagem de linhas, de modo que o custo de adoção de cada tecnologia seja julgado por mais de uma dimensão.
 
-Complementarmente, a interface de passagem de mensagens (MPI) é empregada para garantir a escalabilidade em sistemas de memória distribuída.
-O MPI gerencia a comunicação entre diferentes nós de processamento em um \textit{cluster}, sendo responsável pela troca de informações nas zonas de interface do domínio decomposto.
-A integração de modelos de portabilidade (Kokkos/RAJA) com MPI resulta em uma abordagem híbrida, capaz de explorar tanto o paralelismo de grão fino dentro de um acelerador quanto o paralelismo de grão grosso entre nós de processamento.
-A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} apresenta uma síntese comparativa das tecnologias avaliadas neste trabalho.
+%---------------------------------------------------------------------------------------
+
+\subsection{Protocolo de Medição}\label{subsec:protocolo-de-medicao}
+
+A confiabilidade das métricas apresentadas depende de um protocolo de medição explícito, sobretudo em uma máquina de uso geral, sujeita a interferências do sistema operacional e a variações de frequência do processador.
+Adota-se, por essa razão, o procedimento descrito a seguir em todos os ensaios de desempenho.
+
+O intervalo cronometrado compreende exclusivamente a marcha no tempo, excluindo a leitura da configuração, a alocação das estruturas de dados, a inicialização dos campos e a exportação dos resultados, etapas que não fazem parte do núcleo de cálculo em avaliação.
+A exportação periódica de resultados é desabilitada durante as medições, uma vez que a escrita em disco introduziria uma componente de tempo alheia ao objeto de estudo e sujeita a grande dispersão.
+Nas implementações voltadas a aceleradores, a cronometragem é encerrada apenas após a sincronização explícita com o dispositivo, o que evita que o caráter assíncrono do lançamento dos \textit{kernels} produza tempos artificialmente reduzidos.
+
+Cada configuração é executada três vezes, precedidas de uma execução preliminar de aquecimento cujo resultado é descartado, destinada a estabilizar o estado do \textit{cache} e a frequência de operação do processador.
+Adota-se a média aritmética das três medições como valor representativo, e a dispersão entre elas é monitorada como indicador de contaminação por processos concorrentes.
+Todas as execuções de uma mesma campanha são realizadas na mesma sessão, sem alteração das condições do sistema, e a máquina permanece sem outras cargas de trabalho ativas.
+
+%---------------------------------------------------------------------------------------
+
+\subsection{Ambiente Computacional de Ensaio}\label{subsec:ambiente-computacional}
+
+Os ensaios foram conduzidos em uma única estação de trabalho, o que garante uniformidade das condições experimentais entre as tecnologias comparadas, mas restringe o alcance das conclusões relativas à memória distribuída, conforme reconhecido na Seção~\ref{sec:delimitacao}.
+A \autoref{tab:ambiente-computacional} descreve o \textit{hardware} e o \textit{software} utilizados, com a versão de cada compilador, biblioteca e tecnologia de paralelização empregada.
+O registro dessas versões é condição de reprodutibilidade dos resultados, pois tanto a qualidade do código gerado quanto o comportamento das camadas de abstração variam de forma sensível entre lançamentos sucessivos, e as versões das bibliotecas obtidas automaticamente durante a construção estão fixadas no arquivo de configuração do sistema de compilação, descrito na Seção~\ref{sec:compilacao-configuracao}.
+
+\begin{table}[H]
+    \centering
+    \caption{Ambiente computacional utilizado nos ensaios}
+    \label{tab:ambiente-computacional}
+    \begin{tabular}{llp{4.5cm}}
+        \toprule
+        Grupo & Componente & Versão ou especificação \\
+        \midrule
+        \textit{Hardware} & Processador & Intel Core 7 240H, com seis núcleos de desempenho \\
+         & Memória principal & 16GB 5200MT/s \\
+         & Acelerador gráfico & NVIDIA RTX 4050 6GB Mobile \\
+        \midrule
+        Sistema & Sistema operacional & Fedora Linux 44 \\
+         & Compilador C++ & NVIDIA HPC SDK 26.1 (\texttt{nvc++}) \\
+         & Padrão da linguagem & C++17 \\
+         & Sistema de construção & CMake 3.20 ou superior \\
+        \midrule
+        Paralelização & OpenMP & (a inserir) \\
+         & OpenACC & (a inserir) \\
+         & CUDA & (a inserir) \\
+         & OpenCL & (a inserir) \\
+         & Kokkos & 4.4.01 \\
+         & RAJA & 2024.07.0 \\
+         & MPI & (a inserir) \\
+        \midrule
+        Bibliotecas & Eigen & 5.0.0 \\
+        \bottomrule
+    \end{tabular}
+    \fonte{O autor (2026).}
+\end{table}
+
+O processador empregado possui arquitetura híbrida, combinando núcleos de desempenho e núcleos de eficiência.
+Essa característica é relevante para a interpretação dos resultados de escalabilidade, pois a distribuição de fluxos de execução entre núcleos de capacidades distintas produz desequilíbrio de carga mesmo em malhas uniformes.
+Por essa razão, os ensaios de escalabilidade restringem-se aos seis núcleos de desempenho disponíveis, com a afinidade dos fluxos de execução fixada de modo a impedir sua migração durante a simulação.
+Todas as compilações utilizam o mesmo nível de otimização e a mesma precisão de ponto flutuante, condição sem a qual a comparação entre tecnologias perderia sentido.
+
+%---------------------------------------------------------------------------------------
+
+\section{Tecnologias de Paralelização e Portabilidade de Desempenho}\label{sec:tecnologias-de-paralelizacao}
+
+A seleção das sete tecnologias avaliadas seguiu três critérios.
+O primeiro foi a representatividade das filosofias de programação identificadas na Seção~\ref{sec:tecnologias-de-computacao-de-alto-desempenho}, de modo que o conjunto contemplasse ao menos dois representantes de cada uma delas: modelos por diretivas, modelos de baixo nível, camadas de abstração e paralelismo distribuído.
+O segundo foi a maturidade e a adoção efetiva pela comunidade de HPC, verificada pela presença da tecnologia em códigos de produção de grandes centros de computação e pela existência de especificação estável.
+O terceiro foi a disponibilidade de compiladores e de bibliotecas para o ambiente de ensaio descrito na Seção~\ref{subsec:ambiente-computacional}, requisito que excluiu do escopo tecnologias como o HIP e o SYCL, cuja avaliação demandaria aceleradores de outros fabricantes.
+A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} apresenta uma síntese comparativa das tecnologias avaliadas neste trabalho, que serve de referência para a discussão de implementação do Capítulo~\ref{ch:implementacao-computacional} e para a análise de complexidade do Capítulo~\ref{ch:resultados}.
 
 \begin{sidewaystable}
     \centering
-    \par\caption{Comparativo técnico entre tecnologias de programação paralela}
+    \par\caption{Comparativo técnico entre as tecnologias de programação paralela avaliadas}
+    \label{tab:comparativo-entre-tecnologias-de-programacao-paralela}
     \begin{tabular}{
         |>{\raggedright\arraybackslash}m{3.0cm}
         |>{\raggedright\arraybackslash}m{6.0cm}
@@ -253,53 +403,53 @@ A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} apresenta 
         \midrule
             OpenMP & 
             CPU (x86, ARM)\newline GPU (suporte recente) & 
-            Diretivas (pragmas) & 
+            Diretivas de compilação & 
             Baixa & 
-            Alta independente de fabricante 
+            Alta e independente de fabricante 
             \\
         \midrule
             OpenACC & 
             CPU\newline GPU (principalmente NVIDIA) & 
-            Diretivas (pragmas) & 
+            Diretivas de compilação & 
             Baixa & 
-            Média com suporte principalmente para GPUs NVIDIA e compiladores
+            Média, com suporte principalmente a GPUs NVIDIA e a compiladores específicos
             \\
         \midrule
             CUDA & 
             GPU (exclusivamente NVIDIA) & 
-            Kernels C/C++ com API específica & 
+            \textit{Kernels} em C/C++ com API específica & 
             Alta & 
-            Baixa com suporte exclusivo para GPUs NVIDIA
+            Baixa, restrita a GPUs NVIDIA
             \\
         \midrule
             OpenCL & 
             CPU\newline GPU (NVIDIA, AMD, Intel)\newline FPGA\newline DSP & 
-            Kernels C com gerenciamento manual & 
+            \textit{Kernels} em C com gerenciamento manual & 
             Alta & 
-            Alta independente de fabricante 
+            Alta e independente de fabricante 
             \\
         \midrule
             Kokkos & 
             CPU (x86, ARM)\newline GPU (NVIDIA, AMD, Intel) & 
-            C++ com abstrações via \textit{templates} & 
+            C++ com abstrações por \textit{templates} & 
             Média & 
-            Alta independente de fabricante com múltiplas tecnologias
+            Alta, independente de fabricante e com múltiplas tecnologias
             \\
         \midrule
             RAJA & 
             CPU (x86, ARM)\newline GPU (NVIDIA, AMD, Intel) & 
             C++ com políticas de execução & 
             Média & 
-            Alta independente de fabricante com múltiplas tecnologias
+            Alta, independente de fabricante e com múltiplas tecnologias
             \\
         \midrule
             MPI & 
-            CPU\newline GPU\newline Cluster distribuído & 
+            CPU\newline GPU\newline Agrupamento distribuído & 
             API de passagem de mensagens & 
             Alta & 
-            Muito alta com suporte universal em sistemas distribuídos
+            Muito alta, com suporte universal em sistemas distribuídos
             \\
         \bottomrule
     \end{tabular}
-    \label{tab:comparativo-entre-tecnologias-de-programacao-paralela}
+    \fonte{O autor (2026).}
 \end{sidewaystable}

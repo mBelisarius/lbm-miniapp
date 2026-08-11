@@ -61,18 +61,43 @@
 % \usepackage{xcolor}
 
 \SetKwInput{Entrada}{Entrada}
-\SetKwInput{Saida}{Saida}
-\SetKw{Se}{se}
-\SetKw{Entao}{então}
-\SetKw{Senao}{senão}
-\SetKw{FimSe}{fim se}
-\SetKw{Para}{para}
-\SetKw{De}{de}
-\SetKw{Ate}{até}
-\SetKw{FimPara}{fim para}
-\SetKw{Enquanto}{enquanto}
-\SetKw{FimEnquanto}{fim enquanto}
+\SetKwInput{Saida}{Saída}
+\SetKwFor{Para}{para}{faça}{fim para}
+\SetKwFor{Enquanto}{enquanto}{faça}{fim enquanto}
 \SetKw{Retorne}{retorne}
+\SetKwIF{If}{ElseIf}{Else}{se}{então}{senão se}{senão}{fim se}
+
+% Designação e lista própria dos algoritmos, conforme a NBR 14724
+\SetAlgorithmName{ALGORITMO}{algoritmo}{LISTA DE ALGORITMOS}
+\SetAlgoCaptionSeparator{~\textendash~}
+
+% Designação e lista própria das listagens de código, conforme a NBR 14724
+\renewcommand{\lstlistingname}{PROGRAMA}
+\renewcommand{\lstlistlistingname}{LISTA DE PROGRAMAS}
+
+% Numeração contínua, à semelhança das figuras, das tabelas e dos algoritmos.
+% O contador é criado pelo pacote listings apenas no início do documento.
+\AtBeginDocument{%
+    \counterwithout{lstlisting}{chapter}%
+    \renewcommand{\thelstlisting}{\arabic{lstlisting}}%
+}
+
+% Nas listas próprias, cada item é designado por seu nome específico, como já
+% ocorre com as figuras e com as tabelas
+\makeatletter
+\renewcommand*{\l@algocf}[2]{%
+    \begingroup
+        \renewcommand{\numberline}[1]{%
+            \hb@xt@\@tempdima{\algorithmcfname~##1\hfill\textendash\hfill}}%
+        \@dottedtocline{1}{0pt}{3.6cm}{#1}{#2}%
+    \endgroup}
+\renewcommand*{\l@lstlisting}[2]{%
+    \begingroup
+        \renewcommand{\numberline}[1]{%
+            \hb@xt@\@tempdima{\lstlistingname~##1\hfill\textendash\hfill}}%
+        \@dottedtocline{1}{0pt}{3.6cm}{#1}{#2}%
+    \endgroup}
+\makeatother
 
 \lstset{
     basicstyle=\ttfamily\small,
@@ -83,7 +108,7 @@
     frame=single,
     numbers=left,
     numberstyle=\tiny,
-    captionpos=b,
+    captionpos=t,
     showstringspaces=false,
     keepspaces=true,
     breakatwhitespace=false,
@@ -93,8 +118,28 @@
 
 % ----------------------------------------------------------
 
+% Indicação da fonte das ilustrações e das tabelas, obrigatória pela NBR 14724,
+% mesmo quando o material é de elaboração do próprio autor.
+% O comando homônimo do abnTeX2 é redefinido para adotar a grafia em caixa alta
+% e o alinhamento à esquerda exigidos pelas normas da UFPR.
+\renewcommand{\fonte}[1]{%
+    \par\vspace{1mm}%
+    \noindent{\footnotesize\raggedright FONTE:~#1\par}%
+}
+
+% Nota explicativa opcional, posicionada abaixo da fonte.
+\renewcommand{\nota}[1]{%
+    \par\noindent{\footnotesize\raggedright NOTA:~#1\par}%
+}
+
+% ----------------------------------------------------------
+
 % Pacotes de citações BibLaTeX
-\usepackage[style=abnt,backref=true,backend=biber,citecounter=true,backrefstyle=three,language=brazilian]{biblatex}
+% A NBR 10520 exige que citações simultâneas de vários documentos sejam
+% apresentadas em ordem alfabética, o que é obtido com a opção sortcites.
+% A NBR 6023 não prevê informações acrescentadas às referências, razão pela
+% qual a remissão às páginas de citação (backref) permanece desativada.
+\usepackage[style=abnt,backref=false,backend=biber,sortcites=true,language=brazilian]{biblatex}
 
 % Forçar nomes de autores em maiúsculas e minúsculas (Capitalizado)
 \renewcommand{\mkbibnamefamily}[1]{#1}
@@ -109,10 +154,6 @@
   \renewcommand{\mkbibnamesuffix}[1]{#1}
 }
 
-\DefineBibliographyStrings{brazil}{
- backrefpage = {Citado \arabic{citecounter} vez na página},% originally "cited on page"
- backrefpages = {Citado \arabic{citecounter} vezes nas páginas},% originally "cited on pages"
-}
 
 % ----------------------------------------------------------
 
@@ -195,3 +236,26 @@
 \pretocmd{\chapter}{\addtocontents{toc}{\protect\addvspace{-5\p@}}}{}{}
 \pretocmd{\section}{\addtocontents{toc}{\protect\addvspace{2\p@}}}{}{}
 \makeatother
+
+% ----------------------------------------------------------
+
+% Conforme a NBR 6027, o sumário deve reproduzir os títulos tal como aparecem no
+% texto. Como as seções primárias e secundárias são impressas em caixa alta, as
+% entradas correspondentes do sumário recebem o mesmo tratamento.
+\makeatletter
+\settocpreprocessor{chapter}{%
+    \let\ABNTEXchaptertoc\f@rtoc%
+    \def\f@rtoc{%
+        \texorpdfstring{\bfseries\MakeTextUppercase{\ABNTEXchaptertoc}}{\ABNTEXchaptertoc}}%
+}
+\makeatother
+
+% O memoir só oferece pré-processador de sumário para livro, parte e capítulo.
+% Para as seções secundárias, a conversão é aplicada no momento em que a entrada
+% é gravada no arquivo de sumário.
+\let\ABNTEXaddcontentsline\addcontentsline
+\renewcommand{\addcontentsline}[3]{%
+    \ifthenelse{\equal{#2}{section}}%
+        {\ABNTEXaddcontentsline{#1}{#2}{\protect\MakeTextUppercase{#3}}}%
+        {\ABNTEXaddcontentsline{#1}{#2}{#3}}%
+}

@@ -79,7 +79,7 @@
     \ResumoTexto
     %\vspace{\onelineskip}
     \noindent 
-    \textbf{Palavras-chaves}: \PalavraschaveTexto
+    \textbf{Palavras-chave}: \PalavraschaveTexto
     \end{resumo}
     
     %% resumo em inglês
@@ -88,7 +88,7 @@
     \AbstractTexto
     %\vspace{\onelineskip}
     \noindent 
-    \textbf{Key-words}: \KeywordsTexto
+    \textbf{Keywords}: \KeywordsTexto
     \end{otherlanguage*}
     \end{resumo}
     
@@ -126,7 +126,23 @@
 % inserir lista de ilustrações
 \ifthenelse{\equal{\terListaFiguras}{Sim}}{
     %\pdfbookmark[0]{\listfigurename}{lof}
-    \listoffigures
+    \listoffigures*
+    \cleardoublepage
+}{}
+
+% ----------------------------------------------------------
+
+% inserir lista de algoritmos
+\ifthenelse{\equal{\terListaAlgoritmos}{Sim}}{
+    \listofalgorithms
+    \cleardoublepage
+}{}
+
+% ----------------------------------------------------------
+
+% inserir lista de programas
+\ifthenelse{\equal{\terListaProgramas}{Sim}}{
+    \lstlistoflistings
     \cleardoublepage
 }{}
 
@@ -135,7 +151,7 @@
 % inserir lista de tabelas
 \ifthenelse{\equal{\terListaTabelas}{Sim}}{
     %\pdfbookmark[0]{\listtablename}{lot}
-    \listoftables
+    \listoftables*
     \cleardoublepage
 }{}
 
@@ -160,6 +176,6 @@
 % inserir o sumario
 \ifthenelse{\equal{\terSumario}{Sim}}{
     %\pdfbookmark[0]{\contentsname}{toc}
-    \tableofcontents
+    \tableofcontents*
     %\cleardoublepage
 }{}

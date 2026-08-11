@@ -5,7 +5,7 @@
 %----------------------------------------------------------------------------- 
 
 % Informações de dados para CAPA e FOLHA DE ROSTO
-\tipotrabalho{Trabalho Acadêmico}
+\tipotrabalho{Trabalho de Conclusão de Curso}
 
 %----------------------------------------------------------------------------- 
 
@@ -19,6 +19,8 @@
 \providecommand{\terAgradecimentos}{Nao}
 \providecommand{\terErrata}{Nao}
 \providecommand{\terListaFiguras}{Sim}
+\providecommand{\terListaAlgoritmos}{Sim}
+\providecommand{\terListaProgramas}{Sim}
 \providecommand{\terListaTabelas}{Sim}
 \providecommand{\terSiglasAbrev}{Sim}
 \providecommand{\terSimbolos}{Sim}
@@ -30,7 +32,7 @@
 
 %----------------------------------------------------------------------------- 
 
-\titulo{Escalabilidade de Simulações de Escoamentos Compressíveis em Computação de Alta Performance: O Método de Lattice Boltzmann com Modelos de Programação Paralela}
+\titulo{Escalabilidade de Simulações de Escoamentos Compressíveis em Computação de Alto Desempenho: O Método de Lattice Boltzmann com Modelos de Programação Paralela}
 
 \autor{Marcos Augusto Belizario}
 
@@ -56,23 +58,25 @@
 
 \instituicao{Universidade Federal do Paraná}
 
-\def \ImprimirSetor{}%{Setor de Tecnologia}
+\def \ImprimirSetor{Setor de Tecnologia}
 
-\def \ImprimirProgramaPos{}%{Programa de Pós Graduação em Engenharia Mecânica}
+\def \ImprimirProgramaPos{}
 
-\def \ImprimirCurso{}%Curso de Engenharia Mecânica}
+\def \ImprimirCurso{Curso de Graduação em Engenharia Mecânica}
 
 \preambulo{
-TCC apresentado ao curso de Graduação em Engenharia Mecânica, Setor de Tecnologia, Universidade Federal do Paraná, como requisito parcial à obtenção do título de Bacharel em Engenharia Mecânica
+Trabalho de Conclusão de Curso apresentado ao Curso de Graduação em Engenharia Mecânica, Setor de Tecnologia, da Universidade Federal do Paraná, como requisito parcial à obtenção do título de Bacharel em Engenharia Mecânica
 }
 
 %----------------------------------------------------------------------------- 
 
-\newcommand{\imprimirCurso}{}
+\newcommand{\imprimirCurso}{Curso de Graduação em Engenharia Mecânica}
 
-\newcommand{\imprimirDataDefesa}{?? de ?? de 2025}
+\newcommand{\imprimirDataDefesa}{?? de ?? de 2026}
 
-\newcommand{\imprimircdu}{??}
+% A Classificação Decimal Universal definitiva é fornecida pela biblioteca da
+% instituição quando da elaboração da ficha catalográfica.
+\newcommand{\imprimircdu}{532.5}
 
 % ----------------------------------------------------------
 
@@ -92,17 +96,14 @@ TCC apresentado ao curso de Graduação em Engenharia Mecânica, Setor de Tecnol
 
 % ----------------------------------------------------------
 
+% Os nomes dos membros da banca examinadora são inseridos após a defesa.
 \newcommand{\AssinaAprovacao}{
     \assinatura{%\textbf
-       {Prof(a). Dr(a)./Msc. } \\ Departamento, INSTITUIÇÃO
+       {Primeiro membro da banca examinadora} \\ Departamento de Engenharia Mecânica, Universidade Federal do Paraná
     }
     
     \assinatura{%\textbf
-       {Prof(a). Dr(a)./Msc. } \\ Departamento, INSTITUIÇÃO
-    }
-    
-    \assinatura{%\textbf
-       {Prof(a). Dr(a)./Msc. } \\ Departamento, INSTITUIÇÃO
+       {Segundo membro da banca examinadora} \\ Departamento de Engenharia Mecânica, Universidade Federal do Paraná
     }
     
     \begin{center}
@@ -118,23 +119,27 @@ TCC apresentado ao curso de Graduação em Engenharia Mecânica, Setor de Tecnol
 % ----------------------------------------------------------
 
 \newcommand{\ResumoTexto}{
-A necessidade emergente de simulações de dinâmica dos fluidos computacional de alta fidelidade a baixo custo demanda tecnologias modernas quanto aos modelos matemáticos e arquitetura de computadores empregados, situação em que o Método de Lattice Boltzmann (LBM) se evidencia como ferramenta robusta para a simulação de fenômenos complexos em escoamentos, sobretudo por sua capacidade de representar interações microscópicas e capturar efeitos dissipativos com precisão através de cálculos espacialmente localizados e altamente paralelizáveis. 
-O objetivo deste trabalho é investigar a escalabilidade do método LBM em simulações de escoamentos compressíveis que necessitam de técnicas de relaxação (MRT) e regularização recursiva (RR) para obter resultados fidedignos à realidade em tempo razoável, utilizando sistemas computacionais de alta performance (HPC), onde as simulações são divididas em tarefas menores executadas em paralelo em diversos nós de processamento, combinando unidades de processamento central (CPU) e aceleradores de hardware, como GPUs e FPGAs. 
-Nesse contexto, foram desenvolvidos mini-aplicativos na linguagem de programação C++, responsáveis por implementar o os operadores de colisão e propagação do método LBM para resolver o problema do tubo de choque, caso de referência em estudos de ondas de choque. Para isso, foram utilizadas diferentes tecnologias e modelos de programação para executar as simulações em arquiteturas computacionais heterogêneas com múltiplos nós de computação: OpenCL, OpenMP, OpenACC, CUDA, Kokkos, RAJA e MPI. 
-A análise dos resultados contempla métricas de desempenho em função da quantidade de nós de processamento e da tecnologia empregada, como taxa de atualização em GLUPS (giga lattice updates per second), ganho de performance, ordem de escalabilidade, assim como complexidade da implementação mensurada em linhas de código (LOC).
-A partir dessa pesquisa, conclui-se que o LBM apresenta excelente potencial de escalabilidade em arquiteturas heterogêneas, conciliando simplicidade, desempenho e adaptabilidade, enquanto que no campo da computação de alta performance, tecnologias proprietárias como CUDA mostraram oferecer máximo rendimento, enquanto OpenCL e Kokkos priorizam portabilidade, com combinações híbridas utilizando MPI sendo essenciais para grandes centros de computação onde a arquitetura de memória distribuída está presente. Dessa forma, através do estudo comparativo entre as tecnologias HPC aplicadas, foram produzidos dados e subsídios para a escolha apropriada em futuros desenvolvimentos em simulações de escoamentos compressíveis, equilibrando custo de desenvolvimento, portabilidade e desempenho. 
+A necessidade crescente de simulações de dinâmica dos fluidos computacional de alta fidelidade a baixo custo demanda tecnologias modernas tanto nos modelos matemáticos quanto nas arquiteturas de computadores empregadas, situação em que o método de Lattice Boltzmann (LBM) evidencia-se como ferramenta robusta para a simulação de fenômenos complexos em escoamentos, sobretudo por sua capacidade de representar interações microscópicas e de capturar efeitos dissipativos com precisão por meio de cálculos espacialmente localizados e altamente paralelizáveis.
+O objetivo deste trabalho é investigar a escalabilidade do LBM em simulações de escoamentos compressíveis que requerem operadores de múltiplos tempos de relaxação (MRT) e regularização recursiva (RR) para produzir resultados fidedignos em tempo razoável, utilizando sistemas de computação de alto desempenho (HPC), nos quais as simulações são divididas em tarefas menores executadas em paralelo em diversos nós de processamento, combinando unidades de processamento central (CPUs) e aceleradores de hardware, como GPUs e FPGAs.
+Nesse contexto, foram desenvolvidos miniaplicativos na linguagem de programação C++, responsáveis por implementar os operadores de colisão e de propagação do método para resolver o problema do tubo de choque, caso de referência em estudos de ondas de choque. Para isso, foram empregadas diferentes tecnologias e modelos de programação voltados à execução em arquiteturas computacionais heterogêneas: OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA e MPI.
+A análise dos resultados contempla métricas de desempenho em função da quantidade de nós de processamento e da tecnologia empregada, como a taxa de atualização de nós da malha em GLUPS (giga lattice updates per second), a aceleração paralela e a ordem de escalabilidade, assim como a complexidade da implementação mensurada em linhas de código (LOC).
+Conclui-se que o LBM apresenta elevado potencial de escalabilidade em arquiteturas heterogêneas, conciliando simplicidade, desempenho e adaptabilidade, e que, no campo da computação de alto desempenho, tecnologias proprietárias como o CUDA oferecem o maior desempenho, enquanto o OpenCL, o Kokkos e o RAJA priorizam a portabilidade, sendo as combinações híbridas com MPI essenciais para grandes centros de computação com arquitetura de memória distribuída. Dessa forma, o estudo comparativo entre as tecnologias de HPC aplicadas produziu dados e subsídios para a escolha apropriada em futuros desenvolvimentos de simulações de escoamentos compressíveis, equilibrando custo de desenvolvimento, portabilidade e desempenho.
 }
 
 \newcommand{\PalavraschaveTexto}{
-HPC; Método de Lattice Boltzmann; Tubo de choque.
+HPC; Método de Lattice Boltzmann; Escoamento compressível; Tubo de choque.
 }
 
 % ----------------------------------------------------------
 
 \newcommand{\AbstractTexto}{
-With the emerging need for high-fidelity, low-cost computational fluid dynamics simulations, the Lattice Boltzmann Method (LBM) stands out as a robust tool for simulating complex flow phenomena, particularly due to its ability to represent microscopic interactions and accurately capture dissipative effects. To achieve trustworthy results within a reasonable timeframe, high-performance computing (HPC) systems are employed, where simulations are divided into smaller tasks executed in parallel across multiple processing nodes, combining central processing units (CPUs) and hardware accelerators such as FPGAs and GPUs. In this context, the LBM method applied to the shock tube problem was used as a reference in the present research to analyze HPC technologies through the development of mini-apps in the C++ programming language, using different programming models to run simulations on heterogeneous architectures. The adopted methodology includes a comparative analysis of the mini-apps, using metrics such as performance, scalability, and development cost. Among the main goals is the critical evaluation of the inherent advantages and disadvantages of using proprietary technologies, which, although offering high performance for specific hardware, present limitations in terms of portability to other computing systems.
+The growing need for high-fidelity computational fluid dynamics simulations at low cost demands modern technologies both in the mathematical models and in the computer architectures employed, a situation in which the Lattice Boltzmann Method (LBM) stands out as a robust tool for the simulation of complex flow phenomena, mainly because of its ability to represent microscopic interactions and to accurately capture dissipative effects by means of spatially localised and highly parallelisable computations.
+The objective of this work is to investigate the scalability of the LBM in simulations of compressible flows that require multiple relaxation time (MRT) operators and recursive regularisation (RR) in order to produce reliable results within a reasonable time, using high performance computing (HPC) systems, in which the simulations are divided into smaller tasks executed in parallel across several processing nodes, combining central processing units (CPUs) and hardware accelerators such as GPUs and FPGAs.
+In this context, mini-apps were developed in the C++ programming language, responsible for implementing the collision and streaming operators of the method in order to solve the shock tube problem, a reference case in studies of shock waves. To this end, different technologies and programming models aimed at execution on heterogeneous computing architectures were employed: OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA and MPI.
+The analysis of the results covers performance metrics as a function of the number of processing nodes and of the technology employed, such as the lattice node update rate in GLUPS (giga lattice updates per second), the parallel speedup and the scalability order, as well as the implementation complexity measured in lines of code (LOC).
+It is concluded that the LBM presents high scalability potential on heterogeneous architectures, reconciling simplicity, performance and adaptability, and that, in the field of high performance computing, proprietary technologies such as CUDA offer the highest performance, whereas OpenCL, Kokkos and RAJA prioritise portability, with hybrid combinations with MPI being essential for large computing centres with distributed memory architecture. In this way, the comparative study among the HPC technologies applied produced data and support for the appropriate choice in future developments of compressible flow simulations, balancing development cost, portability and performance.
 }
 % ---
 \newcommand{\KeywordsTexto}{
-HPC; Lattice Boltzmann Method; Shock tube.
+HPC; Lattice Boltzmann Method; Compressible flow; Shock tube.
 }

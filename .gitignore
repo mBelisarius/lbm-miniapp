@@ -1,5 +1,6 @@
 # IDE settings
 .idea/
+.junie/
 .vscode/
 .vs/
 
@@ -11,4 +12,4 @@ build/
 cmake-build-*/
 
 # LaTeX
-thesis/out/
+thesis/out*/

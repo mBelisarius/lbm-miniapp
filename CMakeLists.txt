@@ -10,6 +10,10 @@ set(ProjectName "lbm-miniapp")
 set(ProjectNamespace "lbmini")
 
 option(ENABLE_CUDA "Enable CUDA for the project" ON)
+option(ENABLE_KOKKOS "Enable the Kokkos backend" ON)
+option(ENABLE_KOKKOS_CUDA "Build Kokkos with its CUDA device backend" OFF)
+option(ENABLE_RAJA "Enable the RAJA backend" ON)
+option(ENABLE_RAJA_CUDA "Build RAJA with its CUDA device backend" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 project("${ProjectName}" LANGUAGES CXX)
@@ -127,6 +131,99 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
 endif()
 
 # =========================================================
+# Kokkos
+
+# The Kokkos backend is single-source: the very same solver is instantiated on
+# Kokkos::DefaultHostExecutionSpace (CPU target) and on
+# Kokkos::DefaultExecutionSpace (GPU target). Which spaces exist is decided
+# here, at Kokkos configuration time. The CUDA device backend is opt-in
+# (-DENABLE_KOKKOS_CUDA=ON) because it requires the host compiler to double as
+# a CUDA compiler (nvcc / nvcc_wrapper / nvc++).
+if (ENABLE_KOKKOS)
+    include(FetchContent)
+    FetchContent_Declare(
+            kokkos
+            GIT_REPOSITORY https://github.com/kokkos/kokkos.git
+            GIT_TAG 4.4.01
+    )
+
+    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+    set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "" FORCE)
+    if (TARGET OpenMP::OpenMP_CXX OR CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
+        set(Kokkos_ENABLE_OPENMP ON CACHE BOOL "" FORCE)
+    endif ()
+    if (ENABLE_KOKKOS_CUDA)
+        set(Kokkos_ENABLE_CUDA ON CACHE BOOL "" FORCE)
+        set(Kokkos_ENABLE_CUDA_LAMBDA ON CACHE BOOL "" FORCE)
+    endif ()
+
+    FetchContent_MakeAvailable(kokkos)
+
+    foreach(_kokkos_target kokkoscore kokkoscontainers kokkosalgorithms kokkossimd)
+        if(TARGET ${_kokkos_target})
+            set_property(TARGET ${_kokkos_target} PROPERTY FOLDER "kokkos")
+        endif()
+    endforeach()
+endif ()
+
+# =========================================================
+# RAJA
+
+# The RAJA backend is single-source too: the very same solver is instantiated
+# with the host backend tag (OpenMP / sequential) and with the device backend
+# tag (CUDA / HIP). Which policies exist is decided here, at RAJA configuration
+# time. The CUDA device backend is opt-in (-DENABLE_RAJA_CUDA=ON) because RAJA
+# device lambdas require the whole translation unit to be compiled by nvcc.
+if (ENABLE_RAJA)
+    include(FetchContent)
+    FetchContent_Declare(
+            RAJA
+            GIT_REPOSITORY https://github.com/LLNL/RAJA.git
+            GIT_TAG v2024.07.0
+    )
+
+    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+    # BLT (RAJA's build system) propagates BLT_CXX_STD to CMAKE_CXX_STANDARD;
+    # pin it so RAJA does not downgrade the project to C++14.
+    set(BLT_CXX_STD "c++17" CACHE STRING "" FORCE)
+    # BLT would otherwise register its own bundled googletest and collide with
+    # the one fetched above.
+    set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(ENABLE_BENCHMARKS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_DOCS OFF CACHE BOOL "" FORCE)
+    set(RAJA_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(RAJA_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(RAJA_ENABLE_EXERCISES OFF CACHE BOOL "" FORCE)
+    set(RAJA_ENABLE_BENCHMARKS OFF CACHE BOOL "" FORCE)
+    set(RAJA_ENABLE_REPRODUCERS OFF CACHE BOOL "" FORCE)
+    if (TARGET OpenMP::OpenMP_CXX OR CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
+        set(ENABLE_OPENMP ON CACHE BOOL "" FORCE)
+        set(RAJA_ENABLE_OPENMP ON CACHE BOOL "" FORCE)
+    endif ()
+    if (ENABLE_RAJA_CUDA)
+        set(ENABLE_CUDA ON CACHE BOOL "" FORCE)
+        set(RAJA_ENABLE_CUDA ON CACHE BOOL "" FORCE)
+    endif ()
+
+    # BLT writes CMAKE_*_OUTPUT_DIRECTORY into the cache and would relocate
+    # *every* project binary into RAJA's build tree. Claiming those cache
+    # entries first (without FORCE, so an explicit user setting still wins)
+    # keeps the mini-app executables where the rest of the tooling expects them.
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}" CACHE PATH "")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}" CACHE PATH "")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}" CACHE PATH "")
+
+    FetchContent_MakeAvailable(RAJA)
+
+    foreach(_raja_target RAJA camp blt_cuda blt_cuda_runtime)
+        if(TARGET ${_raja_target})
+            set_property(TARGET ${_raja_target} PROPERTY FOLDER "raja")
+        endif()
+    endforeach()
+endif ()
+
+# =========================================================
 # Targets
 
 # --- Common
@@ -161,6 +258,20 @@ target_link_libraries("${ProjectName}-common"
         PUBLIC Eigen3::Eigen
         PUBLIC yaml-cpp::yaml-cpp
 )
+
+# Executor.cpp instantiates every backend, so the Kokkos headers and the
+# USE_KOKKOS switch have to be visible to the common target as well.
+if(ENABLE_KOKKOS AND TARGET Kokkos::kokkos)
+    target_compile_definitions("${ProjectName}-common" PUBLIC USE_KOKKOS)
+    target_link_libraries("${ProjectName}-common" PUBLIC Kokkos::kokkos)
+endif()
+
+# Same for RAJA: the factory in Executor.cpp needs the policies and the
+# USE_RAJA switch.
+if(ENABLE_RAJA AND TARGET RAJA)
+    target_compile_definitions("${ProjectName}-common" PUBLIC USE_RAJA)
+    target_link_libraries("${ProjectName}-common" PUBLIC RAJA)
+endif()
 
 # --- Lbm Plain
 
@@ -333,6 +444,52 @@ set_target_properties("${ProjectName}-lbm-mpi" PROPERTIES LINKER_LANGUAGE CXX)
 target_compile_definitions("${ProjectName}-lbm-mpi" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
 target_link_libraries("${ProjectName}-lbm-mpi" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common" PUBLIC MPI::MPI_CXX)
 
+# --- Lbm Kokkos
+
+if(ENABLE_KOKKOS AND TARGET Kokkos::kokkos)
+    add_library("${ProjectName}-lbm-kokkos" STATIC
+            lbmini/Lbm/Kokkos/LatticeD2Q9.hpp
+            lbmini/Lbm/Kokkos/LbmTube.hpp
+            lbmini/Lbm/Kokkos/Runtime.hpp
+            lbmini/Lbm/Kokkos/Cpu/LatticeD2Q9.hpp
+            lbmini/Lbm/Kokkos/Cpu/LbmTube.hpp
+            lbmini/Lbm/Kokkos/Gpu/LatticeD2Q9.hpp
+            lbmini/Lbm/Kokkos/Gpu/LbmTube.hpp
+    )
+
+    target_include_directories("${ProjectName}-lbm-kokkos" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+    set_target_properties("${ProjectName}-lbm-kokkos" PROPERTIES LINKER_LANGUAGE CXX)
+    target_compile_definitions("${ProjectName}-lbm-kokkos" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+    target_link_libraries("${ProjectName}-lbm-kokkos"
+            PUBLIC Eigen3::Eigen
+            PUBLIC "${ProjectName}-common"
+            PUBLIC Kokkos::kokkos
+    )
+endif()
+
+# --- Lbm RAJA
+
+if(ENABLE_RAJA AND TARGET RAJA)
+    add_library("${ProjectName}-lbm-raja" STATIC
+            lbmini/Lbm/Raja/Backends.hpp
+            lbmini/Lbm/Raja/LatticeD2Q9.hpp
+            lbmini/Lbm/Raja/LbmTube.hpp
+            lbmini/Lbm/Raja/Cpu/LatticeD2Q9.hpp
+            lbmini/Lbm/Raja/Cpu/LbmTube.hpp
+            lbmini/Lbm/Raja/Gpu/LatticeD2Q9.hpp
+            lbmini/Lbm/Raja/Gpu/LbmTube.hpp
+    )
+
+    target_include_directories("${ProjectName}-lbm-raja" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+    set_target_properties("${ProjectName}-lbm-raja" PROPERTIES LINKER_LANGUAGE CXX)
+    target_compile_definitions("${ProjectName}-lbm-raja" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+    target_link_libraries("${ProjectName}-lbm-raja"
+            PUBLIC Eigen3::Eigen
+            PUBLIC "${ProjectName}-common"
+            PUBLIC RAJA
+    )
+endif()
+
 # --- Main
 
 add_executable("${ProjectName}-main" lbmini/main.cpp)
@@ -351,20 +508,43 @@ target_link_libraries("${ProjectName}-main"
         PUBLIC "${ProjectName}-lbm-mpi"
 )
 
+if(TARGET "${ProjectName}-lbm-kokkos")
+    target_link_libraries("${ProjectName}-main" PUBLIC "${ProjectName}-lbm-kokkos")
+endif()
+
+if(TARGET "${ProjectName}-lbm-raja")
+    target_link_libraries("${ProjectName}-main" PUBLIC "${ProjectName}-lbm-raja")
+endif()
+
 # --- GTest
 
 enable_testing()
 
-add_executable("${ProjectName}-test"
-        test/sanity_test.cpp
-)
+set(TestSources test/sanity_test.cpp)
+if(TARGET "${ProjectName}-lbm-kokkos")
+    list(APPEND TestSources test/kokkos_lbm_test.cpp)
+endif()
+if(TARGET "${ProjectName}-lbm-raja")
+    list(APPEND TestSources test/raja_lbm_test.cpp)
+endif()
+
+add_executable("${ProjectName}-test" ${TestSources})
 set_target_properties("${ProjectName}-test" PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 target_link_libraries("${ProjectName}-test"
         PUBLIC MPI::MPI_CXX
         PUBLIC Eigen3::Eigen
         PUBLIC gtest_main
         PUBLIC "${ProjectName}-common"
+        PUBLIC "${ProjectName}-lbm-plain"
 )
+
+if(TARGET "${ProjectName}-lbm-kokkos")
+    target_link_libraries("${ProjectName}-test" PUBLIC "${ProjectName}-lbm-kokkos")
+endif()
+
+if(TARGET "${ProjectName}-lbm-raja")
+    target_link_libraries("${ProjectName}-test" PUBLIC "${ProjectName}-lbm-raja")
+endif()
 
 include(GoogleTest)
 gtest_discover_tests("${ProjectName}-test")

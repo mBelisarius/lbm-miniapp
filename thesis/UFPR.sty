@@ -268,8 +268,8 @@
 \newcommand{\insereFichaCatalografica}{ 
  \begin{fichacatalografica}%\color{blue}
 
- \IfFileExists{arquivos/FichaC1.pdf}
-    {\includepdf[pages=-]{arquivos/FichaC1}}
+ \IfFileExists{arquivos/FichaCatalografica.pdf}
+    {\includepdf[pages=-]{arquivos/FichaCatalografica}}
     {
 	\vspace*{\fill}					% Posição vertical
 	\hrule							% Linha horizontal
@@ -401,8 +401,8 @@
 
 % Folha de Aprovação
 \newcommand{\insereAprovacao}{
-\IfFileExists{arquivos/TermoA1.pdf}
-    {\includepdf[pages=-]{arquivos/TermoA1.pdf}}{
+\IfFileExists{arquivos/TermoAprovacao.pdf}
+    {\includepdf[pages=-]{arquivos/TermoAprovacao.pdf}}{
     \begin{folhadeaprovacao}%\color{blue}
     
       \begin{center}
@@ -451,7 +451,7 @@
     pdfauthor={\@author},
     pdfsubject={\imprimirpreambulo},
     pdfcreator={LaTeX with abnTeX2},
-    pdfkeywords={abnt}{latex}{abntex}{abntex2}{trabalho acadêmico}, 
+    pdfkeywords={HPC}{Lattice Boltzmann}{escoamento compressível}{tubo de choque}, 
     colorlinks=true,       		% false: boxed links; true: colored links
     linkcolor=black,          	% color of internal links
     citecolor=black,        		% color of links to bibliography
