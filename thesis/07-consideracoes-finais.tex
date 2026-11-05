@@ -15,81 +15,62 @@
 
 \section{Síntese dos Resultados Obtidos}\label{sec:sintese-dos-resultados-obtidos}
 
-Este trabalho apresentou um miniaplicativo que implementa o método de Lattice Boltzmann para escoamentos compressíveis.
-Também foram realizadas a validação do miniaplicativo no problema do tubo de choque de Sod e a avaliação de sua escalabilidade em CPUs multinúcleo e em aceleradores gráficos, por meio de uma campanha de ensaios.
-Os resultados do Capítulo~\ref{ch:resultados} permitem responder aos objetivos específicos enunciados na Seção~\ref{subsec:objetivos-especificos}.
+Este trabalho desenvolveu um miniaplicativo que implementa o método de Lattice Boltzmann para escoamentos compressíveis em oito tecnologias de paralelização, validado no tubo de choque de Sod, e avaliou sua escalabilidade em CPUs multinúcleo e em aceleradores gráficos.
+Os resultados do Capítulo~\ref{ch:resultados} respondem aos objetivos específicos enunciados na Seção~\ref{subsec:objetivos-especificos}.
 
-Quanto ao primeiro objetivo específico, a validação da implementação, os perfis de massa específica, de velocidade e de pressão foram comparados com a solução analítica do problema de Riemann.
-Os perfis acompanharam a solução nas regiões suaves do escoamento e posicionaram corretamente a cabeça e a cauda da rarefação, a descontinuidade de contato e a frente de choque.
-No estudo de refinamento, a taxa de convergência efetiva foi inferior à primeira ordem em normas globais, com valor máximo de \(0{,}41\) na pressão, e tendeu a zero entre as malhas mais refinadas.
-Tal comportamento é coerente com a presença de descontinuidades, que dominam a norma do erro, ainda que o esquema de propagação seja formalmente de segunda ordem nas regiões contínuas.
-Os estudos de sensibilidade acrescentaram a esse quadro os limites práticos de operação do miniaplicativo: o erro não cresceu de modo monotônico com a razão de pressões inicial, com mínimo na configuração clássica, e nenhuma execução divergiu até a razão de \(20\); a faixa de viscosidade que minimiza o erro, que contém o valor de referência, situa-se entre o excesso de dissipação e a proximidade do limite inferior do tempo de relaxação, o qual não foi atingido na faixa avaliada.
+Quanto ao primeiro objetivo específico, a validação, os perfis de massa específica, de velocidade e de pressão acompanharam a solução analítica do problema de Riemann nas regiões suaves e posicionaram corretamente a rarefação, o contato e o choque.
+A ordem de convergência efetiva foi inferior à primeira ordem, com máximo de \(0{,}41\) na pressão, e tendeu a zero entre as malhas mais refinadas, o que é coerente com descontinuidades que dominam a norma do erro.
+O erro mínimo ocorreu na razão de pressões clássica, nenhuma execução divergiu até a razão de \(20\), e a faixa de viscosidade que minimiza o erro contém o valor de referência, sem que o limite inferior do tempo de relaxação fosse atingido.
 
-Quanto ao segundo objetivo específico, a análise de desempenho das diferentes filosofias de programação, o modelo \textit{roofline} indicava que as tecnologias voltadas à CPU multinúcleo deveriam convergir para acelerações da mesma ordem de grandeza nas malhas grandes.
-Essa expectativa não se confirmou: o OpenMP alcançou \(6{,}8\) vezes o desempenho da versão sequencial, contra \(4{,}6\) do MPI, \(3{,}3\) do OpenACC, cerca de \(2{,}0\) do Kokkos e do RAJA e \(0{,}3\) do OpenCL.
-As taxas ficaram abaixo do teto de largura de banda, e a diferença decorreu da eficiência do código executado em cada núcleo, em particular da vetorização explícita da colisão, presente apenas na variante do OpenMP medida, de modo que a escolha entre as tecnologias afetou o desempenho alcançável, e não apenas a portabilidade e o esforço de desenvolvimento.
-O uso de aceleradores gráficos trouxe ganho sobre a CPU multinúcleo, porém moderado em precisão dupla, entre \(1{,}5\) e \(3{,}2\) vezes sobre a melhor versão de CPU, pois o modelo situa o teto da GPU considerada entre cerca de \(1{,}85\) e \(3{,}9\) vezes o da CPU.
-Esses valores variam conforme os pesos de interpolação sejam calculados durante a propagação ou lidos de tabelas mantidas na memória do acelerador, e as versões da campanha com tabelas, Kokkos e RAJA, foram as de maior desempenho, com taxas cerca de duas vezes superiores às das versões nativas.
-O ganho também esteve condicionado a malhas suficientemente refinadas para amortizar a latência de lançamento dos \textit{kernels}: com cem nós, todas as tecnologias de GPU foram mais lentas do que um único núcleo de CPU.
-Embora moderado, tal ganho indica o potencial das arquiteturas heterogêneas para o LBM compressível.
+Quanto ao segundo objetivo específico, o desempenho, o modelo \textit{roofline} indica que o \textit{kernel} fundido é limitado pela largura de banda de memória na CPU, com teto de \(320\) MLUPS na plataforma de referência, e pela capacidade aritmética em precisão dupla na GPU de consumo, com teto de \(626\) MLUPS, embora a largura de banda sustentasse \(2100\) MLUPS.
+A otimização por hipóteses decididas por medição (Seção~\ref{sec:otimizacao-roofline}) resultou em três decisões aplicadas a todas as tecnologias: a direção longitudinal contígua na memória (efeito de \(2{,}8\) vezes na taxa de um núcleo), o núcleo vetorial compartilhado das CPUs, com escalonamento dinâmico, e a fatoração por eixo do fechamento energético, que reduz de \(36\) para \(8\) as exponenciais por nó e por passo (efeito de \(2{,}2\) vezes em CPU e de \(1{,}6\) a \(2{,}1\) vezes em GPU).
+Com elas, as tecnologias de CPU executam de \(25\) a \(31\) MLUPS por núcleo e, com doze núcleos, as de memória compartilhada alcançam de \(143\) a \(150\) MLUPS (\(45\%\) a \(47\%\) do teto de memória), contra \(109\) no MPI e \(132\) no OpenCL, por limitações das próprias tecnologias (fatias estáticas e custo de lançamento do POCL).
+As tecnologias de GPU executam de \(174\) a \(194\) MLUPS, entre \(90\%\) e \(100\%\) do limite de emissão de instruções de dupla precisão e, na projeção para a GPU de referência, entre \(48\%\) e \(54\%\) do teto aritmético.
+A razão entre as taxas de GPU e de CPU é de \(1{,}2\) a \(1{,}3\) nas plataformas de medição e de \(2{,}0\) a \(2{,}2\) na projeção, em acordo com a razão de \(2{,}0\) entre os tetos, e o ganho exige malhas de pelo menos alguns milhares de nós em \(x\).
 
-Quanto ao terceiro objetivo específico, a escalabilidade, o modelo \textit{roofline} mostrou que o fator limitante depende da arquitetura.
-Em CPU, o algoritmo é limitado pela largura de banda de memória e não pela capacidade de cálculo aritmético, ao passo que em uma GPU de consumo, em precisão dupla, o limite é a capacidade aritmética.
-Na CPU, a eficiência paralela foi maior, até seis núcleos, na malha cujo conjunto de trabalho cabe nos níveis mais rápidos da hierarquia de memória (\(0{,}70\), contra \(0{,}44\) na malha residente na memória principal), mas decresceu acima desse número de núcleos.
-Nas malhas residentes na memória principal, a aceleração aproximou-se de um patamar de cerca de três com doze núcleos, com eficiência entre \(0{,}23\) e \(0{,}26\) e taxa de atualização entre \(34\%\) e \(38\%\) do teto.
-Nesse regime, a contenção do barramento compartilhado entre os núcleos passa a dominar o comportamento observado, efeito que a lei de Amdahl, isoladamente, não explica.
+Quanto ao terceiro objetivo específico, a escalabilidade, a aceleração em CPU é sublinear e atinge, com doze núcleos, \(5{,}7\) (eficiência de \(0{,}47\)) nas malhas residentes na memória principal, \(4{,}0\) em \(N_x = 1000\), em que pesa o custo de sincronização por passo, e \(0{,}9\) em \(N_x = 100\), em que o passo é da ordem do custo de uma barreira.
+Nas malhas grandes, a perda de eficiência é atribuída ao equipamento, e não ao código: oito cópias independentes do programa, sem comunicação, atingem de \(0{,}55\) a \(0{,}73\) da taxa linear, com fração sequencial efetiva da mesma ordem da do OpenMP, que atinge de \(92\%\) a \(97\%\) delas.
 
-Quanto ao quarto objetivo específico, que confronta desempenho e custo de desenvolvimento, a contagem de linhas de código mostrou que as tecnologias baseadas em diretivas exigem o menor acréscimo por alvo, entre 8\% e 19\% sobre a versão sequencial.
-Essa característica as torna atraentes quando o prazo de desenvolvimento é restritivo e um único alvo é suficiente.
-Os modelos de baixo nível, como o CUDA e o OpenCL, exigem os maiores acréscimos por alvo, entre 32\% e 60\%.
-Quando o mesmo código precisa atender a CPUs e a aceleradores ao mesmo tempo, as camadas de abstração avaliadas experimentalmente (Kokkos e RAJA) apresentam as menores contagens, com acréscimos de 24\% e de 34\% sobre uma única base de código, proposta de unificação em C++20 que o Alpaka, integrado em etapa posterior, também adota, embora sem contagem de linhas na presente campanha.
-Nas tecnologias que mantêm uma versão por alvo, a contagem corresponde a mais do que o dobro da versão sequencial.
-Entretanto, a menor contagem das camadas de abstração acarreta compilação mais lenta e diagnósticos de erro mais extensos.
-O confronto desse custo com o desempenho mostrou resultados distintos nos dois alvos: em GPU, as camadas de abstração alcançaram as maiores taxas, ao passo que, em CPU, ficaram aquém do OpenMP, com menos de um terço do seu desempenho.
+Quanto ao quarto objetivo específico, a base única das camadas de abstração não oferece vantagem de código: as camadas custam de \(3{,}37\) a \(3{,}67\) vezes a versão sequencial e as duas implementações especializadas (OpenMP em CPU e CUDA), \(3{,}48\) vezes, pois o desempenho em CPU exigiu um núcleo vetorial de \(1078\) linhas que as camadas não conseguem expressar.
+As camadas (Kokkos, RAJA e Alpaka) alcançam de \(95\%\) a \(100\%\) do desempenho do OpenMP em CPU e de \(100\%\) a \(104\%\) do desempenho do CUDA em GPU, de modo que a portabilidade de desempenho é alcançada nas duas arquiteturas, a um custo de código equivalente ao de manter duas implementações, com compilação mais lenta e diagnósticos de erro mais extensos.
+As diretivas (OpenMP e OpenACC) permanecem atraentes quando o prazo é restritivo e um único alvo basta, embora o OpenACC em CPU tenha exigido uma formulação própria (\(900\) linhas) pelos limites de vetorização do \texttt{nvc++}.
 
 %---------------------------------------------------------------------------------------
 
 \section{Contribuições do Trabalho}\label{sec:contribuicoes-do-trabalho}
 
-Do ponto de vista acadêmico, o estudo fornece uma linha de base reprodutível para comparações entre operadores de colisão, discretizações do espaço de velocidades e estratégias de filtragem ou de dissipação controlada no LBM compressível.
-Apresenta, além disso, um modelo de custo que explicita gargalos práticos, como a largura de banda de memória em CPU, a capacidade aritmética em precisão dupla em GPU e as sobrecargas de sincronização, o que orienta pesquisas futuras em otimização de \textit{kernels} em arquiteturas heterogêneas.
-O miniaplicativo estruturado serve ainda como artefato experimental para o ensino de computação de alto desempenho e para a prototipagem de novos modelos físicos.
+O trabalho contribui com quatro elementos.
+O primeiro é o miniaplicativo, que implementa a mesma formulação do LBM compressível em oito tecnologias de paralelização e serve de linha de base reprodutível para estudos de portabilidade de desempenho, para o ensino de computação de alto desempenho e para a prototipagem de novos modelos físicos.
+O segundo é o modelo de custo, que mostra que o fator limitante depende do dispositivo, e não apenas do método: a largura de banda de memória em CPU e a capacidade aritmética em precisão dupla em GPU de consumo.
+O terceiro é o procedimento de otimização orientado por hipóteses, com tetos medidos no equipamento e comparação alternada na mesma sessão, no qual oito dos quinze experimentos da \autoref{tab:hipoteses-otimizacao} refutaram ou rejeitaram a hipótese que os motivou.
+O quarto é a comparação entre desempenho e custo de desenvolvimento sob um mesmo algoritmo e caso de teste, que subsidia a escolha da tecnologia de paralelização.
 
 %---------------------------------------------------------------------------------------
 
 \section{Limitações Identificadas}\label{sec:limitacoes-identificadas}
 
-Este trabalho apresenta limitações decorrentes do ambiente experimental e do estágio atual de desenvolvimento do resolvedor.
-Os ensaios são conduzidos em uma única máquina, equipada com um processador de doze núcleos e uma GPU dedicada de 12~GB, sem acesso a agrupamentos de computadores (\textit{clusters}) que permitiriam avaliar a escalabilidade distribuída em larga escala via MPI.
-Além disso, as malhas foram limitadas a 11~GB de ocupação de memória, de modo que malhas muito refinadas, como a de \(10^8\) nós, que demandaria cerca de \(35\)~GB no acelerador, ficam fora do escopo, e o desempenho nelas permanece como expectativa teórica a confirmar.
-As explicações apresentadas para as diferenças de desempenho entre as tecnologias, em particular o papel da vetorização da colisão em CPU, decorrem da estrutura do código e do modelo \textit{roofline}, e não de análises com contadores de desempenho dos dispositivos, de modo que permanecem como hipóteses fundamentadas.
-Os tetos do modelo \textit{roofline}, por sua vez, baseiam-se em valores de especificação e em uma premissa de custo das funções transcendentes na GPU, e o fato de nenhuma taxa medida exceder esses tetos não basta para verificá-la.
-Por fim, a ausência de testes com escoamentos multidimensionais também delimita o escopo da validação planejada.
-Ressalta-se igualmente que a campanha de medições foi realizada sobre as implementações anteriores à adoção dos núcleos fundidos com estêncil compacto de propagação e que a biblioteca Alpaka foi integrada em etapa posterior.
-Embora o código atual e o Alpaka tenham sido verificados quanto à equivalência numérica em relação à referência sequencial, seu desempenho e sua escalabilidade, bem como a contagem de linhas de código, permanecem a ser aferidos em campanhas posteriores.
-Isso se aplica em particular ao OpenMP em CPU, cujo núcleo fundido atual substituiu a variante com colisão vetorizada explicitamente que foi medida.
+As limitações decorrem sobretudo do ambiente experimental.
+As taxas provêm de uma única máquina, com processador de oito núcleos de desempenho e GPU dedicada de 12~GB, e foram estendidas ao protocolo de doze núcleos e de malhas de até \(3\times10^4\) nós em \(x\) (Seção~\ref{subsec:protocolo-de-medicao}), o que não captura efeitos da topologia em dois complexos de seis núcleos.
+A projeção para a GPU de referência supõe a mesma composição de instruções e a mesma fração da emissão nas duas arquiteturas, e os tetos do modelo \textit{roofline} baseiam-se em valores de especificação e em custo de \(20\) operações por exponencial.
+Não houve acesso a agrupamentos (\textit{clusters}), e o MPI foi avaliado em um único nó.
+As malhas foram limitadas a 11~GB de ocupação de memória, o que exclui malhas muito refinadas, como a de \(10^8\) nós (cerca de \(34\)~GB no acelerador).
+Sem acesso aos contadores de \textit{hardware}, a atribuição de um ganho a um gargalo específico repousa em contagens de instruções, em tetos medidos por \textit{microbenchmarks} e em previsões confirmadas, e a causa da diferença entre o MPI e o OpenMP nas malhas grandes não foi isolada.
+Com \(\Pi = 2\), em que o tempo de relaxação do estado à direita é de cerca de \(0{,}56\), o esquema amplifica ruído de arredondamento, e a equivalência numérica entre as tecnologias foi aferida apenas com tempo de relaxação distante de \(0{,}5\) (Seção~\ref{subsec:efeito-da-razao-de-pressoes-no-erro}).
+O estudo restringe-se, por fim, ao tubo de choque em faixa estreita, sem escoamentos multidimensionais.
 
 %---------------------------------------------------------------------------------------
 
 \section{Trabalhos Futuros}\label{sec:trabalhos-futuros}
 
-Como trabalhos futuros, propõe-se um roteiro de evolução em quatro frentes, relacionadas às limitações reconhecidas na seção anterior.
+Na frente de portabilidade de desempenho, sugere-se estender as camadas de abstração (Kokkos, RAJA e Alpaka) a HIP e SYCL, para verificar se as conclusões obtidas com GPUs NVIDIA se mantêm em aceleradores de outros fabricantes, e investigar se as camadas passam a expressar o núcleo vetorial de CPU, o que recuperaria a vantagem de código da base única.
+Recomenda-se também investigar o particionamento da malha em blocos (\textit{tiling}), a busca antecipada explícita, as instruções AVX-512 da CPU de referência, não exploradas, e o posicionamento dos fluxos de execução conforme a topologia de dois complexos de núcleos.
 
-Na frente de portabilidade de desempenho, sugere-se estender as implementações em camadas de abstração (Kokkos, RAJA e Alpaka) a espaços de execução ainda não avaliados, em particular HIP e SYCL, para verificar se as conclusões obtidas com GPUs NVIDIA se mantêm em aceleradores de outros fabricantes.
-No mesmo esforço, recomenda-se investigar disposições alternativas de dados, com particionamento da malha em blocos (\textit{tiling}) e busca antecipada explícita, que possam reduzir a pressão sobre o subsistema de memória, identificada pelo modelo \textit{roofline} como fator limitante do desempenho em CPU.
-Convém também repetir a campanha de medições com os núcleos fundidos atuais e com o Alpaka, a fim de aferir o efeito do estêncil compacto sobre o desempenho nos dois alvos.
-Convém ainda avaliar, no núcleo fundido de CPU e nas camadas de abstração, a organização da colisão em blocos de células com laços vetorizados planos empregada na variante do OpenMP medida na campanha, para verificar se a diferença de desempenho observada decorre do \textit{kernel} ou da camada de abstração.
+Na frente de paralelismo distribuído, propõe-se estender a decomposição unidimensional atual a uma decomposição multidimensional, com agregação de mensagens e balanceamento de carga, e avaliar a combinação do MPI com as implementações para aceleradores em uma configuração híbrida.
 
-Na frente de paralelismo distribuído, propõe-se estender a decomposição de domínio unidimensional atualmente implementada para uma decomposição multidimensional, combinada com a agregação de mensagens, para mitigar a latência, e com estratégias de balanceamento de carga para partições desiguais em sistemas heterogêneos.
-Propõe-se também avaliar a combinação do MPI com as implementações voltadas a aceleradores, em uma configuração híbrida que explore ao mesmo tempo o paralelismo local no interior de cada dispositivo e o paralelismo distribuído entre nós de computação.
+Na frente experimental, faz-se necessária uma campanha em ambiente de computação de alto desempenho, com estudos de escalabilidade forte e fraca em agrupamentos com aceleradores e com nós de CPU de maior contagem de núcleos, medindo a taxa de atualização de nós, a eficiência paralela, o posicionamento em relação ao modelo \textit{roofline} e o custo energético, o que permitirá confrontar a extensão a doze núcleos e a projeção da GPU de referência com medições diretas.
+Em aceleradores com razão de 1:2 ou de 1:1 entre as taxas em precisão dupla e simples, será possível verificar a previsão de que o \textit{kernel} volta a ser limitado pela largura de banda e passa a ter teto cerca de \(6{,}6\) vezes o da CPU.
 
-Na frente experimental, faz-se necessária uma campanha extensiva de ensaios em ambiente de computação de alto desempenho, incluindo estudos de escalabilidade forte e fraca em agrupamentos equipados com aceleradores e com nós de CPU de maior contagem de núcleos, variando o refinamento espacial e o número de passos de tempo.
-Nessas campanhas, devem ser medidos a taxa de atualização de nós, a eficiência paralela, o posicionamento em relação ao modelo \textit{roofline} e o custo energético, métrica cuja relevância cresce nos grandes centros de computação.
-Os aceleradores desses agrupamentos, com razões de 1:2 ou de 1:1 entre as taxas em precisão dupla e simples, permitirão verificar duas previsões do modelo: que o \textit{kernel} de cálculo volta a ser limitado pela largura de banda e que, nessa condição, o cálculo dos pesos de interpolação durante a propagação supera o uso de tabelas.
+Na frente física e numérica, recomenda-se validar o resolvedor com problemas de descontinuidades mais severas, como os de Lax e de Shu-Osher, estender os ensaios a configurações bidimensionais e tridimensionais e estudar a sensibilidade a parâmetros numéricos da relaxação dependente do não equilíbrio local, da velocidade de referência da rede deslocada e do resolvedor local, a fim de mapear o compromisso entre estabilidade e custo computacional.
 
-Na frente física e numérica, recomenda-se a validação com problemas de descontinuidades mais severas, como os de Lax e de Shu-Osher, comparando os resultados com soluções exatas ou de referência.
-Recomenda-se também estender os ensaios a configurações bidimensionais e tridimensionais, nas quais o padrão de acesso à memória da etapa de propagação é bem mais exigente.
-Estudos de sensibilidade a parâmetros numéricos, como os limiares e os fatores de correção da relaxação dependente do não equilíbrio local, a velocidade de referência da rede deslocada e o número de iterações do resolvedor local dos multiplicadores de Lagrange, permitirão ainda mapear o compromisso entre estabilidade e custo computacional.
-
-Conclui-se que o miniaplicativo alcançou um grau de maturidade de implementação que justifica sua aplicação em infraestruturas de computação de alto desempenho de maior porte.
-Dessa forma, o LBM compressível apresenta-se como uma ferramenta promissora para investigações que demandam alta fidelidade física e eficiência computacional em arquiteturas heterogêneas.
+Em resposta à questão de pesquisa, constata-se que, com o mesmo trabalho por nó e o mesmo núcleo vetorial, a tecnologia de paralelização altera a taxa em no máximo \(12\%\) nas malhas grandes, exceto no MPI, e que o desempenho é determinado sobretudo pelo código executado em cada núcleo e pelo dispositivo.
+O custo diferencial das tecnologias situa-se no esforço de desenvolvimento, e a escolha entre a base única e as implementações especializadas depende menos do desempenho do que do horizonte de vida do código e da expectativa de troca de arquitetura.

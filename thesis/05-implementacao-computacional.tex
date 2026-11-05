@@ -28,19 +28,13 @@
 
 %---------------------------------------------------------------------------------------
 
-A tradução da formulação apresentada no capítulo anterior em um programa executável envolve decisões que afetam o desempenho em arquiteturas heterogêneas, a portabilidade entre fabricantes de \textit{hardware} e a facilidade de manutenção e de extensão do código.
-O miniaplicativo de dinâmica dos fluidos computacional (CFD) desenvolvido neste trabalho foi concebido para que essas decisões possam ser isoladas, mantendo-se inalterado o método de Lattice Boltzmann (LBM) para escoamentos compressíveis e variando-se apenas a tecnologia responsável por executá-lo.
-Tomando como referência a versão sequencial, o mesmo \textit{kernel} de cálculo foi reimplementado em cada uma das tecnologias de paralelização consideradas, a saber, OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA, Alpaka e MPI.
-Em todas as implementações, a física do modelo, a malha computacional e a disposição dos dados em memória são idênticas.
-Por conseguinte, as variações de desempenho e de complexidade observadas nos capítulos seguintes podem ser atribuídas às características intrínsecas ao modelo de execução e à gestão de recursos de cada tecnologia.
+A tradução da formulação do capítulo anterior em um programa executável envolve decisões que afetam o desempenho, a portabilidade entre fabricantes de \textit{hardware} e a manutenção do código.
+O miniaplicativo de dinâmica dos fluidos computacional (CFD) isola essas decisões: o método de Lattice Boltzmann (LBM) para escoamentos compressíveis permanece inalterado, e apenas a tecnologia de execução varia.
+A partir da versão sequencial, o mesmo \textit{kernel} foi implementado em OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA, Alpaka e MPI, com a mesma física, a mesma malha e a mesma estrutura de dados (a direção contígua em memória difere entre CPU e GPU, Seção~\ref{sec:implementacao-computacional-utilizando-openmp}), de modo que as variações de desempenho e de complexidade observadas nos capítulos seguintes decorrem do modelo de execução e da gestão de recursos de cada tecnologia.
 
-O \textit{software} foi desenvolvido em C++20, com uma arquitetura orientada a objetos estruturada para abstrair as particularidades dos diferentes modelos de programação de computação de alto desempenho (HPC).
-Uma interface comum estabelece o contrato a ser cumprido por todos os resolvedores, o que permite a um orquestrador central instanciar, em tempo de execução, a estratégia adequada com base na configuração fornecida pelo usuário.
-
-Uma classe controladora gerencia o ciclo de vida da simulação, a entrada e a saída de dados e a medição de desempenho.
-Essa separação mantém a lógica de controle, que abrange a marcha no tempo e a reconstrução dos campos macroscópicos para exportação, independente do \textit{hardware}, seja ele uma CPU em execução sequencial, uma GPU ou um agrupamento de computadores com processos MPI.
-O ALGORITMO~\ref{alg:marcha-tempo-detalhado} ilustra o fluxo conceitual clássico em duas passadas sequenciais, com a colisão, que gera as distribuições pós-colisão, seguida da propagação, representativo da versão de referência sequencial (\textit{Plain}).
-Em contrapartida, as versões paralelas do miniaplicativo consolidam essas etapas em uma arquitetura fundida de passo único (\textit{fused pull-collide}), na qual a propagação por interpolação, a redução dos momentos, o fechamento térmico e a colisão ocorrem em registradores a cada célula, e as distribuições pós-colisão são gravadas diretamente no arranjo alternado de destino (Seção~\ref{sec:custo-computacional}).
+O código é escrito em C++20 e orientado a objetos: uma interface comum define o contrato dos resolvedores, e um orquestrador instancia a estratégia indicada na configuração, de modo que a lógica de controle (marcha no tempo e exportação dos campos macroscópicos) independe do \textit{hardware}.
+O ALGORITMO~\ref{alg:marcha-tempo-detalhado} ilustra o fluxo clássico em duas passadas, com a colisão seguida da propagação, representativo da versão de referência (\textit{Plain}).
+As versões paralelas adotam o núcleo fundido de passo único (\textit{fused pull-collide}), em que a propagação por interpolação, a redução dos momentos, o fechamento térmico e a colisão ocorrem em registradores a cada célula, e as distribuições pós-colisão são gravadas diretamente no arranjo alternado de destino (Seção~\ref{sec:custo-computacional}).
 
 \begin{algorithm}[H]
     \caption{Marcha no tempo para o LBM compressível com acoplamento térmico na versão sequencial de referência (\textit{Plain})}\label{alg:marcha-tempo-detalhado}
@@ -70,273 +64,164 @@ Em contrapartida, as versões paralelas do miniaplicativo consolidam essas etapa
 \end{algorithm}
 \fonte{O autor (2026).}
 
-O processo de compilação, discutido na Seção~\ref{sec:compilacao-configuracao}, detecta automaticamente a presença de compiladores e de bibliotecas, como o NVIDIA HPC SDK, empregado em OpenACC e em OpenMP para GPU, o \texttt{nvcc}, empregado em CUDA, e as implementações de MPI e de OpenCL.
-Somente os módulos suportados pelo ambiente são habilitados, o que viabiliza a compilação e a execução do miniaplicativo em máquinas com conjuntos distintos de ferramentas instaladas.
-O controle da simulação é realizado por um arquivo de configuração em formato YAML (\textit{YAML Ain't Markup Language}), no qual se definem as propriedades do fluido, a malha computacional e a tecnologia de execução.
+A compilação (Seção~\ref{sec:compilacao-configuracao}) habilita apenas os módulos suportados pelo ambiente, e um arquivo de configuração em formato YAML (\textit{YAML Ain't Markup Language}) define as propriedades do fluido, a malha e a tecnologia de execução.
 
 %---------------------------------------------------------------------------------------
 
 \section{Arquitetura do Código}\label{sec:arquitetura-simulador}
 
-A arquitetura do código foi projetada para suportar a execução em múltiplas tecnologias de paralelização sem que a lógica física do modelo LBM precise ser reescrita.
-Para esse fim, adotou-se o padrão de projeto \textit{Strategy}, centrado na interface abstrata \texttt{ILbmTubeNd} e na classe orquestradora \texttt{Executor}, cuja organização é apresentada na \autoref{fig:diagrama-de-classes}.
-As diretivas, as chamadas de API e as demais construções específicas de cada biblioteca de paralelização são isoladas em classes independentes, o que preserva a lógica física do modelo.
+A arquitetura suporta múltiplas tecnologias de paralelização sem reescrita da lógica física do LBM: adotou-se o padrão de projeto \textit{Strategy}, centrado na interface abstrata \texttt{ILbmTubeNd} e na classe orquestradora \texttt{Executor} (\autoref{fig:diagrama-de-classes}), e as diretivas, as chamadas de API e as demais construções específicas de cada biblioteca ficam isoladas em classes independentes.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
     \centering
-    \caption{Organização das classes do miniaplicativo segundo o padrão de projeto \textit{Strategy}: o \texttt{Executor} compõe a interface \texttt{ILbmTubeNd}, da qual deriva a classe parametrizada \texttt{ILbmTube}, especializada por uma classe para cada tecnologia de paralelização (com variantes de CPU e de GPU), e o \texttt{AsyncWriter}, que grava os resultados; as implementações usam a rede \texttt{LatticeD2Q9}, que implementa a interface \texttt{ILattice}, e o \texttt{DeviceBuffer}.}
+    \caption{Organização das classes segundo o padrão \textit{Strategy}: o \texttt{Executor} compõe a interface \texttt{ILbmTubeNd}, da qual deriva a classe parametrizada \texttt{ILbmTube}, especializada para cada tecnologia (variantes de CPU e de GPU); o \texttt{AsyncWriter} grava os resultados, e as implementações usam a rede \texttt{LatticeD2Q9} (interface \texttt{ILattice}) e o \texttt{DeviceBuffer}.}
     \label{fig:diagrama-de-classes}
     \includegraphics[width=0.85\linewidth]{fig/class-diagram.png}
     \fonte{O autor (2026).}
 \end{figure}
 
-A interface \texttt{ILbmTubeNd}, parametrizada pelo tipo escalar e pela dimensão espacial, define o contrato que todos os resolvedores devem implementar, incluindo os métodos de inicialização (\texttt{Init}), de execução de passos de tempo (\texttt{Step} e \texttt{Run}) e de acesso aos campos macroscópicos (\texttt{P}, \texttt{Rho}, \texttt{T} e \texttt{U}).
-Dispõe ainda dos métodos \texttt{Rank}, que retorna o identificador do processo atual (sempre zero fora do MPI), e \texttt{BroadcastOutputPath}, que distribui o caminho de saída entre os processos MPI e não produz efeito nas demais tecnologias.
-Como o \texttt{Executor} armazena apenas um ponteiro para \texttt{ILbmTubeNd}, essa abstração permite que ele gerencie o ciclo de vida da simulação de forma independente do \textit{hardware}, conforme apresentado no PROGRAMA~\ref{lst:interface-ilbmtube}.
-Cada implementação deriva da classe parametrizada \texttt{ILbmTube}, que apenas associa o resolvedor ao tipo de rede utilizado e herda a interface \texttt{ILbmTubeNd} com a dimensão da rede.
+A interface \texttt{ILbmTubeNd}, parametrizada pelo tipo escalar e pela dimensão espacial, define o contrato dos resolvedores: inicialização, execução de passos de tempo e acesso aos campos macroscópicos, além de \texttt{Rank} (identificador do processo, sempre zero fora do MPI) e \texttt{BroadcastOutputPath} (distribuição do caminho de saída entre processos MPI, sem efeito nas demais tecnologias).
+Cada implementação deriva da classe parametrizada \texttt{ILbmTube}, que associa o resolvedor ao tipo de rede.
+A física do modelo (velocidades discretas, pesos e operador de colisão) concentra-se na rede, descrita pela interface \texttt{ILattice}, parametrizada pelo tipo escalar, pela dimensão $D$ e pelo número $Q$ de velocidades, e implementada por \texttt{LatticeD2Q9} para a rede bidimensional de nove velocidades, usada por todas as implementações.
 
-\noindent\begin{minipage}{\linewidth}
-\begin{lstlisting}[language=C++, caption={Interface base ILbmTubeNd e classe parametrizada ILbmTube, que definem o contrato dos resolvedores.}, label={lst:interface-ilbmtube}]
-template<typename Scalar, Eigen::Index Dim_>
-class ILbmTubeNd {
-public:
-  virtual ~ILbmTubeNd() = default;
-  virtual Tensor<Scalar, Dim_> P() const = 0;
-  virtual Tensor<Scalar, Dim_> Rho() const = 0;
-  virtual Tensor<Scalar, Dim_> T() const = 0;
-  virtual Tensor<Scalar, Dim_ + 1> U() const = 0;
-  virtual void Init() = 0;
-  virtual void Step(bool save) = 0;
-  virtual void Run(Index steps, bool save) = 0;
-  virtual int Rank() const { return 0; }
-  virtual void BroadcastOutputPath(std::string& path) const {}
-};
+O \texttt{Executor} armazena apenas um ponteiro para a interface, o que o torna independente do \textit{hardware}: seleciona a implementação em tempo de execução, a partir do arquivo de configuração, mede o desempenho e entrega os campos macroscópicos ao \texttt{AsyncWriter}, que os exporta em formato CSV (\textit{Comma-Separated Values}) em um fluxo de execução separado.
+A inclusão de uma nova estratégia demanda apenas uma subclasse de \texttt{ILbmTube} e um novo caso na seleção do \texttt{Executor}.
 
-template<typename Scalar, typename LatticeType>
-class ILbmTube : public ILbmTubeNd<Scalar, LatticeType::Dim()> {};
-\end{lstlisting}
-\fonte{O autor (2026).}
-\end{minipage}
-
-Os detalhes da física do modelo, como as velocidades discretas, os pesos e o operador de colisão, concentram-se na rede, descrita pela interface \texttt{ILattice}, parametrizada pelo tipo escalar, pela dimensão $D$ e pelo número $Q$ de velocidades.
-Por meio de métodos estáticos, essa interface declara a consulta às velocidades (\texttt{Velocity}) e às suas direções opostas (\texttt{Opposite}), o cálculo dos pesos (\texttt{Weights}), a inicialização dos campos (\texttt{Init}), a recuperação das grandezas macroscópicas (\texttt{ComputeMacroscopic}) e a colisão (\texttt{Collision}).
-A classe \texttt{LatticeD2Q9} implementa essa interface para a rede bidimensional de nove velocidades e é utilizada por todas as implementações de \texttt{ILbmTube}.
-
-O \texttt{Executor} seleciona a implementação de \texttt{ILbmTube} em tempo de execução, a partir do arquivo de configuração fornecido pelo usuário, e é responsável pela medição de desempenho.
-Os campos macroscópicos são entregues ao \texttt{AsyncWriter}, que exporta os resultados em formato CSV (\textit{Comma-Separated Values}) em um fluxo de execução separado, para visualização posterior.
-O efeito dessa arquitetura sobre a complexidade do código é favorável, pois o uso das interfaces de programação de paralelismo fica restrito a classes específicas.
-A inclusão de uma nova estratégia demanda apenas uma subclasse de \texttt{ILbmTube} e um novo caso na seleção realizada pelo \texttt{Executor}.
-
-Nesse contexto, a classe \texttt{DeviceBuffer}, responsável pela alocação de memória, influencia diretamente o desempenho.
-Em arquiteturas de CPU, comporta-se como um \texttt{std::vector} alinhado em fronteiras de 64 \textit{bytes}, enquanto em GPUs encapsula os ponteiros de memória do dispositivo.
-A disposição de memória por estrutura de vetores (\textit{Structure of Arrays}, SoA) consiste em armazenar cada componente da distribuição ($f_0, f_1, \dots, f_8$, e analogamente $g_i$) em um bloco contíguo de $N$ valores.
-Em CPUs, esse arranjo maximiza o aproveitamento da \textit{cache} por meio da busca antecipada (\textit{prefetching}), mecanismo no qual o processador carrega dados da memória principal para a \textit{cache} antes de sua solicitação explícita, e preenche as linhas de \textit{cache} com dados úteis às instruções vetoriais.
-Em GPUs, por sua vez, a mesma disposição viabiliza o acesso coalescido à memória (\textit{memory coalescing}), técnica que combina em uma única transação os múltiplos acessos à memória global realizados por diferentes fluxos de execução, desde que os endereços acessados sejam adjacentes.
-A \autoref{fig:disposicoes-aos-soa} contrasta essa disposição com a organização por vetor de estruturas (\textit{Array of Structures}, AoS), na qual os acessos simultâneos a uma mesma direção ficam separados por um passo de nove elementos.
+A classe \texttt{DeviceBuffer} gerencia a alocação de memória: em CPUs, comporta-se como um \texttt{std::vector} alinhado em fronteiras de 64 \textit{bytes}; em GPUs, encapsula ponteiros de memória do dispositivo.
+Todas as implementações adotam a disposição por estrutura de vetores (\textit{Structure of Arrays}, SoA), com cada componente da distribuição ($f_0, f_1, \dots, f_8$ e, analogamente, $g_i$) em um bloco contíguo de $N$ valores.
+Em CPUs, esse arranjo favorece a busca antecipada (\textit{prefetching}) e o aproveitamento das linhas de \textit{cache} pelas instruções vetoriais.
+Em GPUs, viabiliza o acesso coalescido (\textit{memory coalescing}), em que os acessos à memória global de fluxos de execução vizinhos se combinam em uma única transação, desde que os endereços sejam adjacentes.
+A \autoref{fig:disposicoes-aos-soa} contrasta a SoA com a organização por vetor de estruturas (\textit{Array of Structures}, AoS), na qual os acessos a uma mesma direção ficam separados por um passo de nove elementos.
 
 \begin{figure}[H]
     \centering
-    \caption{Disposições de memória (a) AoS e (b) SoA para as funções de distribuição da rede D2Q9 e seu efeito sobre o padrão de acesso simultâneo à memória: três fluxos de execução vizinhos leem a direção $f_1$ de suas respectivas células, com endereços espaçados em AoS e adjacentes, o que permite o acesso coalescido, em SoA.}
+    \caption{Disposições de memória (a) AoS e (b) SoA para as funções de distribuição da rede D2Q9 e seu efeito sobre o acesso simultâneo à memória: três fluxos de execução vizinhos leem a direção $f_1$ de suas células, com endereços espaçados em AoS e adjacentes, o que permite o acesso coalescido, em SoA.}
     \label{fig:disposicoes-aos-soa}
-    \includegraphics[width=0.9\linewidth]{fig/memory-layouts-aos-soa.png}
+    \includegraphics[width=0.85\linewidth]{fig/memory-layouts-aos-soa.png}
     \fonte{O autor (2026).}
 \end{figure}
 
-Nas versões para GPU, a marcha no tempo é composta por estágios encadeados que mantêm os vetores de trabalho na memória do dispositivo (VRAM) durante toda a integração.
-Dessa forma, as transferências pelo barramento PCIe entre a memória do sistema principal (RAM) e a VRAM limitam-se à inicialização e aos instantes de gravação, nos quais os campos macroscópicos são copiados para a RAM.
+Nas versões para GPU, os vetores de trabalho permanecem na memória do dispositivo (VRAM) durante toda a integração, e as transferências pelo barramento PCIe com a memória do sistema (RAM) limitam-se à inicialização e aos instantes de gravação dos campos macroscópicos.
 
 %---------------------------------------------------------------------------------------
 
 \section{Custo Computacional}\label{sec:custo-computacional}
 
-As decisões de implementação descritas nas seções seguintes justificam-se pelo custo do ciclo de cálculo estabelecido na Seção~\ref{subsec:lbm-ciclo-compressivel} do Capítulo~\ref{ch:metodo-de-lattice-boltzmann}, razão pela qual esse custo é quantificado antes da apresentação de cada tecnologia.
-Duas grandezas o caracterizam: o número de operações de ponto flutuante (\textit{Floating Point Operations}, FLOPs) executadas por nó e por passo de tempo e o volume de dados movimentado entre a memória e os núcleos de processamento.
-A razão entre ambas, denominada intensidade aritmética, determina qual dos dois recursos limita o desempenho e, por consequência, sobre qual deles devem incidir as otimizações.
+As decisões de implementação das seções seguintes justificam-se pelo custo do ciclo de cálculo da Seção~\ref{subsec:lbm-ciclo-compressivel} do Capítulo~\ref{ch:metodo-de-lattice-boltzmann}, quantificado por duas grandezas: o número de operações de ponto flutuante (\textit{Floating Point Operations}, FLOPs) por nó e por passo de tempo e o volume de dados movimentado entre a memória e os núcleos de processamento.
+A razão entre ambas, a intensidade aritmética, determina o recurso limitante e, portanto, onde devem incidir as otimizações.
 
-Na formulação de dupla distribuição sobre a rede D2Q9, cada nó armazena nove valores de $f_i$ e nove de $g_i$.
-A atualização de um passo de tempo exige a leitura e a escrita desses dezoito valores, o que corresponde a $288$ \textit{bytes} por nó em precisão dupla.
-A esse volume somam-se os campos macroscópicos de massa específica, de velocidade, de temperatura e de pressão, além dos multiplicadores de Lagrange do passo anterior.
-Na versão que armazena as tabelas de propagação em memória, a propagação interpolada acrescenta a parcela mais expressiva do tráfego, pois exige a leitura, para cada uma das nove direções, de quatro índices de origem e de quatro pesos de interpolação.
-
-O custo foi determinado diretamente sobre o código dos \textit{kernels} de cálculo, e não por estimativa analítica.
-O volume de dados decorre dos acessos de cada estágio à memória principal, admitindo-se uma malha cujas dimensões excedem a capacidade da memória \textit{cache}, de modo que os acessos aos nós vizinhos na propagação, reaproveitados pela \textit{cache}, são contados uma única vez.
-A \autoref{tab:custo-por-no} discrimina essas contribuições para três formas de implementação.
-As duas primeiras são as das versões submetidas à campanha experimental do Capítulo~\ref{ch:resultados}, e a terceira é a da arquitetura fundida com estêncil compacto, adotada nas versões atuais do miniaplicativo e descrita adiante.
-Nas versões para CPU da campanha, a colisão, a propagação e o cálculo das grandezas macroscópicas são executados em percursos distintos da malha, com leitura das tabelas de propagação em memória.
-Nas versões para GPU da campanha com CUDA, OpenACC, OpenCL e OpenMP, índices e pesos são calculados em tempo de execução, e a propagação é fundida ao cálculo das grandezas macroscópicas.
-As versões para GPU da campanha com Kokkos e RAJA, no entanto, combinam elementos das duas formas, pois leem as tabelas, mantidas na memória do acelerador, e fundem a propagação ao cálculo das grandezas macroscópicas.
+Na formulação de dupla distribuição sobre a rede D2Q9, a leitura e a escrita dos dezoito valores de $f_i$ e $g_i$ por nó e por passo correspondem a $288$ \textit{bytes} em precisão dupla, aos quais se somam os campos macroscópicos e os multiplicadores de Lagrange do passo anterior.
+O custo foi determinado diretamente sobre o código do núcleo fundido, adotado em todas as implementações paralelas, em que a propagação, as grandezas macroscópicas, a colisão e o fechamento energético são fundidos em um único percurso da malha, e a propagação interpolada usa uma estrutura compacta de deslocamentos e pesos (\texttt{DirectionStencil}), calculada uma única vez.
+O volume de dados corresponde aos acessos de cada estágio à memória principal, admitindo-se uma malha que excede a \textit{cache}, de modo que os acessos aos nós vizinhos na propagação, reaproveitados pela \textit{cache}, são contados uma única vez (\autoref{tab:custo-por-no}).
 
 \begin{table}[H]
     \centering
-    \caption{Volume de dados movimentado por nó e por passo de tempo em precisão dupla (\textit{bytes})}
+    \caption{Volume de dados movimentado por nó e por passo de tempo do núcleo fundido, em precisão dupla (\textit{bytes})}
     \label{tab:custo-por-no}
-    \begin{tabular}{lccc}
+    \small
+    \begin{tabular}{p{7.4cm}ccc}
         \toprule
-        & \multicolumn{2}{c}{Campanha} & Atual \\
-        \cmidrule(lr){2-3} \cmidrule(lr){4-4}
-        Contribuição & CPU & GPU & Fundida \\
+        Contribuição & GPU & \multicolumn{2}{c}{CPU} \\
+        \cmidrule(lr){3-4}
+        & & Não temporal & Comum \\
         \midrule
-        \multicolumn{4}{l}{\textit{Colisão e distribuições de equilíbrio}} \\
-        Campos macroscópicos $\rho$, $\mathbf{u}$ e $T$ (leitura)                         & $32$   & $32$  & --- \\
-        Multiplicadores de Lagrange (leitura e escrita)                                   & $48$   & $40$  & $32$ \\
-        Distribuições $f_i$ e $g_i$ (leitura e escrita)                                   & $288$  & $288$ & --- \\
+        Multiplicadores de Lagrange, $\boldsymbol{\xi} = (\xi_1, \xi_2)$ (leitura e escrita) & $32$  & $32$  & $32$ \\
+        Distribuições de origem $f_i$ e $g_i$ (leitura)                                      & $144$ & $144$ & $144$ \\
+        Distribuições pós-colisão $f_i$ e $g_i$ (escrita)                                    & $144$ & $144$ & $144$ \\
+        Leitura prévia das linhas de \textit{cache} escritas                                 & ---   & ---   & $144$ \\
+        Campos macroscópicos $\rho$, $\mathbf{u}$, $T$ e $p$ (escrita)                       & ---*  & ---*  & ---* \\
         \midrule
-        \multicolumn{4}{l}{\textit{Propagação e grandezas macroscópicas}} \\
-        Distribuições de origem (leitura)                                                 & $144$  & $144$ & $144$ \\
-        Índices de origem da propagação (leitura)                                         & $144$  & ---   & --- \\
-        Pesos de interpolação (leitura)                                                   & $288$  & ---   & --- \\
-        Distribuições propagadas ou pós-colisão (escrita)                                 & $144$  & $144$ & $144$ \\
-        Leitura prévia das linhas de \textit{cache} escritas                              & $184$  & ---   & --- \\
-        Releitura das distribuições para as grandezas macroscópicas                       & $144$  & ---   & --- \\
-        Campos macroscópicos $\rho$, $\mathbf{u}$, $T$ e $p$ (escrita)                    & $40$   & $40$  & ---* \\
-        \midrule
-        Total                                                                             & $1456$ & $688$ & $320$ \\
+        Total                                                                                & $320$ & $320$ & $464$ \\
         \bottomrule
     \end{tabular}
-    \nota{*Na arquitetura fundida, os campos macroscópicos são gravados exclusivamente no último passo de cada chamada de \texttt{Run}, de modo que não contribuem no passo intermediário. O total da última coluna é o da GPU, em que as escritas coalescidas dispensam a leitura prévia das linhas; em uma CPU somam-se $144$ \textit{bytes} dessa leitura para as distribuições pós-colisão, o que resulta em $464$ \textit{bytes}. Os totais assumem reúso ideal da \textit{cache} na leitura das distribuições vizinhas.}
+    \nota{*Gravados apenas no último passo de cada chamada de \texttt{Run}. Na GPU, as escritas coalescidas de setores completos dispensam a leitura prévia das linhas; na CPU, uma escrita comum a uma linha ausente da \textit{cache} a lê antes (\textit{write-allocate}), e o armazenamento não temporal a evita. Os totais assumem reúso ideal da \textit{cache} na leitura das distribuições vizinhas.}
     \fonte{O autor (2026).}
 \end{table}
 
-A diferença entre as duas primeiras colunas, de $1456$ para $688$ \textit{bytes} por nó, tem três origens principais.
-As tabelas de propagação da CPU somam $432$ \textit{bytes}, dos quais $144$ correspondem aos índices, inteiros de quatro \textit{bytes}, e $288$ aos pesos, armazenados em precisão dupla.
-A separação dos percursos na CPU obriga a reler as distribuições já propagadas para a obtenção das grandezas macroscópicas, ao passo que a fusão adotada na GPU as mantém em registradores e poupa $144$ \textit{bytes}.
-Resta a diferença decorrente das escritas em linhas de \textit{cache} ausentes.
-Em uma CPU, a linha precisa ser lida antes de ser escrita (protocolo \textit{write-allocate}), o que soma $184$ \textit{bytes} correspondentes às distribuições propagadas e aos campos macroscópicos; na GPU, as escritas coalescidas de setores completos dispensam essa leitura.
-Há ainda uma diferença menor nos multiplicadores de Lagrange, que ocupam $48$ \textit{bytes} na CPU e $40$ \textit{bytes} na GPU.
-Na CPU, as três componentes ($\chi$, $\lambda_x$ e $\lambda_y$) são armazenadas de modo intercalado e lidas em bloco, enquanto na GPU cada componente ocupa um vetor próprio e apenas duas das três são lidas.
+O núcleo fundido resulta de seis decisões, cada uma justificada pelo tráfego que elimina.
+A primeira é a fusão da propagação (\textit{pull streaming}) e da colisão em um único laço ou \textit{kernel}: as distribuições pré-colisão são puxadas das células vizinhas, os momentos e o fechamento térmico por Newton-Raphson são resolvidos em registradores, e as distribuições pós-colisão são gravadas diretamente no arranjo de destino, sem releitura das distribuições propagadas ($144$ \textit{bytes} por nó).
+A segunda é a substituição das tabelas de índices e de pesos por nó ($432$ \textit{bytes}: $144$ de índices inteiros e $288$ de pesos) pelo \texttt{DirectionStencil}, calculado uma única vez por direção e transmitido nos parâmetros de execução, o que é possível porque a geometria de interpolação da rede deslocada é uniforme no interior do domínio.
+Calcular os pesos em tempo de execução eliminaria os mesmos \textit{bytes}, mas acrescentaria $36$ exponenciais e $36$ logaritmos por nó, o que a taxa reduzida de dupla precisão da GPU de consumo não compensa.
+A terceira é a alternância de arranjos duplos (\textit{ping-pong}), com troca dos papéis de leitura e de escrita no hospedeiro, sem arranjos auxiliares nem movimentação de dados.
+A quarta é a gravação dos campos macroscópicos apenas no último passo de cada chamada de \texttt{Run}, controlada em compilação pelo parâmetro de gabarito \texttt{kStoreMacro}, o que poupa $40$ \textit{bytes} por nó nos demais passos.
+A quinta é o ponto de partida do método de Newton-Raphson (\textit{warm start}), que armazena apenas o vetor $\boldsymbol{\xi} = (\xi_1, \xi_2)$, e não os três multiplicadores.
+A sexta, restrita à CPU, é o armazenamento não temporal das distribuições pós-colisão quando o conjunto de trabalho excede quatro vezes a \textit{cache} de último nível, o que reduz o tráfego de $464$ para $320$ \textit{bytes} por nó; nas malhas menores, que cabem na \textit{cache}, mantém-se o armazenamento comum.
+Em conjunto, as decisões reduzem o tráfego mínimo de $1456$ \textit{bytes} por nó e por passo, de uma implementação com tabelas de propagação por nó e percursos separados da malha, para $320$ \textit{bytes}, isto é, em $4{,}6$ vezes.
 
-A terceira coluna refere-se à arquitetura fundida com estêncil compacto, adotada em todas as tecnologias nas versões atuais do miniaplicativo, que reestrutura o fluxo de dados em cinco pontos.
-Em primeiro lugar, a propagação (\textit{pull streaming}) e a colisão são fundidas em um único laço ou \textit{kernel}: as distribuições pré-colisão são puxadas diretamente das células vizinhas de origem, os momentos macroscópicos são acumulados em registradores, o equilíbrio e o fechamento térmico por Newton-Raphson são resolvidos no espaço local de registradores do fluxo de execução, e as distribuições pós-colisão são gravadas diretamente no arranjo de destino.
-Em segundo lugar, como a geometria de interpolação da rede deslocada é uniforme no interior do domínio, as tabelas volumosas por nó são substituídas por uma estrutura compacta, calculada uma única vez por direção (\texttt{DirectionStencil}), que guarda os deslocamentos inteiros das origens e os pesos de interpolação normalizados.
-Essa estrutura é transmitida por valor dentro dos parâmetros de execução na maioria das tecnologias (Kokkos, RAJA, CUDA e MPI), vinculada por meio de \texttt{deviceptr} no OpenACC, ou alocada na memória do dispositivo e acessada por ponteiro constante no Alpaka, o que elimina os $432$ \textit{bytes} de tabelas sem reintroduzir o cálculo dos pesos a cada passo.
-Em terceiro lugar, a alternância de arranjos duplos (\textit{ping-pong}) dispensa arranjos auxiliares intermediários.
-Em quarto lugar, a persistência dos campos macroscópicos na memória global é postergada para o último passo de cada chamada de \texttt{Run}.
-Por fim, o ponto de partida do método de Newton-Raphson armazena apenas o vetor bidimensional $\boldsymbol{\xi} = (\xi_1, \xi_2)$, o que reduz o tráfego correspondente a $32$ \textit{bytes}.
-Com isso, o tráfego mínimo cai para $320$ \textit{bytes} por nó e por passo, ou $464$ \textit{bytes} em uma CPU, uma demanda sobre o barramento de memória inferior à das versões da campanha.
-
-O número de operações de ponto flutuante foi obtido contando-se, por nó e por passo de tempo, as instruções aritméticas efetivamente executadas pelo código otimizado de cada \textit{kernel}, descontadas as subexpressões que o compilador elimina ou move para fora dos laços.
-A contagem refere-se às versões da campanha, e não à arquitetura fundida atual, cujas operações não foram recontadas; a diferença principal é conhecida, pois o estêncil dispensa nas versões para GPU o cálculo em tempo de execução dos pesos de interpolação, que acrescentava $36$ exponenciais e $36$ logaritmos por nó.
-Na CPU, considerou-se o \textit{kernel} da versão OpenMP da campanha, cuja colisão avaliava em todos os nós tanto o resultado do método de Newton-Raphson quanto a distribuição alternativa, de modo a dispensar desvios condicionais (Seção~\ref{sec:implementacao-computacional-utilizando-openmp}).
-Essa escolha acrescenta $90$ operações por nó em relação à forma com desvio.
-Cada adição, subtração, multiplicação, divisão ou raiz quadrada equivale a uma operação, e cada multiplicação seguida de adição fundida equivale a duas.
-As funções exponencial e logaritmo foram contabilizadas em separado, e o custo de cada chamada, aferido na biblioteca matemática do sistema, resultou em $20$ e $22$ operações, respectivamente.
-Admitiu-se que as implementações de dupla precisão dos aceleradores tenham custo da mesma ordem, uma vez que se baseiam igualmente em redução de argumento e aproximação polinomial, o que constitui a principal incerteza da estimativa para a GPU.
-A \autoref{tab:custo-operacoes} reúne os resultados, discriminando as operações aritméticas diretas, o número de chamadas de cada função e o total equivalente.
+O número de operações de ponto flutuante foi obtido contando-se, por nó e por passo, as instruções aritméticas do núcleo fundido, descontadas as subexpressões que o compilador elimina ou move para fora dos laços.
+Adição, subtração, multiplicação, divisão e raiz quadrada equivalem a uma operação, e a multiplicação seguida de adição fundida, a duas.
+A exponencial foi contabilizada em separado, com $20$ operações por chamada, aferidas na biblioteca matemática do sistema e admitidas da mesma ordem nas implementações de dupla precisão dos aceleradores, que também se baseiam em redução de argumento e aproximação polinomial; essa é a principal incerteza da estimativa para a GPU (\autoref{tab:custo-operacoes}).
 
 \begin{table}[H]
     \centering
-    \caption{Operações de ponto flutuante por nó e por passo de tempo}
+    \caption{Operações de ponto flutuante por nó e por passo de tempo do núcleo fundido}
     \label{tab:custo-operacoes}
-    \begin{tabular}{llcccc}
+    \begin{tabular}{>{\raggedright\arraybackslash}p{10.8cm}c}
         \toprule
-        Versão & Estágio & Diretas & $\exp$ & $\ln$ & Total \\
+        Contribuição & Operações \\
         \midrule
-        CPU & Colisão e equilíbrios             & $1004$ & $36$ & $1$  & $1746$ \\
-            & Propagação e grandezas macroscópicas & $200$  & $0$  & $0$  & $200$ \\
-            & Total                             & $1204$ & $36$ & $1$  & $1946$ \\
+        Operações aritméticas (adições, multiplicações, divisões e raízes; multiplicação e adição fundidas contam duas) & $610$ \\
+        Exponenciais: $8$ chamadas de $20$ operações & $160$ \\
+        Logaritmos & $0$ \\
         \midrule
-        GPU & Colisão e equilíbrios             & $812$  & $36$ & $1$  & $1554$ \\
-            & Propagação e grandezas macroscópicas & $635$  & $36$ & $36$ & $2147$ \\
-            & Total                             & $1447$ & $72$ & $37$ & $3701$ \\
+        Total do modelo & $770$ \\
+        Total das instruções do núcleo vetorial da CPU (exponencial vetorial própria, em média $30$ operações) & $851$ \\
         \bottomrule
     \end{tabular}
     \fonte{O autor (2026).}
 \end{table}
 
-O custo supera amplamente as poucas centenas de operações do LBM isotérmico clássico, pois o cálculo das duas distribuições de equilíbrio e a solução iterativa dos multiplicadores de Lagrange concentram a maior parte do trabalho.
-As exponenciais e os logaritmos respondem por $742$ das $1946$ operações na CPU, ou seja, $38\%$, e por $2254$ das $3701$ na GPU, ou seja, $61\%$.
-Na GPU, a participação é maior porque o cálculo dos pesos de interpolação em tempo de execução avalia, para cada uma das nove direções, quatro potências na forma $\exp[-(q/2) \ln d_k^2]$, o que acrescenta $36$ exponenciais e $36$ logaritmos por nó.
-O desempenho do código é, por isso, sensível à qualidade da biblioteca matemática empregada por cada compilador.
+As exponenciais respondem por $160$ das $770$ operações do modelo ($21\%$; $28\%$ no núcleo vetorial da CPU, em que cada chamada custa mais) e, na GPU, por fração maior das posições de emissão do \textit{pipeline} de dupla precisão, pois a exponencial e a divisão ocupam muito mais posições de emissão do que as demais operações (Seção~\ref{sec:otimizacao-roofline}).
+O desempenho é, por isso, sensível à qualidade da biblioteca matemática de cada compilador.
 
-Esse balanço é usualmente analisado pelo modelo \textit{roofline}, que representa, em eixos logarítmicos, o desempenho alcançável em operações por segundo em função da intensidade aritmética do \textit{kernel} de cálculo \parencite{Williams2009}.
-O modelo estabelece que o desempenho é limitado pelo menor entre dois valores, denominados tetos.
-O primeiro é o produto da intensidade aritmética pela largura de banda de memória, que aparece como uma reta inclinada, e o segundo é o desempenho máximo de ponto flutuante do processador, que aparece como uma reta horizontal.
-A abscissa em que as duas retas se encontram, denominada ponto de transição (\textit{ridge point}), separa os \textit{kernels} limitados pela largura de banda de memória (\textit{memory-bound}), situados à esquerda, daqueles limitados pela capacidade aritmética (\textit{compute-bound}), situados à direita.
-A \autoref{fig:roofline} apresenta os tetos da CPU e da GPU e a posição do resolvedor em cada uma delas, além de uma variante hipotética da GPU discutida adiante.
-Adotaram-se os valores de pico das especificações dos fabricantes, em precisão dupla.
-Para a CPU AMD Ryzen 9 9900X, são $1{,}69$ TFLOP/s e $102{,}4$ GB/s; para a GPU NVIDIA GeForce RTX 5070, $0{,}48$ TFLOP/s, correspondente a $1/64$ da taxa em precisão simples, e $672$ GB/s \parencite{NVIDIA2025RTXBlackwell}.
+A contagem resulta da fatoração do fechamento energético por eixo (Seção~\ref{subsec:lbm-equilibrio-g}, \eqref{eq:ei-produto}): como $W_q \exp(\boldsymbol{\xi}\cdot\mathbf{c}_q)$ é o produto de um fator em $x$ e de um fator em $y$, a jacobiana do método de Newton-Raphson é diagonal, e cada iteração se reduz a dois passos escalares, um por eixo.
+As três exponenciais de um eixo valem $1$, $E$ e $E^2$, com $E = \exp(-|\xi_a|)$, de modo que basta uma chamada por eixo e por avaliação, e as $36$ exponenciais por nó e por passo da formulação por nove direções reduzem-se a $8$.
+A avaliação de $\ln$, cujo resultado nenhuma etapa lê, é omitida, e as divisões compartilham recíprocos.
+O resultado é algebricamente idêntico ao da formulação por direção, e a contagem cai de cerca de $1754$ para $770$ operações ($2{,}3$ vezes).
+O resolvedor \textit{Plain} conserva a formulação por nove direções, de modo que a equivalência numérica entre as implementações verifica a fatoração, e todas as tecnologias executam o mesmo fechamento, condição para atribuir a diferença de desempenho à tecnologia, e não ao trabalho por nó (Capítulo~\ref{ch:resultados}).
 
-\begin{figure}[H]
-    \centering
-    \caption{Modelo \textit{roofline} da CPU, da GPU e de uma GPU hipotética com razão de 1:2 entre as taxas em precisão dupla e em precisão simples, e posição do \textit{kernel} de cálculo do miniaplicativo.}
-    \label{fig:roofline}
-    \includegraphics[width=0.85\linewidth]{fig/roofline-model.png}
-    \fonte{O autor (2026), com base em \textcite{Williams2009}.}
-\end{figure}
+O balanço entre cálculo e acesso à memória é usualmente analisado pelo modelo \textit{roofline}, que representa, em eixos logarítmicos, o desempenho alcançável em função da intensidade aritmética \parencite{Williams2009}.
+O desempenho é limitado pelo menor entre o produto da intensidade aritmética pela largura de banda de memória (reta inclinada) e o desempenho máximo de ponto flutuante do processador (reta horizontal), e a abscissa em que as retas se encontram, o ponto de transição (\textit{ridge point}), separa os \textit{kernels} limitados pela largura de banda (\textit{memory-bound}) dos limitados pela capacidade aritmética (\textit{compute-bound}).
+O ponto de transição, razão entre o desempenho máximo de ponto flutuante e a largura de banda, é a propriedade do dispositivo a ser comparada com a intensidade aritmética do núcleo; os tetos de cada dispositivo e a posição do núcleo no diagrama são apresentados no Capítulo~\ref{ch:resultados} (\autoref{fig:roofline}).
 
-Na CPU, a intensidade aritmética é de $1946/1456 \approx 1{,}34$ operação por \textit{byte}, valor muito inferior ao ponto de transição de $16{,}5$ operações por \textit{byte}.
-O resolvedor encontra-se, portanto, na região inclinada do diagrama, isto é, é limitado pela largura de banda de memória, e o teto correspondente é de $137$ GFLOP/s, que equivalem a uma taxa de atualização de nós de $70{,}3$ MLUPS.
-Se a capacidade aritmética fosse o único limite, a taxa alcançável seria de $868$ MLUPS, mais de doze vezes superior, o que indica que a CPU dispõe de ampla folga de cálculo.
+A intensidade aritmética do núcleo é de $770/320 \approx 2{,}41$ operações por \textit{byte} nos dois dispositivos.
+Na CPU, essa intensidade é cerca de sete vezes inferior ao ponto de transição ($16{,}5$ operações por \textit{byte}), de modo que o resolvedor situa-se na região inclinada, limitado pela largura de banda de memória, e o teto aritmético é cerca de sete vezes o de memória, o que indica folga de cálculo.
+Se as distribuições pós-colisão fossem escritas com leitura prévia das linhas ($464$ \textit{bytes} por nó), o teto de memória seria $31\%$ menor.
+Na GPU, a taxa reduzida de dupla precisão ($1/64$ da taxa em precisão simples) rebaixa o ponto de transição para $0{,}72$ operação por \textit{byte}, inferior à intensidade aritmética do núcleo.
+O \textit{kernel} é, assim, limitado pela capacidade aritmética, e a largura de banda de memória sustentaria uma taxa cerca de $3{,}4$ vezes maior.
+O miniaplicativo é, portanto, limitado pela memória na CPU, mas não na GPU nessa precisão, e o teto da GPU é de apenas cerca de $2{,}0$ vezes o da CPU.
 
-Na GPU, o quadro se inverte.
-A intensidade aritmética é de $3701/688 \approx 5{,}38$ operações por \textit{byte}, superior ao ponto de transição de apenas $0{,}72$ operação por \textit{byte}, porque a taxa reduzida de ponto flutuante em dupla precisão diminui o teto horizontal do diagrama e, com ele, o ponto de transição.
-Nessa GPU, o \textit{kernel} é limitado pela capacidade aritmética, com teto de $0{,}48$ TFLOP/s, equivalente a $130$ MLUPS, embora a largura de banda de memória sustentasse até $977$ MLUPS.
-A conclusão de que o miniaplicativo é limitado pela memória vale, assim, para a CPU, mas não para a GPU nessa precisão.
+A taxa reduzida em dupla precisão é própria das GPUs de consumo \parencite{NVIDIA2025RTXBlackwell}: os aceleradores destinados a HPC adotam razões de 1:2, como a NVIDIA H200 SXM, ou de 1:1, como a AMD Instinct MI250X \parencite{NVIDIA2024H200, AMD2026MI250X}.
+Em uma GPU hipotética, idêntica à considerada exceto pela razão de 1:2, o ponto de transição subiria para $23{,}0$ operações por \textit{byte}, e o \textit{kernel}, de intensidade aritmética inalterada, passaria à região inclinada, limitado pela largura de banda, com teto $3{,}4$ vezes o da GPU real e $6{,}6$ vezes o da CPU.
+Nos dois aceleradores de HPC citados, com pontos de transição em dupla precisão de $7{,}1$ e de $15{,}0$ operações por \textit{byte}, o \textit{kernel} também seria limitado pela memória, regime usualmente relatado para o LBM \parencite{Tomczak2021}.
+O balanço entre cálculo e acesso à memória depende, portanto, do \textit{kernel} e do dispositivo.
 
-A taxa reduzida em precisão dupla, responsável por esse resultado, não é, contudo, característica das GPUs em geral, mas dos modelos voltados ao mercado de consumo.
-Projetados para jogos e computação gráfica, esses modelos dispõem de poucas unidades de precisão dupla, mantidas por compatibilidade, o que resulta em razões entre as taxas em precisão dupla e em precisão simples como a da GPU considerada \parencite{NVIDIA2025RTXBlackwell}.
-Os aceleradores destinados a HPC, ao contrário, adotam razões de 1:2, como a NVIDIA H200 SXM, ou mesmo de 1:1, como a AMD Instinct MI250X \parencite{NVIDIA2024H200, AMD2026MI250X}.
-Para avaliar o efeito dessa diferença, a \autoref{fig:roofline} inclui uma GPU hipotética, idêntica à considerada exceto pela razão de 1:2, na qual o teto horizontal em precisão dupla subiria para $15{,}4$ TFLOP/s e o ponto de transição, para $23{,}0$ operações por \textit{byte}.
-Como a intensidade aritmética depende apenas do código, o \textit{kernel} passaria à região inclinada do diagrama e seria limitado pela largura de banda, com teto de $977$ MLUPS, valor $7{,}5$ vezes superior ao da GPU real.
-Nos dois aceleradores de HPC mencionados, cujos pontos de transição em precisão dupla são de $7{,}1$ e de $15{,}0$ operações por \textit{byte}, respectivamente, o \textit{kernel} também seria limitado pela memória, regime usualmente relatado para o LBM \parencite{Tomczak2021}.
-O balanço entre cálculo e acesso à memória depende, portanto, tanto do \textit{kernel} quanto do dispositivo.
-
-Esse balanço orienta três decisões de projeto que se repetem nas implementações de cada tecnologia de paralelização.
-A disposição de memória por estrutura de vetores assegura o aproveitamento integral de cada linha de \textit{cache} em CPUs e o acesso coalescido em GPUs, conforme discutido na Seção~\ref{sec:arquitetura-simulador}.
-A fusão de etapas em um mesmo percurso da malha mantém resultados intermediários em registradores, em lugar de escrevê-los e relê-los na memória principal.
-A terceira refere-se à propagação interpolada, para a qual as versões da campanha adotaram duas soluções.
-As versões para CPU e as versões para GPU com Kokkos e RAJA leem as tabelas de propagação, ao passo que as versões para GPU com CUDA, OpenACC, OpenCL e OpenMP as substituem pelo cálculo dos índices e dos pesos em tempo de execução.
-Essa troca ilustra o compromisso em jogo, pois as operações aritméticas adicionais eliminam $432$ dos $1120$ \textit{bytes} que a GPU movimentaria com as tabelas.
-Para a GPU considerada, porém, o modelo indica que a troca não compensa.
-Com as tabelas, o \textit{kernel} executaria $1754$ operações por nó, com intensidade de $1{,}57$ operação por \textit{byte}, permanecendo limitado pela capacidade aritmética, mas com teto de $275$ MLUPS, contra $130$ MLUPS sem elas.
-Essa configuração com tabelas é a das versões para GPU com Kokkos e RAJA, às quais o modelo atribui, por conseguinte, um teto superior ao das versões que calculam os pesos durante a propagação.
-A troca só se mostra vantajosa quando a razão entre o desempenho de ponto flutuante em dupla precisão e a largura de banda do acelerador excede cerca de $3{,}3$ operações por \textit{byte}, valor superior ao ponto de transição da GPU considerada.
-Na GPU hipotética, cujo ponto de transição supera esse limiar, a ordem se inverte: com as tabelas, o teto seria de $600$ MLUPS, inferior aos $977$ MLUPS da variante sem elas.
-A arquitetura fundida atual contorna esse compromisso, pois substitui as tabelas por nó pela estrutura compacta \texttt{DirectionStencil}, avaliada uma única vez na inicialização.
-Os $432$ \textit{bytes} de tabelas deixam de ser lidos sem que as potências do inverso da distância precisem ser recalculadas a cada passo, de modo que a troca deixa de depender da razão entre a capacidade aritmética e a largura de banda do dispositivo.
-A verificação experimental das expectativas do modelo, por meio das taxas de atualização de nós medidas em cada tecnologia, é apresentada no Capítulo~\ref{ch:resultados} e refere-se às versões da campanha.
+O desempenho em GFLOP/s equivale à taxa de atualização de nós multiplicada pelas $770$ operações do algoritmo, e não pelas instruções executadas: um núcleo que elimina trabalho redundante, como a fatoração do fechamento, desloca o ponto para baixo sem reduzir o trabalho útil por unidade de tempo.
+Implementações com contagens de operações distintas comparam-se, portanto, pela taxa de atualização de nós (MLUPS), e a posição no diagrama indica a distância até o teto.
 
 \section{Implementação Sequencial}\label{sec:implementacao-computacional-sequencial}
 
-A versão sequencial, designada no código como \textit{Plain}, estabelece a referência funcional do projeto.
-Ela implementa o modelo LBM compressível segundo a formulação de \textcite{Tran2022}, utilizando a classe \texttt{DeviceBuffer} para a alocação de memória e tensores da biblioteca Eigen apenas para a exportação de dados.
-Seus resultados fornecem a referência numérica para a verificação das variantes paralelas, e a estrutura de dados e o fluxo de execução foram concebidos de modo a facilitar a transposição para aceleradores, evitando recursos específicos de CPU que dificultariam a portabilidade.
+A versão sequencial (\textit{Plain}) é a referência funcional e numérica contra a qual as variantes paralelas são verificadas.
+Implementa o modelo LBM compressível segundo \textcite{Tran2022}, usa \texttt{DeviceBuffer} na alocação de memória e emprega tensores Eigen apenas na exportação.
+A execução ocorre em um único fluxo, com a memória na RAM alinhada a 64 \textit{bytes} para favorecer a vetorização automática, e as distribuições $f_i$ e $g_i$ das $Q=9$ velocidades seguem a disposição SoA, em blocos contíguos de tamanho $N$.
 
-O modelo de execução é estritamente sequencial, processando cada célula da malha de forma iterativa em um único fluxo de execução.
-A gestão de memória ocorre integralmente no sistema principal (RAM), com alinhamento de 64 \textit{bytes} para favorecer a vetorização automática pelo compilador.
-Adota-se a disposição SoA, na qual as funções de distribuição $f_i$ e $g_i$ de cada uma das $Q=9$ velocidades da rede D2Q9 são armazenadas em blocos contíguos de tamanho $N$, o que melhora a localidade dos dados e favorece o uso eficiente das linhas de \textit{cache}.
+Na colisão, determinam-se $f_i^{eq}$ e $g_i^{eq}$ e aplica-se o operador BGK com fator de relaxação modulado, acrescido, em $g_i$, da correção de quase equilíbrio; $g_i^{eq}$ resulta do resolvedor de Newton-Raphson da Seção~\ref{subsec:lbm-equilibrio-g} do Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
+Esse resolvedor é executado em cada nó e, para ser transposto a processadores de paralelismo massivo, adota três decisões.
+A primeira é o número fixo de iterações, $k_{max} = 3$, em lugar de critério de parada por tolerância, que faria nós vizinhos executarem números distintos de iterações, com divergência entre fluxos de execução e perda de desempenho proporcional ao pior caso do grupo, e tornaria o tempo dependente do estado do escoamento, o que é inadequado à comparação entre tecnologias.
+A segunda é a inicialização a partir da solução anterior (\textit{warm start}), que reduz o número de iterações necessárias, pois a solução varia pouco entre passos, ao custo de um campo adicional de $D + 1$ componentes por nó ($\chi$ e $\boldsymbol{\lambda}$); as versões paralelas armazenam apenas $\boldsymbol{\xi}$ (Seção~\ref{sec:custo-computacional}).
+A terceira é a proteção numérica: subtrai-se o maior expoente antes da exponenciação, para evitar transbordamento (\textit{overflow}), e limitam-se inferiormente, em módulo, os denominadores $Z$ e $\det \mathbf{J}$, de modo que a divisão permaneça finita sem desvios condicionais.
+Se o sistema se revelar degenerado, adota-se $g_i^{eq} = 2\rho E\, W_i(T) / \sum_j W_j(T)$, que satisfaz a restrição de energia total, mas não a de fluxo, e é também a expressão empregada na inicialização dos campos.
 
-O ciclo do LBM divide-se em três etapas principais: cálculo das grandezas macroscópicas, colisão e propagação.
-Na colisão, determinam-se as distribuições de equilíbrio $f_i^{eq}$ e $g_i^{eq}$ e aplica-se o operador BGK com fator de relaxação modulado, acrescido, na distribuição de energia, da correção de quase equilíbrio.
-Para o equilíbrio térmico $g_i^{eq}$, utiliza-se o resolvedor de Newton-Raphson descrito na Seção~\ref{subsec:lbm-equilibrio-g} do Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
-
-Três decisões distinguem essa solução iterativa de uma implementação convencional do método de Newton-Raphson, e todas decorrem do fato de o procedimento ser executado simultaneamente em cada nó da malha e de precisar ser transposto para processadores de paralelismo massivo.
-A primeira é o número fixo de iterações, $k_{max} = 3$, adotado em lugar de um critério de parada por tolerância.
-Esse critério faria com que nós vizinhos executassem números distintos de iterações, o que implica divergência entre fluxos de execução e perda de desempenho proporcional ao pior caso do grupo.
-Além disso, o tempo de execução passaria a depender do estado do escoamento, tornando-se inadequado à comparação entre tecnologias.
-Em seguida, a inicialização a partir da solução anterior (\textit{warm start}) reaproveita os multiplicadores obtidos no passo de tempo anterior como estimativa inicial.
-Como a solução varia pouco entre passos consecutivos, o procedimento reduz o número de iterações necessárias, com o custo de manter em memória um campo adicional de $D + 1$ componentes por nó, correspondentes a $\chi$ e a $\boldsymbol{\lambda}$.
-Por fim, a proteção numérica consiste em subtrair o maior expoente antes da exponenciação, para evitar transbordamento (\textit{overflow}), e em limitar inferiormente, em módulo, os denominadores $Z$ e $\det \mathbf{J}$, de modo que a divisão permaneça finita sem a introdução de desvios condicionais no \textit{kernel} de cálculo.
-Caso o sistema se revele degenerado, adota-se como alternativa a distribuição proporcional aos próprios pesos, $g_i^{eq} = 2\rho E\, W_i(T) / \sum_j W_j(T)$, que satisfaz a restrição de energia total, ainda que não a de fluxo, e que também é a expressão empregada na inicialização dos campos.
-
-A etapa de propagação utiliza a técnica de \textit{pull-streaming} combinada com interpolação IDW.
-Para otimizar o desempenho, os índices e os pesos de interpolação dos quatro vizinhos de cada célula são pré-calculados na fase de inicialização e armazenados em tabelas lineares, o que elimina cálculos geométricos redundantes durante a marcha no tempo.
-A versão sequencial é a única que mantém essas tabelas por nó, pois as versões paralelas atuais as substituem pela estrutura compacta \texttt{DirectionStencil}, descrita na Seção~\ref{sec:custo-computacional}, cujos pesos reproduzem os das tabelas.
-
-O ajuste de desempenho da versão sequencial concentra-se na eficiência do acesso à memória e na viabilização da vetorização, por meio de laços simples e da ausência de desvios condicionais complexos no interior do \textit{kernel} de cálculo.
-O impacto sobre a complexidade do código é baixo, pois a implementação constitui uma transcrição direta das equações matemáticas do LBM.
-A estrutura da etapa de colisão é ilustrada no PROGRAMA~\ref{lst:plain-collision}, com o acesso indexado à disposição SoA.
+A propagação combina \textit{pull streaming} e interpolação IDW, com índices e pesos dos quatro vizinhos de cada célula pré-calculados na inicialização em tabelas lineares, que já incorporam as condições de contorno periódicas e de gradiente nulo e dispensam desvios condicionais no laço.
+Essas tabelas por nó são exclusivas da versão sequencial, pois as paralelas usam o \texttt{DirectionStencil} (Seção~\ref{sec:custo-computacional}), cujos pesos as reproduzem.
+O ajuste de desempenho limita-se a laços simples, sem desvios condicionais complexos, e o impacto sobre a complexidade do código é baixo, pois a implementação transcreve diretamente as equações do LBM (PROGRAMA~\ref{lst:plain-collision}).
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Processamento sequencial da colisão e do equilíbrio.}, label={lst:plain-collision}]
 for (Index cell = 0; cell < N; ++cell) {
-    const Scalar rho = pRho[cell];
-    const Scalar Tv = pT[cell];
-    const Scalar ux = pU[0 * N + cell];
-    const Scalar uy = pU[1 * N + cell];
-
     Scalar feq[9], geq[9], gqe[9];
-    compute_equilibria(cell, rho, Tv, ux, uy, feq, geq, gqe);
+    compute_equilibria(cell, pRho[cell], pT[cell],
+                       pU[0 * N + cell], pU[1 * N + cell], feq, geq, gqe);
 
     // Colisao em cada direcao idc, com a correcao de quase equilibrio em g
     for (int idc = 0; idc < 9; ++idc) {
@@ -350,71 +235,56 @@ for (Index cell = 0; cell < N; ++cell) {
 \fonte{O autor (2026).}
 \end{minipage}
 
-Nesse trecho, $N$ é o número total de células, \texttt{cell} é o índice da célula corrente e \texttt{idc} representa a direção de velocidade discreta.
-Os símbolos $\omega_L$ e $\omega_T$ designam o fator de relaxação modulado e o fator de relaxação da energia, \texttt{gqe} armazena a correção de quase equilíbrio $g_i^{*} - g_i^{eq}$, e $f_i$ e $g_i$ são as funções de distribuição de massa e de energia, respectivamente.
-As tabelas de índices empregadas na propagação já incorporam o tratamento das condições de contorno periódicas e de gradiente nulo, de modo que o mapeamento dos vizinhos de cada célula é obtido por leitura direta, sem qualquer desvio condicional no interior do laço.
-
-%---------------------------------------------------------------------------------------
+Nesse trecho, $N$ é o número de células, \texttt{cell}, a célula corrente, \texttt{idc}, a direção de velocidade discreta, $\omega_L$ e $\omega_T$, os fatores de relaxação modulado e da energia, e \texttt{gqe}, a correção de quase equilíbrio $g_i^{*} - g_i^{eq}$.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando OpenMP}\label{sec:implementacao-computacional-utilizando-openmp}
 
-A implementação em OpenMP contempla tanto o paralelismo em CPUs multinúcleo quanto a aceleração em GPUs por meio de \textit{offloading}.
-Na versão para CPU, o estado do resolvedor é o conjunto das distribuições pós-colisão, e cada passo de tempo é um único núcleo fundido: para cada célula, as nove direções são puxadas de suas quatro células de origem, os momentos são reduzidos, e o fechamento térmico e a colisão são resolvidos em registradores antes de as distribuições serem gravadas no outro arranjo da alternância \textit{ping-pong}.
-Cada chamada a \texttt{Run()} abre uma região paralela persistente; os fluxos mantêm localmente os papéis dos ponteiros de entrada e saída, executam os passos e alternam esses papéis após cada passo.
-O trabalho por passo é distribuído estaticamente entre as linhas da malha, e a barreira implícita do laço \texttt{omp for} sincroniza os fluxos antes do passo seguinte.
-No último passo da chamada, o núcleo grava também os campos macroscópicos; ao final, os ponteiros atualizados são persistidos pela região \texttt{single}, conforme o trecho do PROGRAMA~\ref{lst:openmp-cpu}.
+A implementação em OpenMP contempla o paralelismo em CPUs multinúcleo e a aceleração em GPUs por meio de \textit{offloading}.
+Na versão para CPU, o estado do resolvedor é o conjunto das distribuições pós-colisão, e cada passo é um único núcleo fundido (Seção~\ref{sec:custo-computacional}).
+Cada chamada a \texttt{Run()} abre uma região paralela persistente, em que os fluxos alternam localmente os ponteiros de entrada e de saída a cada passo; no último passo, o núcleo grava também os campos macroscópicos, e os ponteiros atualizados são persistidos pela região \texttt{single} (PROGRAMA~\ref{lst:openmp-cpu}).
+O trabalho de cada passo é dividido em segmentos de linha, de até $256$ células de uma mesma linha, em blocos vetoriais inteiros, que \texttt{omp for schedule(runtime)} distribui entre os fluxos (\texttt{dynamic,1}, salvo definição de \texttt{OMP\_SCHEDULE}), e a barreira implícita do laço sincroniza os fluxos antes do passo seguinte.
+O escalonamento dinâmico é necessário em máquinas compartilhadas e heterogêneas: com a divisão estática por linhas, um único núcleo lento (núcleo eficiente de CPU híbrida, irmão de SMT ou CPU virtual compartilhada) mantém os demais ociosos na barreira, e o escalonamento dinâmico sobre segmentos finos reduz esse desequilíbrio (Seção~\ref{sec:otimizacao-roofline}).
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Região paralela persistente e alternância dos ponteiros na versão OpenMP para CPU.}, label={lst:openmp-cpu}]
 #pragma omp parallel default(shared)
 {
-    Scalar* fIn = fCur_;
-    Scalar* fOut = fAlt_;
-    Scalar* gIn = gCur_;
-    Scalar* gOut = gAlt_;
+    Scalar *fIn = fCur_, *fOut = fAlt_;
+    Scalar *gIn = gCur_, *gOut = gAlt_;
     for (Index t = 0; t < steps; ++t) {
-        if (t + 1 < steps)
-            step<false>(fIn, gIn, fOut, gOut);
-        else
-            step<true>(fIn, gIn, fOut, gOut);
+        if (t + 1 < steps) step<false>(fIn, gIn, fOut, gOut);
+        else               step<true>(fIn, gIn, fOut, gOut);
         std::swap(fIn, fOut);
         std::swap(gIn, gOut);
     }
     #pragma omp single nowait
-    {
-        fCur_ = fIn;
-        fAlt_ = fOut;
-        gCur_ = gIn;
-        gAlt_ = gOut;
-    }
+    { fCur_ = fIn; fAlt_ = fOut; gCur_ = gIn; gAlt_ = gOut; }
 }
 \end{lstlisting}
 \fonte{O autor (2026).}
 \end{minipage}
 
-A gestão de memória na versão de CPU é feita de forma compartilhada no sistema principal, aproveitando a disposição SoA para favorecer acessos contíguos.
-A propagação emprega o estêncil compartilhado \texttt{DirectionStencil}: as colunas de origem, limitadas ao tubo, dependem apenas da linha corrente e são calculadas fora do laço interno, e a periodicidade transversal só afeta as primeiras e as últimas posições de cada linha, tratadas à parte, de modo que o laço interno lê quatro sequências contíguas por direção sem aritmética de índices.
-No núcleo de CPU, o laço sobre as nove direções da rede D2Q9 é desenrolado por meio de \texttt{LBMINI\_UNROLL(9)}. Essa expansão expõe as constantes do reticulado ao compilador e favorece o uso de registradores para as distribuições locais, mas, por si só, não demonstra vetorização SIMD.
+A propagação usa o \texttt{DirectionStencil}: como os deslocamentos inteiros das origens, a periodicidade transversal e o recorte do tubo dependem apenas da linha e da direção, cada bloco vetorial lê, por direção, quatro sequências contíguas, sem aritmética de índices por célula.
+Isso exige uma disposição de memória distinta da das GPUs: o índice é \texttt{j * pitch + i}, com a direção longitudinal $i$ ($10^2$ a $10^4$ células) contígua e \texttt{pitch} igual a $n_x$ arredondado para múltiplo de $16$ elementos de dupla precisão (acrescido de $16$ quando o resultado é múltiplo de $512$), e os planos de cada campo têm passo escalonado para que os cerca de vinte fluxos lidos por um bloco não colidam nos mesmos conjuntos da \textit{cache} L1.
+As colunas de preenchimento são células comuns, calculadas e ignoradas, o que dispensa máscaras e restos escalares.
+A disposição \texttt{i * ny + j} das GPUs, adequada à coalescência, não serve à CPU: com $n_y = n_x/100$, a direção contígua é a curta e periódica, enquanto a propagação desloca as populações ao longo da longa, e nenhum laço de passo unitário existe.
+A disposição, e não a diretiva, impede a vetorização (Seção~\ref{sec:otimizacao-roofline}).
+O núcleo (\texttt{host::Kernel}, em \texttt{HostKernel.hpp}) processa $16$ células por bloco, em quatro registradores independentes de quatro valores de dupla precisão (AVX2), escritos com extensões vetoriais do GCC (\texttt{Simd.hpp}): a cadeia de dependências do resolvedor de Newton-Raphson é limitada pela latência, e um único registrador deixa as portas de ponto flutuante ociosas, ao passo que quatro registradores independentes ocultam essa latência.
+Os desvios viram seleções por via, e o ramo de degeneração do resolvedor só é percorrido, por bloco, quando alguma via o exige.
+A exponencial é um polinômio vetorial próprio, com erro relativo inferior a $10^{-15}$, protegido por barreira em \textit{assembly} para que \texttt{-ffast-math} não elimine o arredondamento da redução de argumento.
+O núcleo tem cerca de $150$ instruções vetoriais de ponto flutuante por célula e passo.
+A equivalência numérica com a versão \textit{Plain} é verificada com tolerância relativa de $10^{-9}$.
 
-O núcleo fundido atual substitui a variante vetorizada da campanha experimental do Capítulo~\ref{ch:resultados}, na qual as etapas eram percorridas com a diretiva \texttt{\#pragma omp for simd}, os desvios condicionais da colisão eram trocados por seleções, o que obrigava a avaliar em todos os nós tanto o resultado do método de Newton-Raphson quanto a distribuição alternativa ($90$ operações a mais por nó, cerca de $5\%$ do custo da colisão), e a colisão era reorganizada em blocos de trinta e duas células, cada estágio sendo um laço \texttt{\#pragma omp simd} plano, de modo que as exponenciais e os logaritmos fossem avaliados por versões vetoriais da biblioteca matemática.
-Esse arranjo foi abandonado na versão atual, que processa cada célula em registradores por um laço escalar sobre as linhas, sem diretivas \texttt{simd}, e que visa a reduzir o tráfego de memória (Seção~\ref{sec:custo-computacional}) em lugar de vetorizar a colisão.
-Assim, as taxas de atualização do OpenMP em CPU apresentadas no Capítulo~\ref{ch:resultados} são as da variante vetorizada, e as do núcleo fundido não foram medidas na campanha; a equivalência numérica do núcleo atual com a versão \textit{Plain} é verificada pelos testes do miniaplicativo.
+O mesmo núcleo é executado pelas versões para CPU do Kokkos, do RAJA, do Alpaka e do MPI, que diferem apenas na distribuição dos segmentos entre os fluxos (\texttt{Schedule<Dynamic>}, \texttt{omp\_\allowbreak parallel\_\allowbreak for\_\allowbreak dynamic\_\allowbreak exec<1>}, um contador atômico e fatias em $x$ com colunas fantasma, respectivamente), e o OpenCL e o OpenACC dispõem de formulações equivalentes (Seções~\ref{sec:implementacao-computacional-utilizando-openacc} e~\ref{sec:implementacao-computacional-utilizando-opencl}).
 
-A preocupação com a colocação de páginas e a afinidade dos fluxos é particularmente relevante em sistemas de acesso não uniforme à memória (\textit{Non-Uniform Memory Access}, NUMA), arquiteturas em que cada agrupamento de núcleos possui controlador e banco de memória próprios, de modo que o tempo de acesso depende de o dado residir no banco local ou no banco associado a outro agrupamento.
-Nesses sistemas, os arranjos de distribuição são alocados sem preenchimento prévio, e a inicialização e a marcha no tempo empregam o mesmo particionamento estático por linhas, de modo que as páginas são tocadas pela primeira vez, na inicialização ou no primeiro passo, pelo fluxo que as atualiza (localidade de primeiro acesso, ou \textit{first-touch}).
-Essa localidade depende de o número de fluxos e de sua afinidade aos núcleos permanecerem estáveis, além da política do sistema operacional.
-Nos ensaios, a afinidade é fixada pelas variáveis de ambiente \texttt{OMP\_PLACES=cores} e \texttt{OMP\_PROC\_BIND=close}.
+Em sistemas de acesso não uniforme à memória (\textit{Non-Uniform Memory Access}, NUMA), o tempo de acesso depende de o dado residir no banco de memória local ou no de outro agrupamento de núcleos.
+Os arranjos de distribuição são alocados sem preenchimento prévio, e a inicialização percorre os mesmos segmentos da marcha no tempo com partição estática, de modo que cada página é tocada pela primeira vez por um fluxo que, na marcha, receberá majoritariamente segmentos vizinhos aos seus (localidade de primeiro acesso, ou \textit{first-touch}).
+\texttt{OMP\_SCHEDULE=static} preserva essa localidade, ao custo da tolerância a núcleos lentos, e a afinidade dos fluxos é fixada nos ensaios por \texttt{OMP\_PLACES=cores} e \texttt{OMP\_PROC\_BIND=close}.
 
-Na variante voltada a aceleradores, a gestão de memória torna-se explícita.
-Em vez de mapeamentos implícitos de dados, a implementação aloca as distribuições duplas ($f_A, f_B, g_A, g_B$), os campos macroscópicos e os parâmetros diretamente na memória do dispositivo acelerador por meio de \texttt{omp\_target\_alloc}, liberando-os ao término com \texttt{omp\_target\_free}.
-A estrutura compacta \texttt{DirectionStencil} e os parâmetros físicos são copiados uma única vez para a GPU via \texttt{omp\_target\_memcpy}.
-Durante a marcha no tempo, a alternância \textit{ping-pong} entre os arranjos é realizada no hospedeiro por meio de \texttt{std::swap} de ponteiros brutos de dispositivo, com custo nulo de barramento.
-O núcleo computacional fundido de passo de tempo é despachado por meio da diretiva \texttt{\#pragma omp target teams distribute parallel for collapse(2)}, passando os ponteiros de dispositivo via cláusula \texttt{is\_device\_ptr(prm, fIn, gIn, fOut, gOut, xiIo, rhoOut, pOut, temOut, uOut)}, conforme ilustrado no PROGRAMA~\ref{lst:openmp-gpu}.
-A propagação, a redução dos momentos, o fechamento térmico de Newton-Raphson e o relaxamento de BGK são resolvidos em registradores dentro de cada iteração da malha.
-A persistência dos campos macroscópicos é condicionada pelo gabarito (\texttt{kStoreMacro}), sendo ativada apenas no passo terminal do bloco de iterações.
-Fixa-se o limite de fluxos por equipe em \texttt{thread\_limit(128)}, condizente com a configuração de blocos adotada no acelerador.
+Na variante para aceleradores, a gestão de memória é explícita: as distribuições duplas ($f_A, f_B, g_A, g_B$), os campos macroscópicos e os parâmetros são alocados na memória do dispositivo por \texttt{omp\_target\_alloc} e liberados por \texttt{omp\_target\_free}, e o \texttt{DirectionStencil} e os parâmetros físicos são copiados uma única vez por \texttt{omp\_target\_memcpy}.
+O núcleo fundido é despachado por \texttt{\#pragma omp target teams distribute parallel for collapse(2)}, com ponteiros de dispositivo em \texttt{is\_device\_ptr} e \texttt{thread\_limit(128)}, condizente com a configuração de blocos das demais versões para GPU (PROGRAMA~\ref{lst:openmp-gpu}).
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Despacho do núcleo fundido em GPU com OpenMP utilizando ponteiros de dispositivo.}, label={lst:openmp-gpu}]
@@ -428,50 +298,32 @@ for (int ci = 0; ci < nx; ++ci) {
         Scalar f[kQ], g[kQ];
         Cell::Gather(*prm, fIn, gIn, ci, cj, f, g);
 
-        Scalar rho, ux, uy, tem, pres;
-        Cell::Macroscopic(f, g, *prm, rho, ux, uy, tem, pres);
-        if constexpr (kStoreMacro) {
-            rhoOut[cell] = rho;
-            pOut[cell] = pres;
-            temOut[cell] = tem;
-            uOut[0 * N + cell] = ux;
-            uOut[1 * N + cell] = uy;
-        }
+        Scalar rho, invRho, ux, uy, tem, pres;
+        Cell::Macroscopic(f, g, *prm, rho, invRho, ux, uy, tem, pres);
+        if constexpr (kStoreMacro) { /* grava rho, p, T e u */ }
 
         Scalar xi[kD] = { xiIo[0 * N + cell], xiIo[1 * N + cell] };
-        Cell::Collide(*prm, rho, ux, uy, tem, f, g, xi);
-
-        LBMINI_UNROLL(9)
-        for (int idc = 0; idc < kQ; ++idc) {
-            fOut[idc * N + cell] = f[idc];
-            gOut[idc * N + cell] = g[idc];
-        }
-        xiIo[0 * N + cell] = xi[0];
-        xiIo[1 * N + cell] = xi[1];
+        Cell::Collide(*prm, rho, invRho, ux, uy, tem, f, g, xi);
+        // grava f, g e xi nos arranjos de saida (ping-pong)
     }
 }
 \end{lstlisting}
 \fonte{O autor (2026).}
 \end{minipage}
 
-O impacto sobre a complexidade do código é moderado.
-Embora a lógica física permaneça próxima da versão sequencial, a introdução de diretivas de \textit{offloading} exige cuidado na gestão do ciclo de vida dos dados e no controle da afinidade dos fluxos de execução (\textit{thread affinity}).
+O impacto sobre a complexidade do código é moderado: a lógica física permanece próxima da versão sequencial, mas as diretivas de \textit{offloading} exigem cuidado com o ciclo de vida dos dados e com a afinidade dos fluxos (\textit{thread affinity}).
+Na GPU, o \textit{nvc++} gera, para \texttt{CellPhysics.hpp}, um \textit{kernel} de cerca de $150$ registradores por fluxo, sem \textit{spills}, com três equipes por multiprocessador, como no CUDA; o valor \texttt{thread\_limit(128)} decorre da hipótese 12 da \autoref{tab:hipoteses-otimizacao}.
+Os testes de OpenMP em GPU são executados separadamente dos de OpenCL (POCL), pois a coexistência de duas inicializações do ambiente CUDA no mesmo processo provoca o seu aborto (causa provável, não isolada).
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando OpenACC}\label{sec:implementacao-computacional-utilizando-openacc}
 
-A implementação em OpenACC visa à portabilidade de desempenho com baixo impacto na complexidade do código-fonte.
-O modelo de execução adotado é descritivo, no qual o programador identifica as regiões de paralelismo e o compilador mapeia as iterações para o dispositivo acelerador.
-A estruturação modular utiliza as primitivas de \texttt{CellPhysics.hpp}, compartilhando funções puras de colisão e de equilíbrio sem duplicação de código, preservando a coerência física entre as versões de CPU e de GPU.
+A implementação em OpenACC visa à portabilidade de desempenho com baixo impacto sobre o código-fonte: no modelo descritivo adotado, o programador identifica as regiões de paralelismo e o compilador mapeia as iterações para o acelerador.
+Os arranjos de distribuição em SoA ($f_A, f_B, g_A, g_B$), os campos macroscópicos e o vetor de parâmetros são alocados no acelerador por \texttt{acc\_malloc} e liberados por \texttt{acc\_free}, e a cláusula \texttt{deviceptr} os vincula às regiões paralelas, o que elimina a sobrecarga das tabelas internas de presença e as cópias implícitas entre hospedeiro e dispositivo.
 
-A gestão de memória no OpenACC é configurada explicitamente por meio da API de tempo de execução: os arranjos de distribuição em disposição SoA ($f_A, f_B, g_A, g_B$), os campos macroscópicos e o vetor de parâmetros são alocados diretamente na memória do acelerador com \texttt{acc\_malloc} e liberados com \texttt{acc\_free}.
-Ao vincular esses endereços às regiões paralelas via cláusula \texttt{deviceptr}, elimina-se a sobrecarga das tabelas internas de presença e evitam-se cópias implícitas entre o hospedeiro e o dispositivo.
-
-O avanço temporal utiliza uma abordagem fundida de passo único: cada iteração da malha realiza a puxada das distribuições pré-colisão via \texttt{DirectionStencil}, a acumulação dos momentos macroscópicos, o cálculo do equilíbrio, a iteração de Newton-Raphson com ponto de partida $\boldsymbol{\xi}$ e o relaxamento de BGK, tudo em registradores locais antes de gravar os resultados no arranjo de destino.
-O lançamento assíncrono em fila dedicada (\texttt{async(kQueue)}) permite encadear os passos temporais com sincronização única (\texttt{\#pragma acc wait(kQueue)}) ao final do método \texttt{Run()}, conforme ilustrado no PROGRAMA~\ref{lst:openacc-parallel}.
-A alternância entre os arranjos de leitura e de escrita é realizada no hospedeiro por meio de troca de ponteiros brutos (\textit{ping-pong}), com custo zero de barramento.
-Configura-se a geometria de execução com \texttt{vector\_length(128)}, alinhada ao particionamento de fluxos utilizado nas demais versões para GPU.
+O avanço temporal segue o núcleo fundido de passo único, com o corpo do laço idêntico ao da versão OpenMP para GPU (PROGRAMA~\ref{lst:openmp-gpu}).
+O lançamento assíncrono em fila dedicada (\texttt{async(kQueue)}) encadeia os passos com uma única sincronização (\texttt{\#pragma acc wait(kQueue)}) ao final de \texttt{Run()}, e a geometria de execução é configurada com \texttt{vector\_length(128)}, alinhada às demais versões para GPU (PROGRAMA~\ref{lst:openacc-parallel}).
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Diretiva OpenACC assíncrona para o núcleo fundido de passo de tempo em GPU.}, label={lst:openacc-parallel}]
@@ -483,115 +335,76 @@ for (int i = 0; i < nx; ++i) {
         const int cell = i * ny + j;
         Scalar f[kQ], g[kQ];
         Cell::Gather(*prm, fIn, gIn, i, j, f, g);
-
-        Scalar rho, ux, uy, tem, pres;
-        Cell::Macroscopic(f, g, *prm, rho, ux, uy, tem, pres);
-        if constexpr (kStoreMacro) {
-            rhoOut[cell] = rho;
-            pOut[cell] = pres;
-            temOut[cell] = tem;
-            uOut[0 * N + cell] = ux;
-            uOut[1 * N + cell] = uy;
-        }
-
-        Scalar xi[kD] = { xiIo[0 * N + cell], xiIo[1 * N + cell] };
-        Cell::Collide(*prm, rho, ux, uy, tem, f, g, xi);
-
-        for (int idc = 0; idc < kQ; ++idc) {
-            fOut[idc * N + cell] = f[idc];
-            gOut[idc * N + cell] = g[idc];
-        }
-        xiIo[0 * N + cell] = xi[0];
-        xiIo[1 * N + cell] = xi[1];
+        // ... Macroscopic, Collide e gravacao em fOut, gOut e xiIo
     }
 }
 \end{lstlisting}
 \fonte{O autor (2026).}
 \end{minipage}
 
-O impacto sobre a complexidade do código permanece contido, pois o OpenACC permite expressar aceleração em aceleradores e processadores multinúcleo mantendo laços C++ de alto nível, delegando ao compilador as transformações e otimizações arquiteturais.
+O impacto sobre a complexidade do código é contido, pois os laços C++ de alto nível são mantidos e as transformações ficam a cargo do compilador.
+
+Na CPU (\texttt{-acc=multicore}), duas limitações do \texttt{nvc++}, e não do método, impedem a execução do núcleo vetorial compartilhado: o compilador não vetoriza o núcleo monolítico por célula, cujo corpo contém laços aninhados e chamadas de função, e não aceita os tipos vetoriais do GCC em regiões \texttt{acc}.
+O OpenACC dispõe, por isso, de uma formulação equivalente em fases (\texttt{Prepare}, \texttt{Newton}, \texttt{Equilibrium} e \texttt{Collide}), cada uma composta de laços de via de passo unitário sobre blocos de $16$ células, com polinômio de exponencial próprio (o \texttt{nvc++} chama a biblioteca por via).
+Cadeias de seleção aninhadas em três níveis e seleções cujos operandos são calculados dentro dos ramos, identificadas na saída \texttt{-Minfo=vect}, deixam o laço escalar silenciosamente.
+O estado de cada bloco passa pela memória entre as fases, e não permanece em registradores, e a opção \texttt{-Mvect=simd:256} é necessária, pois o padrão do compilador usa vetores de $128$ \textit{bits}.
+Na GPU, o OpenACC reutiliza as funções de colisão e de equilíbrio de \texttt{CellPhysics.hpp} compartilhadas com o OpenMP: com o fechamento fatorado, o \texttt{nvc++} desenrola as três iterações do método de Newton-Raphson, o que acrescenta cerca de $130$ instruções estáticas, mas permite avaliar $\alpha$ como constante.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando CUDA}\label{sec:implementacao-computacional-utilizando-cuda}
 
-A implementação em CUDA representa a versão nativa para aceleradores NVIDIA, utilizando um modelo de programação que permite controle minucioso sobre os recursos do \textit{hardware}.
-O modelo de execução adotado é o SIMT, no qual a malha computacional é mapeada em uma hierarquia de blocos e fluxos de execução, com blocos de $128$ fluxos delimitados pela diretiva \texttt{\_\_launch\_bounds\_\_(kBlockSize)}, agrupados sobre multiprocessadores (\textit{Streaming Multiprocessors}, SMs).
-O \textit{warp} é o grupo de trinta e dois fluxos de execução que o multiprocessador escalona como unidade indivisível, executando a mesma instrução sobre dados distintos; quando fluxos de um mesmo \textit{warp} seguem caminhos diferentes em um desvio condicional, os caminhos são percorridos em sequência, situação designada divergência de \textit{warp}, que reduz o aproveitamento das unidades de execução.
+A implementação em CUDA é a versão nativa para aceleradores NVIDIA, com controle detalhado dos recursos do \textit{hardware}.
+No modelo de execução SIMT, a malha é mapeada em blocos de $128$ fluxos (\texttt{\_\_launch\_bounds\_\_(kBlockSize)}) agrupados sobre multiprocessadores (\textit{Streaming Multiprocessors}, SMs).
+O \textit{warp}, grupo de 32 fluxos escalonado como unidade indivisível, executa a mesma instrução sobre dados distintos, e desvios condicionais divergentes serializam os caminhos (divergência de \textit{warp}).
 
-A gestão de memória é feita de forma explícita na VRAM da GPU utilizando a API \texttt{cudaMalloc}.
-Para otimizar o acesso aos dados, utiliza-se a disposição SoA, assegurando o coalescimento de memória nas transações globais.
-Os parâmetros da simulação e o estêncil compacto (\texttt{DirectionStencil}) são encapsulados na estrutura \texttt{KernelParams} e transmitidos diretamente pelo espaço de constantes da grade por meio do qualificador \texttt{\_\_grid\_constant\_\_}, aproveitando a memória constante do acelerador com latência reduzida.
-A alternância entre os passos temporais adota a técnica de \textit{ping-pong} de ponteiros brutos de dispositivo, alternando as distribuições de entrada e saída a cada passo de tempo sem transferências pelo barramento PCIe.
-
-O mapeamento das etapas do LBM utiliza um núcleo fundido de passo de tempo (\texttt{StepKernel}), eliminando núcleos intermediários e arranjos auxiliares.
-O PROGRAMA~\ref{lst:cuda-parallel} apresenta um trecho representativo dessa implementação.
-Cada fluxo calcula a célula correspondente, puxa as distribuições pré-colisão via \texttt{p.stencil}, avalia os momentos macroscópicos, resolve o fechamento térmico por Newton-Raphson com ponto de partida quente $\boldsymbol{\xi}$, calcula a colisão BGK e grava as distribuições relaxadas no arranjo de destino.
-A gravação dos campos macroscópicos ($\rho, \mathbf{u}, T, p$) na memória global ocorre antes da colisão e é controlada em tempo de compilação por um parâmetro de gabarito booleano (\texttt{if constexpr (kStoreMacro)}), ocorrendo exclusivamente no último passo do método \texttt{Run()}.
+A memória é gerenciada na VRAM por \texttt{cudaMalloc}, com disposição SoA que assegura o coalescimento das transações globais.
+Os parâmetros e o \texttt{DirectionStencil} são encapsulados em \texttt{KernelParams} e transmitidos por \texttt{\_\_grid\_constant\_\_}, que usa a memória constante do acelerador, de latência reduzida, e a alternância \textit{ping-pong} troca ponteiros brutos de dispositivo, sem transferências pelo barramento PCIe.
+O núcleo fundido \texttt{StepKernel} (PROGRAMA~\ref{lst:cuda-parallel}) calcula uma célula por fluxo: puxa as distribuições pré-colisão via \texttt{p.stencil}, avalia os momentos macroscópicos, resolve o fechamento térmico e a colisão BGK e grava as distribuições relaxadas no arranjo de destino.
+Os campos macroscópicos são gravados antes da colisão, apenas no último passo de \texttt{Run()}, por \texttt{if constexpr (kStoreMacro)}.
 
 \begin{lstlisting}[language=C++, caption={\textit{Kernel} CUDA fundido de passo de tempo com estêncil compacto.}, label={lst:cuda-parallel}]
 template<typename Scalar, bool kStoreMacro>
 __global__ void __launch_bounds__(kBlockSize) StepKernel(
     const __grid_constant__ KernelParams<Scalar> p,
-    const Scalar* __restrict__ fIn,  const Scalar* __restrict__ gIn,
-    Scalar* __restrict__ fOut,       Scalar* __restrict__ gOut,
-    Scalar* __restrict__ xiIo,       Scalar* __restrict__ rhoOut,
-    Scalar* __restrict__ pOut,       Scalar* __restrict__ temOut,
-    Scalar* __restrict__ uOut
+    const Scalar* __restrict__ fIn, const Scalar* __restrict__ gIn,
+    Scalar* __restrict__ fOut, Scalar* __restrict__ gOut,
+    Scalar* __restrict__ xiIo /* , rhoOut, pOut, temOut, uOut */
 ) {
     const int cell = blockIdx.x * blockDim.x + threadIdx.x;
     if (cell >= p.cells) return;
     const ptrdiff_t N = p.cells;
 
-    // Puxada das populacoes pre-colisao via DirectionStencil
-    Scalar f[kQ], g[kQ];
+    Scalar f[kQ], g[kQ];                       // puxada via DirectionStencil
     #pragma unroll
     for (int idc = 0; idc < kQ; ++idc) {
         // ... (interpolacao IDW sobre fIn e gIn em registradores)
     }
 
-    // Momentos macroscopicos e gravacao postergada
-    Scalar rho, ux, uy, tem, pres;
-    Phys::Macroscopic(p, f, g, rho, ux, uy, tem, pres);
-    if constexpr (kStoreMacro) {
-        rhoOut[cell] = rho;  pOut[cell] = pres;  temOut[cell] = tem;
-        uOut[2 * cell + 0] = ux;
-        uOut[2 * cell + 1] = uy;
-    }
+    Scalar rho, invRho, ux, uy, tem, pres;
+    Phys::Macroscopic(p, f, g, rho, invRho, ux, uy, tem, pres);
+    if constexpr (kStoreMacro) { /* ... grava rho, p, T e u */ }
 
-    // Fechamento termico com ponto de partida planar xi e colisao
-    Scalar xi0 = xiIo[0 * N + cell];
-    Scalar xi1 = xiIo[1 * N + cell];
-    Phys::Collide(p, rho, ux, uy, tem, f, g, xi0, xi1);
-
-    // Gravacao das distribuicoes pos-colisao no ping-pong
-    #pragma unroll
-    for (int idc = 0; idc < kQ; ++idc) {
-        fOut[idc * N + cell] = f[idc];
-        gOut[idc * N + cell] = g[idc];
-    }
-    xiIo[0 * N + cell] = xi0;
-    xiIo[1 * N + cell] = xi1;
+    Scalar xi0 = xiIo[0 * N + cell], xi1 = xiIo[1 * N + cell];
+    Phys::Collide(p, rho, invRho, ux, uy, tem, f, g, xi0, xi1);
+    // ... (grava f, g e xi no arranjo de destino)
 }
 \end{lstlisting}
 \fonte{O autor (2026).}
 
-A solução de Newton-Raphson é desenrolada com número fixo de três iterações e lógica sem desvios divergentes, mantendo a convergência uniforme entre os fluxos de um mesmo \textit{warp}.
-O impacto sobre a complexidade do código é significativo, pois requer arquivos \texttt{.cu}, uso do compilador \texttt{nvcc} e gerenciamento detalhado de ponteiros e gabaritos, fornecendo uma referência de alto desempenho para a arquitetura avaliada.
+O resolvedor de Newton-Raphson é desenrolado com três iterações fixas e sem desvios divergentes (Seção~\ref{sec:implementacao-computacional-sequencial}), o que mantém uniforme a execução do \textit{warp}, e emprega o fechamento fatorado da Seção~\ref{sec:custo-computacional}: oito exponenciais por nó, em duas funções (\texttt{AxisExp} e \texttt{GeqFromXi}), em lugar das trinta e seis do resolvedor de referência.
+O \textit{kernel} compilado para a arquitetura \texttt{sm\_89} usa $140$ registradores por fluxo, sem memória local, o que limita a ocupação a três blocos por multiprocessador ($384$ dos $1536$ fluxos, ou $25\%$); a configuração decorre da hipótese 12 da \autoref{tab:hipoteses-otimizacao}.
+O CUDA é a tecnologia de menor abstração e de maior controle: é a única em que o laço de Newton é desenrolado explicitamente (\texttt{\#pragma unroll}) e em que as constantes da rede são operandos imediatos.
+O impacto sobre a complexidade do código é significativo, pois exige arquivos \texttt{.cu}, o \texttt{nvcc} e o gerenciamento detalhado de ponteiros e gabaritos, mas fornece uma referência nativa para a arquitetura avaliada.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando OpenCL}\label{sec:implementacao-computacional-utilizando-opencl}
 
-O módulo OpenCL provê portabilidade funcional para aceleradores e processadores de múltiplos fabricantes, incluindo GPUs e CPUs por meio do \textit{runtime} POCL (\textit{Portable Computing Language}).
-O modelo de execução baseia-se em uma plataforma que gerencia dispositivos heterogêneos, nos quais os \textit{kernels} são compilados em tempo de execução (JIT) a partir do código fonte em OpenCL C e despachados para um espaço global de índices (\texttt{NDRange}).
-
-A gestão de memória é realizada por meio de objetos de \textit{buffer} (\texttt{cl::Buffer}) alocados na memória do dispositivo.
-A transferência de dados ocorre via filas de comandos (\texttt{cl::CommandQueue}).
-Diferentemente de implementações que desmembram as fases de propagação e colisão ou que reenviam comandos com sincronizações intermediárias, o motor OpenCL do miniaplicativo adota núcleos fundidos e execução assíncrona encadeada.
-São pré-instanciados quatro objetos de \textit{kernel} (\texttt{stepKernel\_[parity][store]}), combinando os dois estados de paridade da alternância \textit{ping-pong} e a flag de gravação macroscópica (\texttt{store}), conforme ilustrado no PROGRAMA~\ref{lst:opencl-cpp}.
-No laço de avanço temporal do método \texttt{Run(steps)}, o resolvedor enfileira sucessivamente os núcleos na fila de comandos via \texttt{enqueueNDRangeKernel}, alternando a paridade de leitura e escrita (\texttt{parity\_ = 1 - parity\_}) inteiramente no hospedeiro.
-Uma única sincronização bloqueante (\texttt{queue\_.finish()}) é executada ao final do bloco de passos, amortizando a latência de comunicação com o dispositivo.
+O módulo OpenCL provê portabilidade funcional entre aceleradores e processadores de múltiplos fabricantes, inclusive CPUs, por meio do \textit{runtime} POCL (\textit{Portable Computing Language}).
+Os \textit{kernels} em OpenCL C são compilados em tempo de execução (JIT) e despachados em um espaço global de índices (\texttt{NDRange}) de um dispositivo da plataforma, com memória em objetos \texttt{cl::Buffer} e comandos em filas (\texttt{cl::CommandQueue}).
+O motor adota núcleos fundidos e execução assíncrona encadeada, sem sincronizações intermediárias: pré-instanciam-se quatro objetos de \textit{kernel} (\texttt{stepKernel\_[parity][store]}), que combinam os dois estados de paridade da alternância \textit{ping-pong} e a \textit{flag} de gravação macroscópica (\texttt{store}), e \texttt{Run(steps)} os enfileira por \texttt{enqueueNDRangeKernel}, alternando a paridade no hospedeiro (PROGRAMA~\ref{lst:opencl-cpp}).
+Uma única sincronização bloqueante (\texttt{queue\_.finish()}) ao final do bloco de passos, acrescida, na CPU, de uma a cada $4096$ lançamentos, amortiza a latência de comunicação com o dispositivo.
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Enfileiramento assíncrono dos passos fundidos com alternância de paridade no OpenCL.}, label={lst:opencl-cpp}]
@@ -608,17 +421,19 @@ void Engine::Run(const Index steps) {
 \fonte{O autor (2026).}
 \end{minipage}
 
-O \textit{kernel} fundido em OpenCL C implementa a puxada de distribuições via \texttt{DirectionStencil}, a redução macroscópica em registradores locais, a solução de Newton-Raphson com ponto de partida quente $\boldsymbol{\xi}$ e a colisão de BGK em uma única passada por célula.
-A gravação dos campos macroscópicos ($\rho, \mathbf{u}, T, p$) ocorre somente quando a flag de controle \texttt{store} está ativa.
-O impacto sobre a complexidade é elevado devido à necessidade de gerenciar contextos, compilação dinâmica e eventos na API OpenCL, mas assegura portabilidade ampla entre diferentes arquiteturas de aceleradores.
+O impacto sobre a complexidade é elevado, devido ao gerenciamento de contextos, da compilação dinâmica e de eventos, mas assegura ampla portabilidade entre arquiteturas de aceleradores.
+
+Na CPU, o POCL impõe duas limitações à tecnologia, e não ao método.
+A primeira é que seu dispositivo de \textit{threads} distribui os grupos de trabalho em lotes de $\mathrm{restantes}/\mathrm{fluxos}$, o que, para algumas centenas de grupos curtos, equivale a um escalonamento estático e reintroduz o desequilíbrio descrito na Seção~\ref{sec:implementacao-computacional-utilizando-openmp}; o miniaplicativo lança, por isso, um grupo de um item de trabalho por fluxo, e os itens retiram os segmentos de uma fila atômica no próprio \textit{kernel}.
+A segunda é que o custo de cada lançamento cresce com o número de fluxos e domina o tempo nas malhas pequenas, em que o passo é muito curto (Capítulo~\ref{ch:resultados}).
+O \textit{kernel} para CPU (\texttt{kernels\_cpu.cl}) é um porte do núcleo vetorial compartilhado, com blocos de oito células em vetores \texttt{double8} e o fechamento fatorado, e a GPU executa, pelo mesmo POCL, o \textit{kernel} por célula (\texttt{kernels.cl}) sobre o dispositivo CUDA.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando Kokkos}\label{sec:implementacao-computacional-utilizando-kokkos}
 
-A implementação em Kokkos baseia-se no modelo de código de fonte única (\textit{single-source}), permitindo que o mesmo código C++ execute em CPUs multinúcleo e GPUs variadas ajustando apenas o espaço de execução em tempo de compilação.
-O modelo de execução utiliza políticas de intervalo unidimensional (\texttt{RangePolicy}) com limites de lançamento (\texttt{LaunchBounds<128, 2>}) e despacho de laços paralelos via \texttt{Kokkos::parallel\_for}, conforme ilustrado no PROGRAMA~\ref{lst:kokkos-parallel}.
-A classe resolvedora é parametrizada pelo espaço de execução (\texttt{ExecSpace}), gerando especializações para alvos como OpenMP em CPU e CUDA em GPU.
+A implementação em Kokkos baseia-se no modelo de código de fonte única (\textit{single-source}), em que o mesmo código C++ executa em CPUs multinúcleo e em GPUs, ajustando-se apenas o espaço de execução em tempo de compilação.
+A classe resolvedora é parametrizada pelo espaço de execução (\texttt{ExecSpace}), com especializações para OpenMP em CPU e CUDA em GPU, e despacha o laço fundido por \texttt{Kokkos::parallel\_for} com uma política de intervalo unidimensional (\texttt{RangePolicy}) e limites de lançamento (\texttt{LaunchBounds<128, 2>}), conforme o PROGRAMA~\ref{lst:kokkos-parallel}.
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Functor de passo fundido e alternância de Views em Kokkos.}, label={lst:kokkos-parallel}]
@@ -643,98 +458,66 @@ Kokkos::fence();
 \fonte{O autor (2026).}
 \end{minipage}
 
-A gestão de memória é estruturada em \textit{Views} (\texttt{Kokkos::View}), abstrações multidimensionais que gerenciam a alocação e o ciclo de vida na memória do espaço de execução (\texttt{MemorySpace}).
-Empregando a disposição SoA, a implementação elimina tabelas per-célula ao encapsular o \texttt{DirectionStencil} por valor dentro dos parâmetros de execução.
-A alternância \textit{ping-pong} é efetuada por meio da troca de referências de \textit{Views} (\texttt{std::swap(fA\_, fB\_)} e \texttt{std::swap(gA\_, gB\_)}), com custo nulo de cópia.
-O Kokkos utiliza contagem de referências para a liberação automática dos recursos, o que simplifica a manutenção em relação ao CUDA.
-Para a exportação dos resultados, mantêm-se cópias espelhadas (\textit{mirrors}) no sistema principal, sincronizadas por \texttt{Kokkos::deep\_copy} apenas nos passos de gravação, enquanto a marcha no tempo ocorre exclusivamente na memória do dispositivo acelerador.
-Os \textit{Views} são unidimensionais, com indexação plana por estrutura de vetores idêntica à das demais versões, em lugar de \textit{Views} multidimensionais, cuja disposição em memória variaria conforme o alvo (\texttt{LayoutLeft} na GPU e \texttt{LayoutRight} na CPU, por padrão) e alteraria o padrão de acesso comparado entre as tecnologias.
-O functor \texttt{StepFunctor} processa a coleta interpolada, os momentos, o fechamento térmico com partida compacta $\boldsymbol{\xi}$ e a colisão de BGK inteiramente em registradores, gravando os campos macroscópicos somente quando \texttt{kStoreMacro} é verdadeiro.
-A sincronização com o hospedeiro ocorre por meio de \texttt{Kokkos::fence()} ao final do avanço temporal, assegurando que os dados estejam disponíveis antes de qualquer leitura externa.
+A memória é estruturada em \textit{Views} (\texttt{Kokkos::View}), que gerenciam a alocação e o ciclo de vida dos dados no espaço de memória (\texttt{MemorySpace}) do espaço de execução, com liberação por contagem de referências, o que simplifica a manutenção em relação ao CUDA.
+As \textit{Views} são unidimensionais, com indexação plana em SoA idêntica à das demais versões, pois as multidimensionais teriam disposição dependente do alvo (\texttt{LayoutLeft} na GPU e \texttt{LayoutRight} na CPU, por padrão) e alterariam o padrão de acesso comparado entre as tecnologias.
+O \texttt{DirectionStencil} é encapsulado por valor nos parâmetros de execução, e a alternância \textit{ping-pong} troca as referências das \textit{Views}, sem cópia.
+A exportação usa cópias espelhadas (\textit{mirrors}) no sistema principal, sincronizadas por \texttt{Kokkos::deep\_copy} apenas nos passos de gravação.
+O impacto sobre a complexidade do código é reduzido, pois o código único de paralelismo elimina implementações distintas para cada acelerador.
 
-O impacto sobre a complexidade do código é reduzido, pois a unificação do código de paralelismo elimina a necessidade de múltiplas implementações para diferentes aceleradores, facilitando a inclusão de novos modelos físicos no miniaplicativo.
+O modelo de fonte única atende à GPU, mas não à CPU: o funtor por célula, com a disposição \texttt{i * ny + j} e laços curtos sobre as direções, não é vetorizável.
+O espaço de hospedeiro é, por isso, implementado por uma classe própria (\texttt{kokkos::cpu::LbmTube}), que preserva a interface e o uso de \texttt{Kokkos::View}, mas delega o cálculo ao núcleo vetorial compartilhado (Seção~\ref{sec:implementacao-computacional-utilizando-openmp}) por funtores que recebem apenas ponteiros brutos e parâmetros simples, de modo que nenhuma \textit{View} participa do laço quente.
+Cada passo é um \texttt{Kokkos::parallel\_for} sobre os segmentos de linha, com \texttt{Schedule<Dynamic>} e fatia de tamanho um, e as \textit{Views} de distribuição são alocadas com \texttt{Kokkos::WithoutInitializing}, para que a primeira escrita seja a de \texttt{Init()}, que percorre os mesmos segmentos (localidade de primeiro acesso).
+A classe executa no espaço de hospedeiro mesmo quando a biblioteca é compilada com espaço de dispositivo, o que permite medir CPU e GPU com um único executável, ao custo de uma duplicação de código entre os alvos, que o modelo de fonte única pretendia evitar.
+Na GPU, o mesmo funtor por célula, compilado pelo \texttt{nvcc} por meio do \texttt{nvcc\_wrapper}, executa o fechamento fatorado com $686$ instruções FP64 estáticas, contra $867$ do CUDA, que desenrola o laço de Newton; o número de instruções executadas é o mesmo, e o desenrolamento altera apenas o tamanho do código.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando RAJA}\label{sec:implementacao-computacional-utilizando-raja}
 
-A integração com o RAJA fornece uma camada de abstração de laços desacoplada da gestão de memória.
-O modelo de execução utiliza a função \texttt{RAJA::forall}, que recebe uma política de execução (\texttt{ExecPolicy}) e uma função \textit{lambda} com anotação \texttt{RAJA\_HOST\_DEVICE}, executando as iterações sobre segmentos de intervalo (\texttt{TypedRangeSegment}), conforme o PROGRAMA~\ref{lst:raja-backend}.
+O RAJA fornece uma camada de abstração de laços desacoplada da gestão de memória.
+O modelo de execução utiliza \texttt{RAJA::forall}, que recebe uma política de execução (\texttt{ExecPolicy}) e uma \textit{lambda} anotada com \texttt{RAJA\_HOST\_DEVICE} e percorre segmentos de intervalo (\texttt{TypedRangeSegment}), conforme o PROGRAMA~\ref{lst:raja-backend}.
 
-\begin{lstlisting}[language=C++, caption={Execução do passo fundido com RAJA e alternância de ponteiros de dispositivo.}, label={lst:raja-backend}]
+\begin{lstlisting}[language=C++, caption={Execução do passo fundido com RAJA e sincronização do dispositivo.}, label={lst:raja-backend}]
 template<bool kStoreMacro>
 void LbmTube<Scalar, LatticeType, Backend>::step() {
     const Params<Scalar, kQ_> p = params_;
     const Scalar* __restrict__ fIn = fCur_;   const Scalar* __restrict__ gIn = gCur_;
     Scalar* __restrict__ fOut = fNext_;       Scalar* __restrict__ gOut = gNext_;
-    Scalar* __restrict__ xiIo = xi_;
-    Scalar* __restrict__ rhoOut = rho_;       Scalar* __restrict__ pOut = p_;
-    Scalar* __restrict__ temOut = tem_;       Scalar* __restrict__ uOut = u_;
+    // ... (xiIo, rhoOut, pOut, temOut e uOut apontam para xi_, rho_, p_, tem_ e u_)
 
     RAJA::forall<ExecPolicy>(RangeSegment(0, N_),
         [=] RAJA_HOST_DEVICE (const Index cell) {
             Scalar f[kQ], g[kQ];
-            // Coleta das distribuicoes pre-colisao via DirectionStencil
-            // ... (interpolacao IDW sobre fIn e gIn em registradores)
-
-            Scalar rho, ux, uy, tem, pres;
-            Phys::Macroscopic(f, g, p, rho, ux, uy, tem, pres);
-            if (kStoreMacro) {
-                rhoOut[cell] = rho;  pOut[cell] = pres;  temOut[cell] = tem;
-                uOut[0 * N + cell] = ux;
-                uOut[1 * N + cell] = uy;
-            }
-
-            Scalar xi[kD] = { xiIo[0 * N + cell], xiIo[1 * N + cell] };
-            Phys::Collide(p, rho, ux, uy, tem, f, g, xi);
-
-            LBMINI_RAJA_UNROLL
-            for (int idc = 0; idc < kQ; ++idc) {
-                fOut[idc * N + cell] = f[idc];
-                gOut[idc * N + cell] = g[idc];
-            }
-            for (int d = 0; d < kD; ++d)
-                xiIo[d * N + cell] = xi[d];
+            // ... (coleta via DirectionStencil, Phys::Macroscopic, Phys::Collide
+            //      e gravacao, como no CUDA)
         });
 }
 
-// No metodo Run():
-for (Index t = 0; t < steps; ++t) {
-    if (t + 1 == steps) step<true>();
-    else step<false>();
-    std::swap(fCur_, fNext_);
-    std::swap(gCur_, gNext_);
-}
+// No metodo Run(): laco de passos como no Kokkos e, ao final,
 Memory::Synchronize();
 \end{lstlisting}
 \fonte{O autor (2026).}
 
-Diferentemente de modelos com contêineres de dados integrados, o RAJA concentra-se exclusivamente no escalonamento de laços.
-A gestão de memória na implementação é estruturada por meio de características de memória (\textit{memory traits}) definidas no módulo \texttt{Backends.hpp}: \texttt{HostMemory} para alocações no hospedeiro e \texttt{DeviceMemory} para alocações na VRAM do acelerador via \texttt{cudaMalloc} ou \texttt{hipMalloc}.
-O resolvedor acessa essas operações uniformemente pela interface \texttt{Backend::Memory}, mantendo ponteiros brutos na disposição SoA.
-Nas configurações para GPU, utiliza-se a política \texttt{RAJA::cuda\_exec<128>}, garantindo blocos de $128$ fluxos.
-A alternância \textit{ping-pong} é realizada pela troca de ponteiros no hospedeiro (\texttt{std::swap}), e a sincronização do dispositivo é chamada uma única vez ao término de \texttt{Run()} via \texttt{Memory::Synchronize()}.
-Essa separação modular proporciona flexibilidade para compor novas políticas sem modificar a física do resolvedor.
+A memória é estruturada por características (\textit{memory traits}) definidas em \texttt{Backends.hpp}: \texttt{HostMemory}, para alocações no hospedeiro, e \texttt{DeviceMemory}, para alocações na VRAM via \texttt{cudaMalloc} ou \texttt{hipMalloc}, acessadas uniformemente pela interface \texttt{Backend::Memory} sobre ponteiros brutos em SoA.
+Na GPU, a política \texttt{RAJA::cuda\_exec<128>} fixa blocos de $128$ fluxos, a alternância \textit{ping-pong} troca ponteiros no hospedeiro, e \texttt{Memory::Synchronize()} sincroniza o dispositivo uma única vez ao término de \texttt{Run()}.
+O impacto sobre a complexidade do código é reduzido na camada de lógica física, mas ligeiramente superior na de infraestrutura, devido ao gerenciamento explícito dos \textit{backends} de memória e de execução.
 
-O impacto sobre a complexidade do código é reduzido na camada de lógica física, mas ligeiramente superior na camada de infraestrutura devido à necessidade de gerenciar explicitamente os \textit{backends} de memória e de execução.
-A flexibilidade do RAJA permite que o miniaplicativo se adapte rapidamente a novas arquiteturas de HPC sem a necessidade de reescrever o núcleo computacional.
+Como no Kokkos, o alvo de CPU emprega uma classe própria (\texttt{raja::\allowbreak cpu::\allowbreak LbmTube}), que usa o RAJA apenas como construção de laço sobre o núcleo vetorial compartilhado: \texttt{RAJA::\allowbreak forall} sobre os segmentos de linha, com a política \texttt{omp\_\allowbreak parallel\_\allowbreak for\_\allowbreak dynamic\_\allowbreak exec<1>} (equivalente a \texttt{schedule(dynamic, 1)}) nos passos e uma política estática na inicialização.
+A \textit{lambda} \texttt{[=]} captura apenas dados simples (parâmetros, geometria, partição e ponteiros), requisito do RAJA para execução em dispositivo que se mantém na CPU.
+Como a política é fixada em tempo de compilação, a variável \texttt{OMP\_SCHEDULE} não a altera, ao contrário do OpenMP e do MPI, e, sem o OpenMP, ambas as políticas degradam para \texttt{RAJA::seq\_exec}.
+Na GPU, a \textit{lambda} por célula executa o fechamento fatorado com $697$ instruções FP64 estáticas.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando Alpaka}\label{sec:implementacao-computacional-utilizando-alpaka}
 
-A implementação em Alpaka apoia-se na biblioteca de portabilidade de desempenho Alpaka, em sua evolução moderna Alpaka 3 (\textit{alpaka3}), projetada sobre recursos do padrão C++20 \parencite{Zenker2016, Matthes2017, AlpakaContributors2026}.
-O modelo de programação do Alpaka define uma hierarquia de paralelismo multidimensional agnóstica à plataforma, estruturada em blocos, fluxos de execução e elementos por fluxo.
-No miniaplicativo, essa abstração permite compilar o mesmo núcleo computacional para arquiteturas de processadores multinúcleo baseadas em OpenMP e para aceleradores baseados em CUDA, variando-se as definições de plataforma e de fila em tempo de compilação.
+A implementação em Alpaka apoia-se na biblioteca homônima de portabilidade de desempenho, em sua versão Alpaka 3 (\textit{alpaka3}), projetada sobre recursos do C++20 \parencite{Zenker2016, Matthes2017, AlpakaContributors2026}.
+O modelo define uma hierarquia de paralelismo multidimensional, agnóstica à plataforma, em blocos, fluxos de execução e elementos por fluxo, e o mesmo núcleo é compilado para CPUs multinúcleo (OpenMP) e aceleradores (CUDA) variando-se a plataforma e a fila em tempo de compilação.
 
-A gestão de memória é orientada por dispositivos (\texttt{Device}) e filas assíncronas (\texttt{Queue}).
-Os arranjos de distribuição em disposição SoA ($f_A, f_B, g_A, g_B$), os campos macroscópicos e o vetor compacto de partida quente $\boldsymbol{\xi}$ são alocados no espaço de memória do dispositivo por meio de \texttt{::alpaka::onHost::alloc<Scalar>(device\_, ...)}.
-Os parâmetros da simulação e o estêncil compacto (\texttt{DirectionStencil}) são encapsulados na estrutura \texttt{Params}, alocada em um \textit{buffer} de dispositivo (\texttt{paramsDev\_}) e inicializada via cópia explícita com \texttt{::alpaka::onHost::memcpy}.
-O ponteiro de dispositivo tipado para essa estrutura é repassado diretamente como argumento constante aos núcleos de cálculo.
-
-O avanço temporal é implementado pelo núcleo fundido \texttt{StepKernel}, instanciado com o gabarito booleano \texttt{kStoreMacro} e enfileirado por meio de um pacote de núcleo (\texttt{::alpaka::KernelBundle}) na fila assíncrona do dispositivo pelo método interno \texttt{enqueueStep} da classe de encapsulamento de estado (\texttt{State}), conforme ilustrado no PROGRAMA~\ref{lst:alpaka-parallel}.
-Cada fluxo identifica a célula correspondente, realiza a coleta das distribuições pré-colisão a partir dos quatro nós de interpolação definidos em \texttt{DirectionStencil}, acumula os momentos macroscópicos, resolve o equilíbrio e o fechamento térmico por Newton-Raphson com $\boldsymbol{\xi}$ e aplica a colisão BGK inteiramente em registradores, persistindo as distribuições relaxadas no arranjo de destino.
-A gravação dos campos macroscópicos é condicionada a \texttt{kStoreMacro}, ocorrendo exclusivamente no passo final da chamada a \texttt{Run()}.
+A memória é orientada por dispositivos (\texttt{Device}) e filas assíncronas (\texttt{Queue}).
+Os arranjos de distribuição em SoA, os campos macroscópicos e o vetor $\boldsymbol{\xi}$ são alocados por \texttt{::alpaka::onHost::alloc<Scalar>(device\_, ...)}, e os parâmetros e o \texttt{DirectionStencil}, na estrutura \texttt{Params}, em um \textit{buffer} de dispositivo (\texttt{paramsDev\_}) inicializado por \texttt{::alpaka::onHost::memcpy} e repassado aos núcleos como ponteiro constante tipado.
+O núcleo fundido \texttt{StepKernel}, instanciado com \texttt{kStoreMacro}, é enfileirado por um \texttt{::alpaka::KernelBundle} no método \texttt{enqueueStep} da classe \texttt{State} (PROGRAMA~\ref{lst:alpaka-parallel}).
+A alternância \textit{ping-pong} troca ponteiros no hospedeiro, e uma única chamada bloqueante (\texttt{::alpaka::\allowbreak onHost::\allowbreak wait(queue\_)}) ao final do laço garante a conclusão das operações antes da disponibilização dos resultados.
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Despacho do núcleo fundido de passo de tempo via KernelBundle no Alpaka 3.}, label={lst:alpaka-parallel}]
@@ -745,106 +528,154 @@ void State::enqueueStep() {
         ::alpaka::KernelBundle{
             StepKernel<Scalar, LatticeType, kStoreMacro>{},
             static_cast<const ParamsT*>(::alpaka::onHost::data(paramsDev_)),
-            static_cast<const Scalar*>(fCur_),
-            static_cast<const Scalar*>(gCur_),
-            fNext_, gNext_,
-            ::alpaka::onHost::data(xi_),
-            ::alpaka::onHost::data(rho_),
-            ::alpaka::onHost::data(p_),
-            ::alpaka::onHost::data(tem_),
-            ::alpaka::onHost::data(u_)
-        }
-    );
+            static_cast<const Scalar*>(fCur_), static_cast<const Scalar*>(gCur_),
+            fNext_, gNext_, ::alpaka::onHost::data(xi_)
+            // ... (rho_, p_, tem_ e u_, de forma analoga)
+        });
 }
 
-// No metodo State::Run():
-for (Index t = 0; t < steps; ++t) {
-    if (t + 1 == steps) enqueueStep<true>();
-    else enqueueStep<false>();
-    std::swap(fCur_, fNext_);
-    std::swap(gCur_, gNext_);
-}
+// No metodo State::Run(): laco de passos como no Kokkos e, ao final,
 ::alpaka::onHost::wait(queue_);
 \end{lstlisting}
 \fonte{O autor (2026).}
 \end{minipage}
 
-A alternância \textit{ping-pong} entre as distribuições duplas é realizada pela troca de ponteiros de dispositivo no hospedeiro (\texttt{std::swap(fCur\_, fNext\_)} e \texttt{std::swap(gCur\_, gNext\_)}), sem custo de movimentação de dados.
-Ao final do laço de passos de tempo, uma única chamada bloqueante (\texttt{::alpaka::onHost::wait(queue\_)}) garante a conclusão de todas as operações no dispositivo antes da disponibilização dos resultados.
-Essa estrutura confere ao Alpaka equivalência matemática dentro da tolerância relativa de $10^{-9}$ e paridade arquitetural de tráfego de dados com os demais \textit{backends} atuais do miniaplicativo.
-Diferentemente das demais tecnologias, o Alpaka foi integrado em etapa posterior à campanha experimental, de modo que sua taxa de atualização de nós e sua contagem de linhas de código não constam do Capítulo~\ref{ch:resultados}.
+O Alpaka segue o desenho do Kokkos e do RAJA, com núcleo de CPU compartilhado e \textit{kernel} de GPU próprio da biblioteca, e a equivalência matemática com a versão \textit{Plain} é verificada com tolerância relativa de $10^{-9}$, com paridade de tráfego de dados em relação aos demais \textit{backends}.
 
-O impacto sobre a complexidade do código situa-se em patamar intermediário a elevado.
-Por um lado, o Alpaka 3 emprega conceitos modernos de C++20 que simplificam a dedução estática de tipos e evitam especializações manuais prolixas.
-Por outro lado, a biblioteca impõe requisitos estritos de compilação (exigindo GCC $\ge$ 12 ou Clang $\ge$ 17 e rejeitando compiladores como o \texttt{nvc++}) e demanda maior código de infraestrutura (\textit{boilerplate}) para a definição de especificações de quadro (\texttt{FrameSpec}), empacotamento de argumentos em \texttt{KernelBundle} e gerenciamento explícito de filas e dispositivos, quando comparado a diretivas de compilação ou a abstrações de laços como o RAJA.
+O alvo de CPU (\texttt{exec::cpuOmpBlocks}) exigiu solução própria, pois o executor distribui os blocos pelos fluxos com um \texttt{omp for} estático, e o submódulo \texttt{alpaka3} não é alterado pelo miniaplicativo.
+Lança-se um bloco por fluxo OpenMP, e cada bloco retira segmentos de linha de um contador atômico compartilhado (\texttt{std::atomic} com \texttt{fetch\_add} relaxado, reiniciado pelo hospedeiro entre lançamentos síncronos), o que constrói um escalonamento dinâmico sobre um executor estático e executa o núcleo vetorial compartilhado.
+Os \textit{buffers} são alinhados apenas à largura do registrador SIMD; cada um é superalocado em uma linha de \textit{cache} e usado a partir da primeira fronteira de $64$ \textit{bytes}, o que viabiliza os armazenamentos alinhados do núcleo vetorial.
+Na GPU, o \textit{kernel} por célula, com blocos de $128$ fluxos, executa o fechamento fatorado.
+
+O impacto sobre a complexidade do código é intermediário a elevado: os conceitos do C++20 simplificam a dedução de tipos e evitam especializações manuais prolixas, mas o Alpaka 3 impõe requisitos estritos de compilação (GCC $\ge$ 12 ou Clang $\ge$ 17, sem suporte ao \texttt{nvc++}) e demanda mais código de infraestrutura (\textit{boilerplate}) para a especificação de quadros (\texttt{FrameSpec}), o empacotamento de argumentos em \texttt{KernelBundle} e o gerenciamento de filas e dispositivos, em comparação com diretivas ou com abstrações de laços como o RAJA.
 
 %---------------------------------------------------------------------------------------
 
 \section{Implementação Utilizando MPI}\label{sec:implementacao-computacional-utilizando-mpi}
 
-Para viabilizar simulações de larga escala, que excedem a capacidade de memória e de processamento de um único nó de computação, utiliza-se o padrão MPI para paralelismo em memória distribuída.
-O modelo de execução adotado baseia-se na decomposição de domínio unidimensional ao longo do eixo longitudinal ($x$), direção em que se concentram os gradientes mais intensos do tubo de choque.
-Cada processo MPI é responsável por uma fatia contígua de colunas da malha, executando a lógica do LBM de forma independente na maior parte do seu subdomínio.
+Para simulações que excedem a capacidade de memória e de processamento de um único nó, utiliza-se o MPI, padrão de paralelismo em memória distribuída.
+O domínio é decomposto em uma dimensão, ao longo do eixo longitudinal ($x$), em que se concentram os gradientes mais intensos do tubo de choque, e cada processo responde por uma fatia contígua de colunas, executando a lógica do LBM de forma independente na maior parte do seu subdomínio.
 
-A gestão de memória no ambiente distribuído fundamenta-se no uso de camadas de células fantasma (\textit{ghost cells}), de duas células de largura em cada lado do subdomínio.
-Essas camadas armazenam cópias das distribuições pertencentes aos processos vizinhos imediatos, o que permite à propagação interpolada atualizar as células próximas às fronteiras internas sem consultar a memória de outros processos.
-Além disso, para a exportação de resultados globais, utiliza-se a função \texttt{MPI\_Allgatherv}, que reconstrói os campos macroscópicos completos a partir das fatias locais de cada processo.
-A \autoref{fig:mpi-decomposicao} ilustra essa decomposição e as zonas de troca entre subdomínios.
+Cada subdomínio é ladeado por camadas de células fantasma (\textit{ghost cells}) de largura $G$, igual ao maior deslocamento das origens da propagação (no mínimo duas colunas), que armazenam cópias das distribuições dos processos vizinhos e dispensam, na propagação interpolada, a consulta à memória de outros processos (\autoref{fig:mpi-decomposicao}).
+Cada processo usa a disposição com $x$ contíguo dos demais resolvedores de CPU (Seção~\ref{sec:implementacao-computacional-utilizando-openmp}), com as colunas próprias iniciando em fronteira alinhada.
+As vias excedentes do último bloco, quando a largura própria não é múltipla do bloco vetorial, calculam células descartáveis nas colunas fantasma ou de preenchimento, sobrescritas pela troca seguinte antes de qualquer leitura.
+Em domínios muito estreitos (menos de $G$ colunas por processo), o resolvedor mantém arranjos de largura total e troca as colunas próprias de cada plano por \texttt{MPI\_Allgatherv} a cada passo, e a exportação dos campos macroscópicos completos usa a mesma chamada sobre as fatias locais.
 
 \begin{figure}[H]
     \centering
     \caption{Decomposição unidimensional do domínio entre processos MPI, com as camadas de células fantasma utilizadas na troca de distribuições entre subdomínios vizinhos.}
     \label{fig:mpi-decomposicao}
-    \includegraphics[width=\linewidth]{fig/mpi-domain-decomposition.png}
+    \includegraphics[width=0.9\linewidth]{fig/mpi-domain-decomposition.png}
     \fonte{O autor (2026).}
 \end{figure}
 
-O mapeamento das etapas do LBM no MPI é projetado para maximizar a sobreposição entre comunicação e cálculo, utilizando núcleos fundidos baseados em \texttt{DirectionStencil}.
-A cada passo de tempo, o método \texttt{startExchangeGhosts()} inicia a transmissão assíncrona das camadas de contorno por meio de comunicações não bloqueantes (\texttt{MPI\_Isend} e \texttt{MPI\_Irecv}).
-Enquanto os dados trafegam pela rede de interconexão, o processo executa o avanço fundido de passo único nas células internas do subdomínio por meio do método \texttt{computeRange(innerStart, innerEnd, storeMacro, false)}, cujos dados não dependem de informações externas.
-Em seguida, a chamada a \texttt{finishExchangeGhosts()} aguarda a conclusão das transferências com \texttt{MPI\_Waitall}, procedendo-se ao cálculo fundido das células de fronteira restantes e à alternância dos ponteiros de distribuição (\texttt{std::swap(fCur\_, fNext\_)}), conforme ilustrado no PROGRAMA~\ref{lst:mpi-pack}.
+A cada passo, \texttt{startHaloExchange()} empacota as $G$ colunas mais externas de cada plano de distribuição (contíguas por plano e por linha) e as transmite por comunicações não bloqueantes (\texttt{MPI\_Isend} e \texttt{MPI\_Irecv}); enquanto os dados trafegam, o processo avança os blocos internos, cuja janela de origem não contém coluna fantasma, de modo que a comunicação se sobrepõe ao cálculo.
+Em seguida, \texttt{finishHaloExchange()} aguarda as transferências com \texttt{MPI\_Waitall} e desempacota as colunas fantasma, calculam-se os blocos das duas bordas e alternam-se os ponteiros de distribuição (PROGRAMA~\ref{lst:mpi-pack}).
+Cada faixa é percorrida por \texttt{omp parallel for schedule(runtime)} sobre segmentos de linha, o que mantém o escalonamento dinâmico no interior de cada processo.
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=C++, caption={Comunicação não bloqueante e sobreposição de cálculo interno no MPI.}, label={lst:mpi-pack}]
-// Inicio da troca de fronteiras com comunicacao nao bloqueante
-startExchangeGhosts();
+// Passo com mais de um processo (advance<kStoreMacro>)
+startHaloExchange();                                 // MPI_Isend e MPI_Irecv das bordas
+compute<kStoreMacro>(fields, inner_, BlockRange{});  // blocos sem coluna fantasma
+finishHaloExchange();                                // MPI_Waitall e desempacotamento
+compute<kStoreMacro>(fields, left_, right_);         // blocos das duas bordas
 
-// Calculo fundido no miolo do dominio durante a transmissao de rede
-const Index innerStart = std::min(nx_ - ghosts_, 2 * ghosts_);
-const Index innerEnd = std::max(innerStart, nx_ - 2 * ghosts_);
-computeRange(innerStart, innerEnd, storeMacro, false);
-
-// Sincronizacao das mensagens e processamento das bordas restantes
-finishExchangeGhosts();
-computeRange(ghosts_, innerStart, storeMacro, false);
-computeRange(innerEnd, nx_ - ghosts_, storeMacro, false);
+// Em Run(), apos cada passo
 std::swap(fCur_, fNext_);
 std::swap(gCur_, gNext_);
 \end{lstlisting}
 \fonte{O autor (2026).}
 \end{minipage}
 
-Os ajustes de desempenho incluem o empacotamento contíguo dos dados de fronteira em arranjos dedicados, respeitando a disposição SoA.
-O processamento das células em \texttt{computeRange} é paralelizado por meio de OpenMP multinúcleo no nó local, realizando a coleta interpolada, os momentos, o fechamento térmico com partida compacta $\boldsymbol{\xi}$ e o relaxamento de BGK em uma única passada por célula.
-Essa sobreposição entre cálculo e comunicação minimiza o tempo ocioso dos núcleos de processamento e proporciona escalabilidade eficiente em agrupamentos de computadores.
+O \texttt{Executor} divide o número de núcleos entre os processos, atribuindo a cada um a sua parcela de fluxos OpenMP; com um processo por núcleo, como nos ensaios, cada processo executa um único fluxo, e a divisão do trabalho cabe inteiramente ao MPI.
+Como cada processo mantém um conjunto de trabalho próprio e as fatias são estáticas, sem migração de trabalho, o escalonamento dinâmico que absorve núcleos lentos no OpenMP (Seção~\ref{sec:implementacao-computacional-utilizando-openmp}) só existe dentro de cada processo.
 
-O impacto sobre a complexidade do código é elevado, pois exige a gestão de subdomínios, a sincronização explícita, o tratamento de condições de contorno em ambientes distribuídos e a coordenação das chamadas coletivas de saída.
-Por outro lado, entre as tecnologias consideradas, o MPI é a única que permite estender a execução a mais de um nó de computação, requisito dos sistemas de HPC de grande porte.
+O impacto sobre a complexidade do código é elevado, pois exige a gestão de subdomínios, a sincronização explícita, o tratamento das condições de contorno em ambiente distribuído e a coordenação das chamadas coletivas de saída, mas o MPI é a única tecnologia considerada que estende a execução a mais de um nó de computação, requisito dos sistemas de HPC de grande porte.
+
+%---------------------------------------------------------------------------------------
+
+\section{Síntese das Particularidades das Tecnologias}\label{sec:sintese-particularidades}
+
+A \autoref{tab:particularidades-tecnologias} reúne, para cada tecnologia, o caminho executado na CPU e na GPU, os benefícios e as particularidades ou limitações que condicionaram o projeto.
+
+{\footnotesize
+\begin{longtable}{>{\raggedright\arraybackslash}p{1.7cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{2.7cm}>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{3.7cm}}
+    \caption{Caminhos de execução, benefícios e particularidades de cada tecnologia}\label{tab:particularidades-tecnologias} \\
+    \toprule
+    Tecnologia & CPU & GPU & Benefícios & Particularidades e limitações \\
+    \midrule
+    \endfirsthead
+    \toprule
+    Tecnologia & CPU & GPU & Benefícios & Particularidades e limitações \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endlastfoot
+    \textit{Plain} &
+        Referência escalar, fechamento na forma geral ($36$ exponenciais) e tabelas de propagação. &
+        --- &
+        Oráculo independente da fatoração do fechamento. &
+        Sem vetorização explícita. \\
+    OpenMP &
+        Núcleo vetorial compartilhado; região paralela por \texttt{Run()} e \texttt{omp for schedule(\allowbreak runtime)} sobre segmentos. &
+        \texttt{omp target teams distribute parallel for}; \texttt{omp\_\allowbreak target\_\allowbreak alloc}. &
+        Menor curva de aprendizado; controle por \texttt{OMP\_SCHEDULE}. &
+        Escalonamento estático preserva o \textit{first-touch} em NUMA, ao custo da tolerância a núcleos lentos; \texttt{-ffast-math} amplifica a instabilidade de $\Pi = 2$. \\
+    OpenACC &
+        Laços de via (\texttt{Lane\allowbreak Kernel.hpp}); gangues retiram segmentos de um contador atômico; \texttt{-Mvect=simd:256}. &
+        \texttt{acc parallel loop gang vector}, \texttt{deviceptr}, fila assíncrona. &
+        Baixa intrusão sobre o código. &
+        O \texttt{nvc++} não vetoriza o núcleo monolítico nem aceita tipos vetoriais do GCC; seleções aninhadas ou com operandos calculados nos ramos deixam o laço escalar. \\
+    CUDA &
+        --- &
+        \texttt{StepKernel} por célula, $128$ fluxos por bloco, $140$ registradores, \texttt{\_\_grid\_\allowbreak constant\_\_}. &
+        Controle total; melhor ferramental de depuração e de análise. &
+        Arquivos \texttt{.cu} e \texttt{nvcc}. \\
+    OpenCL &
+        Porte em OpenCL C do núcleo vetorial (\texttt{double8}); um grupo de um item por fluxo e fila atômica. &
+        \textit{Kernel} por célula (POCL sobre o dispositivo CUDA). &
+        Portabilidade entre fabricantes. &
+        Custo de lançamento do POCL cresce com o número de fluxos; geração nativa preguiçosa, resolvida com um lançamento de aquecimento. \\
+    Kokkos &
+        Classe própria sobre o núcleo vetorial: \texttt{parallel\_for} com \texttt{Schedule<\allowbreak Dynamic>}. &
+        Funtor por célula, \texttt{RangePolicy} com \texttt{Launch\allowbreak Bounds<128, 2>}. &
+        Um executável atende CPU e GPU. &
+        O modelo de fonte única não vetoriza na CPU, o que impôs duplicação de código entre os alvos. \\
+    RAJA &
+        Classe própria: \texttt{forall} com \texttt{omp\_\allowbreak parallel\_\allowbreak for\_\allowbreak dynamic\_\allowbreak exec<1>}. &
+        \texttt{forall} com \texttt{cuda\_exec<128>}. &
+        Política desacoplada da gestão de memória. &
+        Política fixa em compilação (ignora \texttt{OMP\_SCHEDULE}); \textit{lambdas} por valor com dados simples. \\
+    Alpaka &
+        Um bloco por fluxo e contador atômico sobre \texttt{cpuOmpBlocks}; \textit{buffers} realinhados a $64$ \textit{bytes}. &
+        \textit{Kernel} por célula, $128$ fluxos por bloco, \texttt{KernelBundle}. &
+        Conceitos do C++20. &
+        GCC $\ge 12$ ou Clang $\ge 17$, sem \texttt{nvc++}; \textit{boilerplate} de \texttt{FrameSpec} e de filas; GPU exige \texttt{ENABLE\_\allowbreak ALPAKA\_\allowbreak CUDA}. \\
+    MPI &
+        Fatias em $x$ com colunas fantasma, sobreposição de comunicação e cálculo e OpenMP por processo. &
+        --- &
+        Único a estender a execução a vários nós. &
+        Fatias estáticas e conjuntos de trabalho privados, sem migração de trabalho. \\
+\end{longtable}
+}
+
+Duas regularidades emergem da síntese.
+Na CPU, a portabilidade de uma camada de abstração não bastou para a vetorização: o Kokkos e o RAJA precisaram de uma classe própria para vetorizar, e o Alpaka e o OpenCL, de um escalonamento dinâmico construído sobre o executor ou o \textit{runtime}, de modo que o núcleo vetorial compartilhado é o ponto comum das tecnologias de CPU, distintas apenas pela política de distribuição dos segmentos.
+O compilador, e não a tecnologia, foi a limitação mais frequente: a vetorização do \texttt{nvc++}, o gerador de código do POCL e a reassociação do \texttt{-ffast-math} determinaram resultados que a especificação de cada tecnologia não prevê.
 
 %---------------------------------------------------------------------------------------
 
 \section{Compilação, Configuração e Execução}\label{sec:compilacao-configuracao}
 
-O processo de compilação do miniaplicativo utiliza o sistema CMake para automatizar a detecção de dependências e a configuração do ambiente de compilação.
-O CMake identifica a presença de compiladores C++ compatíveis com o padrão C++20 e busca as bibliotecas externas e as ferramentas exigidas por cada tecnologia.
-As bibliotecas Eigen e \texttt{yaml-cpp}, bem como Kokkos e RAJA quando habilitadas, são obtidas automaticamente por meio do módulo \texttt{FetchContent}, em versões fixadas, o que garante que as dependências estejam na versão correta.
-O Alpaka 3, por sua vez, é incorporado ao repositório como submódulo Git (\texttt{deps/alpaka3}), fixado em um \textit{commit} específico, e seu \textit{backend} é desabilitado, com aviso, quando o compilador é anterior ao GCC~12, como o GCC~11.5 do Rocky Linux 9 que serve de base à imagem do NVIDIA HPC SDK, ou é o \texttt{nvc++}, que o Alpaka 3 não suporta como compilador C++.
-Para as tecnologias que dependem de ferramentas instaladas no sistema, o CMake verifica a disponibilidade e habilita condicionalmente os respectivos \textit{backends}.
-É o caso do \texttt{nvcc}, para CUDA, do NVIDIA HPC SDK (\texttt{nvc++}), para OpenACC e OpenMP em GPU, e das bibliotecas de OpenCL e de MPI.
-O alvo de GPU do Alpaka é uma opção de compilação adicional (\texttt{ENABLE\_ALPAKA\_CUDA}), pois exige que as fontes do alvo sejam compiladas como CUDA; sem ela, a seleção do alvo GPU com o Alpaka é recusada em tempo de execução, em vez de ser executada silenciosamente no processador.
+O miniaplicativo usa o CMake para detectar as dependências e configurar a compilação.
+O CMake identifica compiladores compatíveis com o C++20 e verifica as ferramentas exigidas por cada tecnologia, habilitando condicionalmente os respectivos \textit{backends}: o \texttt{nvcc}, para CUDA; o NVIDIA HPC SDK (\texttt{nvc++}), para OpenACC e OpenMP em GPU; e as bibliotecas de OpenCL e de MPI.
+Eigen e \texttt{yaml-cpp}, bem como Kokkos e RAJA quando habilitadas, são obtidas por \texttt{FetchContent}, em versões fixadas.
+O Alpaka 3 é incorporado como submódulo Git (\texttt{deps/alpaka3}), fixado em um \textit{commit}, e seu \textit{backend} é desabilitado, com aviso, com compilador anterior ao GCC~12 (como o GCC~11.5 do Rocky Linux 9, base da imagem do NVIDIA HPC SDK) ou com o \texttt{nvc++}, que o Alpaka 3 não suporta.
+O alvo de GPU do Alpaka é uma opção adicional (\texttt{ENABLE\_ALPAKA\_CUDA}), pois exige que as fontes do alvo sejam compiladas como CUDA; sem ela, a seleção desse alvo é recusada em tempo de execução, em vez de ser executada silenciosamente no processador.
 
-A configuração da simulação é centralizada no arquivo \texttt{config.yaml}, que permite ao usuário definir os parâmetros físicos e numéricos sem a necessidade de recompilar o código.
-O PROGRAMA~\ref{lst:config-yaml} apresenta o conteúdo padrão do arquivo de configuração, estruturado em quatro grupos principais: \texttt{Fluid}, \texttt{Mesh}, \texttt{Control} e \texttt{Performance}.
+A configuração da simulação é centralizada no arquivo \texttt{config.yaml}, que define os parâmetros físicos e numéricos sem recompilação.
+O PROGRAMA~\ref{lst:config-yaml} apresenta o conteúdo padrão, nos grupos \texttt{Fluid}, \texttt{Mesh}, \texttt{Control} e \texttt{Performance}.
 
 \noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[language=bash, caption={Arquivo de configuração config.yaml do miniaplicativo.}, label={lst:config-yaml}]
@@ -874,13 +705,7 @@ Performance:
 \fonte{O autor (2026).}
 \end{minipage}
 
-O grupo \texttt{Fluid} define as propriedades termodinâmicas e de transporte do fluido.
-Os parâmetros \texttt{densityL}, \texttt{pressureL}, \texttt{densityR} e \texttt{pressureR} estabelecem os estados à esquerda e à direita da ruptura do diafragma no problema de Sod, determinantes para a caracterização do choque e do leque de rarefação.
-A constante \texttt{gamma} representa a razão de calores específicos, enquanto \texttt{viscosity}, a viscosidade dinâmica expressa em unidades da rede, e \texttt{prandtl}, o número de Prandtl, governam a dissipação de quantidade de movimento e de calor, respectivamente.
-
-O grupo \texttt{Mesh} especifica as dimensões físicas do domínio (\texttt{lx}, \texttt{ly}) e a resolução da malha (\texttt{nx}, \texttt{ny}).
-Como o problema de Sod apresenta gradientes apenas na direção longitudinal, a resolução transversal não altera a solução física, mas determina o comprimento das sequências contíguas percorridas em cada linha da malha, razão pela qual é mantida na proporção $ny = nx/100$ adotada na Seção~\ref{subsec:solucao-numerica-utilizando-o-metodo-lbm}.
-O grupo \texttt{Control} define o tempo máximo de simulação (\texttt{tmax}), as componentes da velocidade de referência da rede deslocada (\texttt{Ux}, \texttt{Uy}) e o número de gravações dos resultados ao longo da simulação (\texttt{printStep}), igualmente espaçadas no tempo.
-
-Por fim, o grupo \texttt{Performance} determina o dispositivo de execução (\texttt{target}), que aceita os valores \texttt{CPU} ou \texttt{GPU}, e a tecnologia de paralelização (\texttt{backend}), que aceita os valores \texttt{Plain}, \texttt{OpenMP}, \texttt{OpenACC}, \texttt{CUDA}, \texttt{OpenCL}, \texttt{Kokkos}, \texttt{RAJA}, \texttt{Alpaka} ou \texttt{MPI}.
-O parâmetro \texttt{cores} permite definir o número de fluxos de execução em CPUs, sendo o valor 0 utilizado para detecção automática com base no \textit{hardware} disponível.
+O grupo \texttt{Fluid} define os estados à esquerda e à direita da ruptura do diafragma no problema de Sod, a razão de calores específicos (\texttt{gamma}), a viscosidade dinâmica em unidades da rede (\texttt{viscosity}) e o número de Prandtl (\texttt{prandtl}).
+O grupo \texttt{Mesh} especifica as dimensões físicas do domínio (\texttt{lx}, \texttt{ly}) e a resolução da malha (\texttt{nx}, \texttt{ny}); a resolução transversal não altera a solução física, e adota-se $ny = nx/100$ (Seção~\ref{subsec:solucao-numerica-utilizando-o-metodo-lbm}).
+O grupo \texttt{Control} define o tempo máximo de simulação (\texttt{tmax}), as componentes da velocidade de referência da rede deslocada (\texttt{Ux}, \texttt{Uy}) e o número de gravações dos resultados, igualmente espaçadas no tempo (\texttt{printStep}).
+O grupo \texttt{Performance} determina o dispositivo de execução (\texttt{target}: \texttt{CPU} ou \texttt{GPU}), a tecnologia de paralelização (\texttt{backend}) e o número de fluxos de execução em CPUs (\texttt{cores}), sendo o valor 0 a detecção automática.

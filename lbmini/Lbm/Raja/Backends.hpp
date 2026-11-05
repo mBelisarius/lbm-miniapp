@@ -41,8 +41,10 @@ namespace lbmini::raja {
 inline constexpr int kDeviceBlockSize = 128;
 
 #if defined(RAJA_ENABLE_OPENMP)
-/// Host loop policy: one OpenMP team over the cells, matching the `openmp::cpu`
-/// backend's `#pragma omp parallel for`.
+/// Host loop policy: one OpenMP team over the cells. Only the single-source
+/// `lbmini::raja::LbmTube` uses it, through `DeviceExecPolicy` when no
+/// accelerator policy was compiled in; the CPU target runs the vectorised
+/// `lbmini::raja::cpu::LbmTube` instead.
 using HostExecPolicy = RAJA::omp_parallel_for_exec;
 #else
 using HostExecPolicy = RAJA::seq_exec;

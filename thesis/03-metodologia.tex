@@ -20,27 +20,23 @@
 
 %---------------------------------------------------------------------------------------
 
-A metodologia adotada neste trabalho fundamenta-se no método de Lattice Boltzmann (LBM), técnica de dinâmica dos fluidos computacional (CFD) baseada na mecânica estatística, que descreve a evolução de um fluido por meio da colisão e da propagação de funções de distribuição de probabilidade.
-Diferentemente das abordagens que discretizam diretamente as equações de Navier-Stokes, o LBM opera em escala mesoscópica, de modo que cada passo de tempo se reduz a operações locais em cada nó e a trocas regulares entre nós vizinhos.
-Tal característica favorece a paralelização do algoritmo e o tratamento de condições de contorno complexas.
-Em razão disso, o método mostra-se adequado ao propósito do trabalho, cujo objeto de investigação é o comportamento computacional do algoritmo nas diferentes tecnologias de paralelização, e não o escoamento simulado.
-O modelo e o caso de teste são apresentados na extensão necessária à compreensão do procedimento experimental, ficando a dedução completa dos operadores reservada ao Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
+A metodologia fundamenta-se no método de Lattice Boltzmann (LBM), técnica de dinâmica dos fluidos computacional (CFD) que descreve a evolução de um fluido pela colisão e pela propagação de funções de distribuição de probabilidade, o que reduz cada passo de tempo a operações locais em cada nó e a trocas regulares entre vizinhos e favorece a paralelização.
+O modelo e o caso de teste são apresentados na extensão necessária ao procedimento experimental; a dedução dos operadores está no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
 
 %---------------------------------------------------------------------------------------
 
 \section{Delineamento da Pesquisa}\label{sec:delineamento-da-pesquisa}
 
-A pesquisa caracteriza-se como um estudo experimental de natureza aplicada, no qual o objeto de investigação não é o fenômeno físico, já amplamente documentado na literatura, mas o comportamento computacional de um mesmo algoritmo quando expresso em diferentes tecnologias de paralelização.
-Em razão disso, a física simulada permanece constante entre os ensaios.
-A formulação matemática, os parâmetros termodinâmicos e o critério de discretização são idênticos em toda a bateria de testes, de modo que as diferenças de tempo de execução e de eficiência paralela possam ser atribuídas ao modelo de programação e ao dispositivo empregados.
+A pesquisa é um estudo experimental de natureza aplicada, cujo objeto é o comportamento computacional de um mesmo algoritmo expresso em diferentes tecnologias de paralelização, e não o fenômeno físico.
+A física simulada permanece constante (formulação matemática, parâmetros termodinâmicos e critério de discretização), de modo que as diferenças de tempo de execução e de eficiência paralela sejam atribuíveis ao modelo de programação e ao dispositivo.
 
-O trabalho foi conduzido em cinco etapas encadeadas, apresentadas na \autoref{fig:fluxograma-metodologia}.
-Inicialmente, selecionou-se o modelo físico e numérico, o que resultou na adoção da formulação de dupla distribuição em redes deslocadas, apropriada a escoamentos compressíveis com ondas de choque.
-Em seguida, implementou-se o resolvedor sequencial de referência (\textit{Plain}), que estabelece o comportamento numérico esperado e serve de base para o cálculo da aceleração (\textit{speedup}) das demais versões.
-Essa versão foi então verificada e validada por meio da comparação dos campos calculados com a solução analítica do problema do tubo de choque de Sod.
-Somente após essa etapa o mesmo \textit{kernel} de colisão e propagação foi reimplementado em cada uma das tecnologias de paralelização contempladas pelo miniaplicativo (oito tecnologias paralelas, além do resolvedor sequencial de referência), preservando-se a disposição dos dados em memória e a sequência de operações.
-A etapa final compreendeu as campanhas de medição de desempenho, de escalabilidade e de complexidade de código sobre as sete tecnologias submetidas aos ensaios (OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA e MPI), cujos resultados são discutidos no Capítulo~\ref{ch:resultados}.
-A biblioteca Alpaka, incorporada em etapa posterior de desenvolvimento, com foco em portabilidade de desempenho sob C++20, é objeto de análise arquitetural e qualitativa, tendo sua equivalência numérica verificada em relação à implementação sequencial de referência.
+O trabalho seguiu seis etapas encadeadas (\autoref{fig:fluxograma-metodologia}).
+Primeiro, selecionou-se o modelo físico e numérico: a formulação de dupla distribuição em redes deslocadas, apropriada a escoamentos compressíveis com ondas de choque.
+Em seguida, implementou-se o resolvedor sequencial de referência (\textit{Plain}), base do cálculo da aceleração (\textit{speedup}) das demais versões.
+Essa versão foi verificada e validada com a solução analítica do tubo de choque de Sod.
+Somente então o mesmo \textit{kernel} de colisão e propagação foi implementado em cada uma das oito tecnologias de paralelização.
+A quinta etapa é a otimização conduzida por hipóteses sobre a arquitetura e decidida por medição, com o modelo \textit{roofline} como referência de desempenho (Seção~\ref{subsec:procedimento-de-otimizacao}).
+A etapa final compreendeu as campanhas de desempenho, de escalabilidade e de complexidade de código sobre as oito tecnologias (OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA, Alpaka e MPI) (Capítulo~\ref{ch:resultados}).
 
 \begin{figure}[H]
     \centering
@@ -50,72 +46,56 @@ A biblioteca Alpaka, incorporada em etapa posterior de desenvolvimento, com foco
     \fonte{O autor (2026).}
 \end{figure}
 
-A comparação entre as implementações só é considerada justa quando os detalhes de baixo nível são padronizados, condição necessária à validade das conclusões.
-Todas as versões partem da mesma formulação matemática e empregam precisão dupla (64 bits).
-As populações são armazenadas em estrutura de vetores (\textit{Structure of Arrays}, SoA), a malha é percorrida na mesma ordem e o resolvedor local de Newton-Raphson executa o mesmo número de iterações, fixado em três por célula e por passo de tempo.
-A equivalência numérica é verificada antes de qualquer cronometragem, mediante a comparação dos campos macroscópicos ao final da simulação com os da versão sequencial.
-Tendo em vista que a ordem de execução das operações de ponto flutuante varia entre as arquiteturas, admitem-se apenas desvios compatíveis com esse efeito.
-Apenas após essa verificação uma implementação é admitida na campanha de medições.
+A comparação exige a padronização dos detalhes de baixo nível.
+Todas as versões partem da mesma formulação matemática, empregam precisão dupla (64 bits) e estrutura de vetores (\textit{Structure of Arrays}, SoA) para as populações, executam três iterações do resolvedor de Newton-Raphson por célula e por passo de tempo e calculam o mesmo equilíbrio de energia, na forma geral por direção no resolvedor de referência e na forma fatorada por eixo, algebricamente equivalente, nas demais (Seção~\ref{sec:custo-computacional}).
+A direção contígua da memória e a ordem de percurso da malha são as adequadas a cada dispositivo (Capítulo~\ref{ch:implementacao-computacional}).
+Como condição de admissão na campanha de medições, verifica-se a equivalência numérica entre os campos macroscópicos finais de cada versão e os da versão sequencial, admitindo-se apenas desvios compatíveis com a variação da ordem das operações de ponto flutuante entre arquiteturas.
 
 %---------------------------------------------------------------------------------------
 
 \section{Fundamentos do Método de Lattice Boltzmann Compressível}\label{sec:fundamentos-lbm}
 
-O LBM parte da discretização da equação de Boltzmann contínua, que descreve a evolução da função de distribuição $f(\mathbf{x}, \boldsymbol{\xi}, t)$ e da qual as equações macroscópicas de conservação são recuperadas no limite de baixo número de Knudsen.
-Restringindo as velocidades microscópicas $\boldsymbol{\xi}$ a um conjunto finito de direções $\{\mathbf{c}_i\}_{i=0}^{Q-1}$, compatível com uma malha regular, o fluido passa a ser representado por populações discretas $f_i(\mathbf{x}, t)$.
-A dinâmica é regida pela equação de Lattice Boltzmann (\textit{Lattice Boltzmann Equation}, LBE), usualmente fechada com o modelo de Bhatnagar-Gross-Krook (BGK), de tempo de relaxação único \parencite{Bhatnagar1954}:
+O LBM parte da discretização da equação de Boltzmann, que descreve a evolução da função de distribuição $f(\mathbf{x}, \boldsymbol{\xi}, t)$ e da qual as equações macroscópicas de conservação são recuperadas no limite de baixo número de Knudsen.
+Restringindo as velocidades microscópicas $\boldsymbol{\xi}$ a um conjunto finito de direções $\{\mathbf{c}_i\}_{i=0}^{Q-1}$, compatível com uma malha regular, o fluido é representado por populações discretas $f_i(\mathbf{x}, t)$, regidas pela equação de Lattice Boltzmann (\textit{Lattice Boltzmann Equation}, LBE), usualmente fechada com o modelo de Bhatnagar-Gross-Krook (BGK), de tempo de relaxação único \parencite{Bhatnagar1954}:
 \begin{equation}
     f_i(\mathbf{x} + \mathbf{c}_i \Delta t, t + \Delta t) = f_i(\mathbf{x}, t) - \frac{\Delta t}{\tau} \left[ f_i(\mathbf{x}, t) - f_i^{\text{eq}}(\rho, \mathbf{u}, T) \right], \label{eq:lbm-bgk}
 \end{equation}
-onde $\tau$ é o tempo de relaxação, ligado à viscosidade cinemática $\nu$ por $\nu = c_s^2 (\tau - \Delta t / 2)$, sendo $c_s$ a velocidade do som na rede.
-A distribuição de equilíbrio $f_i^{\text{eq}}$ constitui o componente que assegura a recuperação das equações macroscópicas de Euler ou de Navier-Stokes, isotérmicas ou térmicas.
+onde $f_i^{\text{eq}}$ é a distribuição de equilíbrio, $\tau$, o tempo de relaxação, relacionado à viscosidade cinemática $\nu$ por $\nu = c_s^2 (\tau - \Delta t / 2)$, e $c_s$, a velocidade do som na rede.
 
-Para representar a energia, introduz-se uma segunda distribuição, $g_i(\mathbf{x}, t)$, responsável pelo transporte da energia total.
-A massa específica $\rho$, a quantidade de movimento $\rho \mathbf{u}$ e a energia total por unidade de massa $E$ são obtidas como momentos das distribuições:
+Para representar a energia, introduz-se uma segunda distribuição, $g_i(\mathbf{x}, t)$, que transporta a energia total.
+A massa específica $\rho$, a quantidade de movimento $\rho \mathbf{u}$ e a energia total por unidade de massa $E$ são momentos das distribuições:
 \begin{equation}
     \rho = \sum_i f_i, \quad \rho \mathbf{u} = \sum_i f_i \mathbf{c}_i, \quad 2 \rho E = \sum_i g_i, \label{eq:momentos-macroscopicos}
 \end{equation}
 em que o momento de ordem zero de $g_i$ fornece o dobro da energia total por unidade de volume, na normalização adotada no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
-A adoção de uma distribuição própria para a energia desacopla a evolução térmica da dinâmica de massa e de quantidade de movimento.
-Esse arranjo viabiliza a simulação de escoamentos com variação acentuada de temperatura e o ajuste independente da razão de calores específicos $\gamma$ e do número de Prandtl \parencite{Tran2022}.
+A distribuição própria para a energia desacopla a evolução térmica da dinâmica de massa e de quantidade de movimento, o que permite o ajuste independente de $\gamma$ e do número de Prandtl \parencite{Tran2022}.
 
-Em escoamentos compressíveis, a expansão de segunda ordem do equilíbrio, usual nos modelos incompressíveis, mostra-se insuficiente, pois a captura correta das ondas de choque exige que os momentos de ordem superior reproduzam os da distribuição de Maxwell-Boltzmann.
-Desse requisito dependem a invariância de Galileu e a consistência termodinâmica em altas velocidades.
-O tratamento das descontinuidades acentuadas, típicas de regimes supersônicos, requer ainda mecanismos de estabilização numérica.
-Nesse contexto, adota-se neste trabalho a formulação de \textcite{Tran2022}, na qual o conjunto de velocidades discretas é deslocado por um vetor de referência uniforme e o equilíbrio da energia é obtido iterativamente por maximização de entropia, o que assegura a positividade das populações.
-A taxa de relaxação é modulada localmente em função do afastamento em relação ao equilíbrio medido na célula.
-A hipótese subjacente é que a dissipação adicional deve incidir apenas onde há não equilíbrio acentuado, isto é, nas vizinhanças das descontinuidades, preservando-se a viscosidade física no restante do domínio.
-A dedução dessas expressões, da formulação clássica à de dupla distribuição em rede deslocada, é desenvolvida no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
+Em escoamentos compressíveis, a expansão de segunda ordem do equilíbrio, usual nos modelos incompressíveis, é insuficiente: a captura de ondas de choque exige que os momentos de ordem superior reproduzam os da distribuição de Maxwell-Boltzmann.
+Adota-se, por isso, a formulação de \textcite{Tran2022}, na qual o conjunto de velocidades discretas é deslocado por um vetor de referência uniforme, o equilíbrio da energia é obtido por maximização de entropia, o que assegura a positividade das populações, e a taxa de relaxação é modulada localmente pelo afastamento do equilíbrio, de modo que a dissipação adicional incida apenas nas proximidades das descontinuidades.
+A dedução está no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
 
 %---------------------------------------------------------------------------------------
 
 \section{Problema do Tubo de Choque de Sod}\label{sec:problema-do-tubo-de-choque-de-sod}
 
-O problema do tubo de choque proposto por \textcite{Sod1978} constitui um caso de teste canônico em dinâmica dos fluidos computacional.
-Em uma única evolução transiente, reúne um leque de rarefação contínuo, uma descontinuidade de contato e uma frente de choque, o que permite avaliar a aptidão de um esquema numérico para capturar simultaneamente descontinuidades abruptas e estruturas suaves.
-Fisicamente, o problema é definido por um tubo unidimensional de comprimento finito, fechado e preenchido por um gás ideal, dividido inicialmente em duas câmaras por uma membrana situada em $x = x_0$.
-
-Considera-se um gás caloricamente perfeito, que obedece à equação de estado dos gases ideais, a qual relaciona a pressão $p$, a massa específica $\rho$ e a temperatura $T$:
+O problema do tubo de choque proposto por \textcite{Sod1978} é um caso de teste canônico em dinâmica dos fluidos computacional.
+Em uma única evolução transiente, reúne um leque de rarefação, uma descontinuidade de contato e uma frente de choque, o que permite avaliar se um esquema captura simultaneamente descontinuidades abruptas e estruturas suaves.
+O tubo é unidimensional, fechado e preenchido por um gás ideal, dividido inicialmente em duas câmaras por uma membrana situada em $x = x_0$.
+Considera-se um gás caloricamente perfeito, cuja equação de estado relaciona a pressão $p$, a massa específica $\rho$ e a temperatura $T$:
 \begin{equation}
     p = \rho R T = (\gamma - 1) \rho \left( E - \frac{1}{2} |\mathbf{u}|^2 \right), \label{eq:gas-ideal}
 \end{equation}
-em que $R$ é a constante específica do gás e $\gamma = c_p/c_v$ é a razão entre os calores específicos.
-Na formulação teórica de referência (problema de Riemann para as equações de Euler), admite-se que o gás é invíscido e não condutor, que a expansão na rarefação é adiabática e reversível e que a transição através do choque é irreversível.
+em que $R$ é a constante específica do gás e $\gamma = c_p/c_v$, a razão entre os calores específicos.
 
-Para reproduzir a parametrização clássica de \textcite{Sod1978}, o gás encontra-se inicialmente em repouso ($\mathbf{u} = \mathbf{0}$) em todo o tubo, e atribuem-se às câmaras da esquerda ($L$, alta pressão) e da direita ($R$, baixa pressão) as seguintes grandezas adimensionais:
+Na parametrização clássica de \textcite{Sod1978}, o gás está inicialmente em repouso ($\mathbf{u} = \mathbf{0}$), e as câmaras da esquerda ($L$, alta pressão) e da direita ($R$, baixa pressão) recebem as seguintes grandezas adimensionais (\autoref{fig:esquema-tubo-sod}):
 \begin{equation}
     (\rho_L;\ p_L) = (1{,}0;\ 1{,}0), \quad (\rho_R;\ p_R) = (0{,}125;\ 0{,}1), \quad \gamma = 1{,}4.
 \end{equation}
-A configuração física inicial é ilustrada na \autoref{fig:esquema-tubo-sod}.
-No instante $t = 0$, a membrana é removida de forma instantânea, e o desequilíbrio de pressão resulta na propagação de três ondas a partir de $x_0$, esquematizadas na \autoref{fig:esquema-tubo-sod-evolucao}.
-Para a esquerda propaga-se um leque de rarefação, que expande o gás de alta pressão, acelerando-o para a direita, e reduz de forma contínua e isentrópica sua pressão, sua massa específica e sua temperatura.
-Para a direita deslocam-se duas descontinuidades.
-A mais lenta é a descontinuidade de contato, que acompanha o fluido e separa as massas de gás originalmente presentes em cada câmara, de modo que a pressão e a velocidade normal permanecem contínuas através dela, embora a massa específica e a temperatura apresentem saltos.
-A mais rápida é a onda de choque, supersônica em relação ao gás à frente, que o comprime de forma abrupta e irreversível, elevando sua energia interna e sua entropia.
+Em $t = 0$, a membrana é removida, e o desequilíbrio de pressão propaga três ondas a partir de $x_0$ (\autoref{fig:esquema-tubo-sod-evolucao}): para a esquerda, um leque de rarefação, que expande de forma contínua e isentrópica o gás de alta pressão; para a direita, a descontinuidade de contato, que acompanha o fluido e separa os gases originais, e a onda de choque, supersônica em relação ao gás à frente, que o comprime de forma abrupta e irreversível.
 
 \begin{figure}[H]
     \centering
-    \caption{Condições iniciais do problema do tubo de choque de Sod, em que $p_1$ e $\rho_1$ são a pressão e a massa específica à esquerda (região 1) e $p_5$ e $\rho_5$ são os valores à direita (região 5) da membrana situada em $x_0$, com velocidades nulas $u_1$ e $u_5$.}
+    \caption{Condições iniciais do tubo de choque de Sod: pressão e massa específica à esquerda ($p_1$, $\rho_1$; região 1) e à direita ($p_5$, $\rho_5$; região 5) da membrana situada em $x_0$, com velocidades nulas ($u_1$, $u_5$).}
     \label{fig:esquema-tubo-sod}
     \includegraphics[width=0.8\linewidth]{fig/sod-shock-tube-initial.png}
     \fonte{Adaptado de \textcite{Sod1978}.}
@@ -123,151 +103,113 @@ A mais rápida é a onda de choque, supersônica em relação ao gás à frente,
 
 \begin{figure}[H]
     \centering
-    \caption{Ondas e regiões formadas após o rompimento da membrana. As regiões de 1 a 5 descrevem os estados do gás delimitados pelas frentes de rarefação, de contato e de choque.}
+    \caption{Ondas e regiões formadas após o rompimento da membrana; as regiões 1 a 5 são delimitadas pelas frentes de rarefação, de contato e de choque.}
     \label{fig:esquema-tubo-sod-evolucao}
     \includegraphics[width=\linewidth]{fig/sod-shock-tube-evolution.png}
     \fonte{Adaptado de \textcite{Sod1978}.}
 \end{figure}
 
-Enquanto as ondas não atingem as paredes das extremidades, a evolução temporal dá origem a um padrão de escoamento autossemelhante, no qual os perfis das variáveis macroscópicas mantêm a mesma forma funcional quando expressos em termos da variável de similaridade $\xi = (x - x_0)/t$.
-Esse padrão divide o tubo nas cinco regiões numeradas na \autoref{fig:esquema-tubo-sod-evolucao}.
-As regiões 1 e 5 preservam os estados iniciais não perturbados, com alta pressão e alta massa específica ($p_L$, $\rho_L$) à esquerda e baixa pressão e baixa massa específica ($p_R$, $\rho_R$) à direita.
-A região 2 corresponde ao leque de rarefação, zona de transição suave na qual as propriedades termodinâmicas variam de forma contínua.
-Sua cabeça avança no gás em repouso com velocidade $u_L - a_L = -a_L$, isto é, com a velocidade do som do estado $L$ em direção à esquerda, e sua largura cresce linearmente com o tempo.
-Entre a cauda da rarefação e a frente de choque estende-se um patamar de pressão $p^\ast$ e velocidade $u^\ast$, subdividido pela descontinuidade de contato na região 3, de gás expandido isentropicamente, e na região 4, de gás comprimido de forma irreversível pelo choque.
+Enquanto as ondas não atingem as paredes, o escoamento é autossemelhante em termos de $\xi = (x - x_0)/t$, e o tubo se divide nas cinco regiões da \autoref{fig:esquema-tubo-sod-evolucao}.
+As regiões 1 e 5 preservam os estados iniciais, e a região 2 é o leque de rarefação, cuja cabeça avança com velocidade $-a_L$ ($a_L$ é a velocidade do som do estado $L$) e cuja largura cresce linearmente com o tempo.
+Entre a cauda da rarefação e o choque estende-se um patamar de pressão $p^\ast$ e velocidade $u^\ast$, subdividido pelo contato na região 3, de gás expandido isentropicamente, e na região 4, de gás comprimido pelo choque.
+Através do contato, a pressão e a velocidade normal são contínuas ($p_3 = p_4 = p^\ast$ e $u_3 = u_4 = u^\ast$), e a massa específica e a temperatura apresentam saltos; no choque, todas as variáveis variam abruptamente, conforme as relações de Rankine-Hugoniot, com dissipação de energia mecânica em calor.
 
-As frentes que delimitam essas regiões possuem naturezas físicas contrastantes.
-Através da descontinuidade de contato não há fluxo de massa, de modo que a pressão e a velocidade normal são contínuas ($p_3 = p_4 = p^\ast$ e $u_3 = u_4 = u^\ast$), embora a massa específica e a temperatura apresentem saltos acentuados.
-Na frente de choque, por sua vez, todas as variáveis termodinâmicas e cinemáticas variam abruptamente, em conformidade com as relações de Rankine-Hugoniot.
-A pressão e a massa específica do gás da região 5 elevam-se aos níveis da região 4, com dissipação de energia mecânica em calor.
-
-O desafio numérico do problema reside na captura precisa dessas frentes.
-Esquemas de baixa ordem tendem a introduzir difusão excessiva, que espalha o salto de massa específica do contato e degrada a nitidez do choque.
-Os de alta ordem, em contrapartida, podem gerar oscilações espúrias decorrentes do fenômeno de Gibbs nas proximidades das descontinuidades, o que exige estratégias de estabilização como a relaxação dependente do não equilíbrio local mencionada anteriormente.
+O desafio numérico reside na captura dessas frentes: esquemas de baixa ordem introduzem difusão excessiva, que espalha o salto de massa específica do contato e degrada a nitidez do choque, e os de alta ordem podem gerar oscilações espúrias (fenômeno de Gibbs) junto às descontinuidades, o que exige estabilização, como a relaxação dependente do não equilíbrio local.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Solução Analítica}\label{subsec:solucao-analitica}
 
-A solução exata do problema de Riemann para as equações de Euler unidimensionais, invíscidas e adiabáticas, fornece os perfis teóricos empregados na verificação do código \parencite{Toro2009}.
-A evolução é governada pelas leis de conservação de massa, de quantidade de movimento e de energia, e o principal desafio consiste em determinar o par $(p^\ast;\ u^\ast)$ comum às regiões 3 e 4.
-O estado esquerdo conecta-se à região 3 por relações isentrópicas através da rarefação, e o estado direito, à região 4 pelas relações de salto através do choque.
+A solução exata do problema de Riemann para as equações de Euler unidimensionais, invíscidas e adiabáticas, fornece os perfis teóricos de verificação do código \parencite{Toro2009}.
+Resta determinar o par $(p^\ast;\ u^\ast)$ comum às regiões 3 e 4: o estado esquerdo conecta-se à região 3 por relações isentrópicas através da rarefação, e o estado direito, à região 4 pelas relações de salto através do choque.
 
-Na onda de rarefação, que se propaga para a esquerda, o escoamento é isentrópico e as propriedades do fluido obedecem às invariantes de Riemann ao longo das características $C_\pm: dx/dt = u \pm a$, sendo $a = \sqrt{\gamma p / \rho}$ a velocidade local do som.
-Como as características $C_+$ atravessam todo o leque a partir da região 1, a invariante $J_+$ conserva seu valor inicial em toda essa região:
+Na rarefação, o escoamento é isentrópico, e as propriedades obedecem às invariantes de Riemann ao longo das características $C_\pm: dx/dt = u \pm a$, sendo $a = \sqrt{\gamma p / \rho}$ a velocidade local do som.
+Como as características $C_+$ atravessam o leque a partir da região 1, a invariante $J_+$ conserva seu valor inicial:
 \begin{equation}
     J_+ = u + \frac{2a}{\gamma - 1} = u_L + \frac{2 a_L}{\gamma - 1}. \label{eq:invariante-riemann}
 \end{equation}
-No interior do leque (região 2), a inclinação das características $C_-$ coincide com a própria variável de similaridade, $dx/dt = u - a = \xi$.
-Combinando essa condição com a \eqref{eq:invariante-riemann}, deduzem-se os perfis lineares de velocidade e de velocidade do som em função de $\xi = (x - x_0)/t$:
+No interior do leque (região 2), a inclinação das características $C_-$ coincide com a variável de similaridade, $dx/dt = u - a = \xi$, o que, combinado com a \eqref{eq:invariante-riemann}, resulta nos perfis lineares de velocidade e de velocidade do som:
 \begin{equation}
     u(\xi) = \frac{2}{\gamma+1} \left( a_L + \frac{\gamma-1}{2} u_L + \xi \right), \quad a(\xi) = u(\xi) - \xi.
 \end{equation}
-As demais variáveis termodinâmicas no interior da rarefação seguem as relações isentrópicas:
-\begin{equation}
-    \rho(\xi) = \rho_L \left( \frac{a(\xi)}{a_L} \right)^{\frac{2}{\gamma-1}}, \quad p(\xi) = p_L \left( \frac{\rho(\xi)}{\rho_L} \right)^\gamma.
-\end{equation}
-Ao final da expansão, no limite da região 3, a velocidade $u^\ast$ pode ser expressa em função da pressão $p^\ast$:
+As demais variáveis seguem as relações isentrópicas, $\rho = \rho_L (a/a_L)^{2/(\gamma-1)}$ e $p = p_L (\rho/\rho_L)^\gamma$.
+Ao final da expansão, no limite da região 3, a velocidade $u^\ast$ é função da pressão $p^\ast$:
 \begin{equation}
     u^\ast = u_L - \frac{2 a_L}{\gamma - 1} \left[ \left( \frac{p^\ast}{p_L} \right)^{\frac{\gamma - 1}{2\gamma}} - 1 \right]. \label{eq:rarefacao-analitica}
 \end{equation}
 
-A frente de choque, que se propaga para a direita com velocidade $W$, constitui uma descontinuidade governada pelas relações de Rankine-Hugoniot, obtidas pela integração das equações de Euler em uma superfície de controle que acompanha a frente.
+A frente de choque, de velocidade $W$, é governada pelas relações de Rankine-Hugoniot.
 A conservação de massa, de quantidade de movimento e de energia entre as regiões 5 e 4, após a eliminação de $W$ e $\rho_4$, resulta na seguinte relação entre $u^\ast$ e o salto de pressão $(p^\ast - p_R)$:
 \begin{equation}
     u^\ast = u_R + (p^\ast - p_R) \sqrt{ \frac{1 - \alpha}{\rho_R (p^\ast + \alpha p_R)} }, \quad \alpha = \frac{\gamma - 1}{\gamma + 1}. \label{eq:choque-analitico}
 \end{equation}
-O parâmetro $\alpha$ depende exclusivamente da razão de calores específicos $\gamma$.
-Diferentemente da rarefação, o choque é um processo dissipativo no qual a entropia aumenta através da frente de compressão, o que justifica a forma algébrica distinta da relação isentrópica.
 
-A condição de equilíbrio mecânico na descontinuidade de contato exige que a pressão e a velocidade sejam contínuas entre as regiões 3 e 4, uma vez que não há fluxo de massa através dessa interface.
-Igualando as equações \eqref{eq:rarefacao-analitica} e \eqref{eq:choque-analitico}, obtém-se a equação transcendente para a pressão intermediária $p^\ast$:
+Como a pressão e a velocidade são contínuas através do contato, a igualdade das equações \eqref{eq:rarefacao-analitica} e \eqref{eq:choque-analitico} fornece a equação transcendente para a pressão intermediária $p^\ast$:
 \begin{equation}
     f_L(p^\ast) + f_R(p^\ast) + (u_R - u_L) = 0, \label{eq:equacao-transcendente}
 \end{equation}
-em que as funções $f_L$ e $f_R$ condensam a física da onda à esquerda, de rarefação, e da onda à direita, de choque, respectivamente.
-Para a configuração de Sod, na qual a onda à esquerda é sempre de rarefação e a onda à direita é sempre de choque, essas funções assumem a forma
+em que $f_L$ e $f_R$ condensam a física das ondas de rarefação e de choque e, para a configuração de Sod, assumem a forma
 \begin{equation}
     f_L(p^\ast) = \frac{2 a_L}{\gamma - 1} \left[ \left( \frac{p^\ast}{p_L} \right)^{\frac{\gamma - 1}{2\gamma}} - 1 \right], \quad f_R(p^\ast) = (p^\ast - p_R) \sqrt{ \frac{1 - \alpha}{\rho_R (p^\ast + \alpha p_R)} }, \label{eq:funcoes-onda}
 \end{equation}
-com $u^\ast = u_L - f_L(p^\ast) = u_R + f_R(p^\ast)$, o que recupera as equações \eqref{eq:rarefacao-analitica} e \eqref{eq:choque-analitico}.
-No caso geral, cada função assume a expressão de rarefação quando $p^\ast$ é inferior à pressão do estado correspondente e a expressão de choque no caso contrário, com continuidade da função e de sua derivada primeira na transição entre os dois ramos.
-Para gases ideais, a soma $f_L + f_R + (u_R - u_L)$ é estritamente monotônica, o que garante a existência de raiz única, calculável com precisão de máquina.
-Nos roteiros de pós-processamento deste trabalho, a raiz $p^\ast$ da \autoref{eq:equacao-transcendente} é obtida em Python por meio da rotina \texttt{fsolve} do módulo \texttt{scipy.optimize}, baseada no método híbrido de Powell.
+com $u^\ast = u_L - f_L(p^\ast) = u_R + f_R(p^\ast)$.
+Para gases ideais, a soma $f_L + f_R + (u_R - u_L)$ é estritamente monotônica, o que garante raiz única, obtida nos roteiros de pós-processamento em Python pela rotina \texttt{fsolve} do módulo \texttt{scipy.optimize}.
 
-Determinada a pressão $p^\ast$, as massas específicas nas regiões intermediárias são obtidas diretamente.
-Para a região 3, posterior à rarefação, utiliza-se a relação isentrópica:
+Determinada $p^\ast$, as massas específicas intermediárias resultam da relação isentrópica na região 3 e da relação de salto na região 4, que limita a compressão a $\rho_4/\rho_R \to (\gamma+1)/(\gamma-1)$ quando $p^\ast/p_R \to \infty$:
 \begin{equation}
-    \rho_3 = \rho_L \left( \frac{p^\ast}{p_L} \right)^{1/\gamma}.
-\end{equation}
-Para a região 4, posterior ao choque, a massa específica é calculada pela relação de salto de Rankine-Hugoniot, que impõe um limite superior à compressão, dado por $\rho_4/\rho_R \to (\gamma+1)/(\gamma-1)$ quando $p^\ast/p_R \to \infty$:
-\begin{equation}
-    \rho_4 = \rho_R \left[ \frac{p^\ast / p_R + \alpha}{\alpha p^\ast / p_R + 1} \right].
+    \rho_3 = \rho_L \left( \frac{p^\ast}{p_L} \right)^{1/\gamma}, \quad \rho_4 = \rho_R \left[ \frac{p^\ast / p_R + \alpha}{\alpha p^\ast / p_R + 1} \right].
 \end{equation}
 
-As velocidades de propagação das frentes definem a posição de cada onda em $t > 0$.
-A velocidade da frente de choque, obtida a partir da conservação de massa, é expressa por:
+A velocidade da frente de choque, obtida da conservação de massa, é:
 \begin{equation}
     W = u_R + a_R \sqrt{ \frac{\gamma + 1}{2\gamma} \left( \frac{p^\ast}{p_R} - 1 \right) + 1 }.
 \end{equation}
-A descontinuidade de contato desloca-se com velocidade $u^\ast$, enquanto a cabeça e a cauda da rarefação propagam-se, respectivamente, com $\xi = u_L - a_L$ e $\xi = u^\ast - a^\ast$, sendo $a^\ast = a_L (p^\ast / p_L)^{(\gamma-1)/(2\gamma)}$ a velocidade do som na região 3.
-Esse conjunto de equações permite reconstruir os perfis de massa específica, de pressão e de velocidade para qualquer instante $t > 0$, servindo de referência para a validação do método LBM.
+O contato desloca-se com velocidade $u^\ast$, e a cabeça e a cauda da rarefação propagam-se com $\xi = u_L - a_L$ e $\xi = u^\ast - a^\ast$, sendo $a^\ast = a_L (p^\ast / p_L)^{(\gamma-1)/(2\gamma)}$ a velocidade do som na região 3.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Solução Numérica Utilizando o Método LBM}\label{subsec:solucao-numerica-utilizando-o-metodo-lbm}
 
-A solução numérica é obtida pelo miniaplicativo desenvolvido, que resolve a equação de Lattice Boltzmann na formulação de dupla distribuição descrita na Seção~\ref{sec:fundamentos-lbm}.
-O domínio, de comprimento unitário ($L_x = 1{,}0$), é discretizado por uma malha cartesiana regular de $N_x \times N_y$ nós, com espaçamento uniforme $\Delta x = L_x / N_x$ nas duas direções, sobre a qual atua o modelo bidimensional D2Q9 detalhado no Capítulo~\ref{ch:metodo-de-lattice-boltzmann}.
-Embora o escoamento de Sod seja unidimensional, com gradientes exclusivamente na direção longitudinal, a malha é mantida bidimensional, e a direção transversal recebe $N_y = N_x / 100$ nós, de modo que a extensão transversal é $L_y = L_x / 100$.
-Essa razão de aspecto reproduz o padrão de acesso à memória usual das malhas empregadas em simulações bidimensionais.
-A escolha é deliberada, uma vez que o objeto de investigação é o comportamento computacional do algoritmo.
-O número de nós em $y$ determina o comprimento das sequências contíguas de memória percorridas a cada varredura, o que condiciona a eficiência do acesso à memória e a granularidade da distribuição de trabalho entre os fluxos de execução.
-Como a solução física é invariante ao longo de $y$, cada linha da malha pode ser comparada diretamente com a solução analítica unidimensional, sem prejuízo da validação.
+A solução numérica é obtida pelo miniaplicativo, que resolve a equação de Lattice Boltzmann na formulação de dupla distribuição da Seção~\ref{sec:fundamentos-lbm}.
+O domínio, de comprimento unitário ($L_x = 1{,}0$), é discretizado por uma malha cartesiana regular de $N_x \times N_y$ nós, com espaçamento uniforme $\Delta x = L_x / N_x$ nas duas direções, sobre a qual atua o modelo bidimensional D2Q9 (Capítulo~\ref{ch:metodo-de-lattice-boltzmann}).
+Embora o escoamento seja unidimensional, a malha é bidimensional, com $N_y = N_x / 100$ nós na direção transversal e extensão $L_y = L_x / 100$.
+Essa razão de aspecto reproduz o padrão usual de acesso à memória de malhas bidimensionais; o comprimento das sequências contíguas percorridas a cada varredura e a granularidade da distribuição de trabalho entre os fluxos dependem da direção contígua adotada em cada dispositivo (Capítulo~\ref{ch:implementacao-computacional}).
+Como a solução física é invariante ao longo de $y$, cada linha da malha é comparável diretamente com a solução analítica unidimensional.
 
-O tamanho das malhas é limitado pela memória do acelerador gráfico, de 12~GB, dos quais se adotam 11~GB como limite de ocupação, de modo a preservar margem para o contexto de execução do dispositivo e para o sistema gráfico.
-Em precisão dupla, cada nó armazena as populações de massa e de energia em dois arranjos alternados (esquema \textit{ping-pong}), ou seja, $4 \times 9$ escalares de 8~\textit{bytes}.
-A esse volume somam-se os campos macroscópicos ($\rho$, $u_x$, $u_y$, $T$ e $p$) e os multiplicadores de Lagrange do resolvedor de Newton-Raphson, o que resulta em $352$~\textit{bytes} por nó.
-
-As versões que empregam tabelas de propagação pré-calculadas acrescentam, para cada uma das nove direções, quatro índices inteiros de 4~\textit{bytes} e quatro pesos de interpolação de 8~\textit{bytes}, totalizando $784$~\textit{bytes} por nó.
-Esse é o caso de todas as versões em CPU e das versões em GPU de Kokkos e RAJA, que mantêm essas tabelas na memória do acelerador.
-Em contrapartida, as versões em GPU com CUDA, OpenACC, OpenCL e OpenMP calculam os pesos e os endereços vizinhos durante a própria propagação e permanecem em $352$~\textit{bytes} por nó.
-Como o número de nós é $N_x^2/100$, a ocupação cresce com o quadrado de $N_x$, conforme a \autoref{tab:memoria-malhas}.
-Adotou-se, em todas as campanhas, esse limite de ocupação para qualquer tecnologia, de modo que a maior malha utilizada é a de $N_x = 3 \times 10^4$, com $9 \times 10^6$ nós e ocupação máxima de $7{,}1$~GB.
-A malha de $N_x = 10^5$, com $10^8$ nós, foi excluída por demandar cerca de $78$~GB com as tabelas de propagação e $35$~GB sem elas.
+O tamanho das malhas é limitado pela memória do acelerador gráfico (12~GB), da qual se adotam 11~GB como limite de ocupação.
+Em precisão dupla, cada nó armazena as populações de massa e de energia em dois arranjos alternados (esquema \textit{ping-pong}), ou seja, $4 \times 9$ escalares de 8~\textit{bytes}, os campos macroscópicos ($\rho$, $u_x$, $u_y$, $T$ e $p$) e duas componentes dos multiplicadores de Lagrange do resolvedor de Newton-Raphson, ponto de partida do passo seguinte, o que resulta em $344$~\textit{bytes} por nó.
+A versão sequencial acrescenta tabelas de propagação pré-calculadas (por direção, quatro índices de 4~\textit{bytes} e quatro pesos de 8~\textit{bytes}) e um terceiro multiplicador, o que totaliza $784$~\textit{bytes} por nó; as demais versões substituem as tabelas por uma estrutura compacta por direção, independente do número de nós, e permanecem em $344$~\textit{bytes}.
+Como o número de nós é $N_x^2/100$, a ocupação cresce com $N_x^2$ (\autoref{tab:memoria-malhas}), e a maior malha utilizada em todas as campanhas é a de $N_x = 3 \times 10^4$ ($9 \times 10^6$ nós), com $7{,}1$~GB na versão sequencial e $3{,}1$~GB nas demais; a de $N_x = 10^5$ ($10^8$ nós) excede o limite mesmo sem as tabelas.
 
 \begin{table}[H]
     \centering
-    \caption{Número de nós e ocupação de memória das malhas utilizadas, com $N_y = N_x/100$, para as versões com tabelas de propagação ($784$~\textit{bytes} por nó) e sem elas ($352$~\textit{bytes} por nó)}
+    \caption{Número de nós e ocupação de memória das malhas ($N_y = N_x/100$), com tabelas de propagação ($784$~\textit{bytes} por nó) e com estêncil compacto ($344$~\textit{bytes} por nó)}
     \label{tab:memoria-malhas}
     \begin{tabular}{rrrr}
         \toprule
-        $N_x$ & Nós & Com tabelas (MB) & Sem tabelas (MB) \\
+        $N_x$ & Nós & Com tabelas (MB) & Com estêncil (MB) \\
         \midrule
-        $10^{2}$ & $10^{2}$ & $0{,}08$ & $0{,}04$ \\
-        $10^{3}$ & $10^{4}$ & $7{,}8$ & $3{,}5$ \\
-        $10^{4}$ & $10^{6}$ & $784$ & $352$ \\
-        $3 \times 10^{4}$ & $9 \times 10^{6}$ & $7\,056$ & $3\,168$ \\
+        $10^{2}$ & $10^{2}$ & $0{,}08$ & $0{,}03$ \\
+        $10^{3}$ & $10^{4}$ & $7{,}8$ & $3{,}4$ \\
+        $10^{4}$ & $10^{6}$ & $784$ & $344$ \\
+        $3 \times 10^{4}$ & $9 \times 10^{6}$ & $7\,056$ & $3\,096$ \\
         \midrule
-        $10^{5}$ (excluída) & $10^{8}$ & $78\,400$ & $35\,200$ \\
+        $10^{5}$ (excluída) & $10^{8}$ & $78\,400$ & $34\,400$ \\
         \bottomrule
     \end{tabular}
     \fonte{O autor (2026).}
 \end{table}
 
-No instante inicial ($t = 0$), as metades esquerda ($x < x_0$) e direita ($x \ge x_0$) recebem os estados uniformes $(\rho_L, p_L, \mathbf{0})$ e $(\rho_R, p_R, \mathbf{0})$.
-As populações $f_i$ e $g_i$ são inicializadas com os valores de equilíbrio correspondentes ao estado macroscópico local, o que equivale a admitir ausência de gradientes nesse instante.
-Essa hipótese introduz um transitório de curta duração nos primeiros passos de tempo, durante o qual a parcela de não equilíbrio se estabelece.
-Todavia, tal efeito se dissipa antes que as frentes de onda percorram uma fração significativa do domínio e, por conseguinte, não compromete a comparação com a solução analítica nos instantes analisados.
+Em $t = 0$, as metades esquerda ($x < x_0$) e direita ($x \ge x_0$) recebem os estados uniformes $(\rho_L, p_L, \mathbf{0})$ e $(\rho_R, p_R, \mathbf{0})$, e as populações $f_i$ e $g_i$ são inicializadas com os valores de equilíbrio do estado local, o que equivale a admitir ausência de gradientes nesse instante.
+Essa hipótese introduz um transitório curto nos primeiros passos de tempo, enquanto a parcela de não equilíbrio se estabelece, que se dissipa antes que as frentes percorram fração significativa do domínio e não compromete a comparação com a solução analítica.
 
-Nas extremidades longitudinais ($x$), aplica-se a condição de gradiente nulo, na qual as populações que proviriam do exterior do domínio são tomadas do nó de borda, o que equivale a estender o estado da célula de fronteira.
-Já nas direções transversais ($y$), aplica-se periodicidade, obtida pela cópia das distribuições que saem por uma face para a face oposta.
-Condições não reflexivas mais elaboradas são dispensáveis, uma vez que o tempo final da simulação ($t_{max} = 0{,}2$) é escolhido de modo que nem a frente de choque nem a cabeça da rarefação alcancem as extremidades do tubo.
-Dessa forma, impede-se que uma reflexão espúria retorne ao domínio como onda de pressão inexistente na solução analítica, assegurando-se a validade da solução autossemelhante empregada como referência.
+Nas extremidades longitudinais ($x$), aplica-se a condição de gradiente nulo: as populações que proviriam do exterior do domínio são tomadas do nó de borda.
+Nas direções transversais ($y$), aplica-se periodicidade.
+Como o tempo final ($t_{max} = 0{,}2$) é tal que nem a frente de choque nem a cabeça da rarefação alcançam as extremidades, dispensam-se condições não reflexivas, e a solução autossemelhante de referência permanece válida.
 
-A \autoref{tab:parametros-simulacao} reúne os parâmetros da simulação de referência, que correspondem aos valores definidos no arquivo de configuração do miniaplicativo, descrito na Seção~\ref{sec:compilacao-configuracao}.
-Os valores adotados para os estados inicial esquerdo e direito reproduzem a configuração clássica de Sod, enquanto o número de Prandtl e a razão entre os calores específicos correspondem aos do ar em condições ambientes.
-A velocidade de referência foi fixada em $\mathbf{U}_{ref} = (0{,}25;\ 0)$ em unidades da rede, valor próximo da velocidade média do escoamento após o rompimento da membrana, o que centra a quadratura na região de maior densidade de probabilidade do espaço de velocidades (Seção~\ref{sec:lbm-dupla-distribuicao}).
+A \autoref{tab:parametros-simulacao} reúne os parâmetros da simulação de referência, correspondentes aos valores do arquivo de configuração do miniaplicativo (Seção~\ref{sec:compilacao-configuracao}).
+Os estados iniciais reproduzem a configuração clássica de Sod, e o número de Prandtl e a razão entre os calores específicos correspondem aos do ar em condições ambientes.
+A velocidade de referência $\mathbf{U}_{ref} = (0{,}25;\ 0)$, em unidades da rede, é próxima da velocidade média do escoamento após o rompimento da membrana e centra a quadratura na região de maior densidade de probabilidade do espaço de velocidades (Seção~\ref{sec:lbm-dupla-distribuicao}).
 
 \begin{table}[H]
     \centering
@@ -297,118 +239,167 @@ A velocidade de referência foi fixada em $\mathbf{U}_{ref} = (0{,}25;\ 0)$ em u
     \fonte{Adaptado de \textcite{Sod1978}.}
 \end{table}
 
-Nos ensaios de convergência e de desempenho, o número de nós longitudinais $N_x$ é o único parâmetro de malha variado, percorrendo valores entre $10^2$ e $3 \times 10^4$.
-As demais grandezas permanecem fixas nos valores da \autoref{tab:parametros-simulacao}, e o número de nós transversais acompanha $N_x$ pela razão estabelecida.
-Como o passo de tempo é proporcional ao espaçamento da malha ($\Delta t \propto \Delta x$), multiplicar $N_x$ por um fator $r$ multiplica por $r$ o número de passos necessários para alcançar $t_{max} = 0{,}2$, o que deve ser considerado na interpretação dos tempos de execução medidos.
-Além disso, uma vez que a viscosidade dinâmica é fixada em unidades da rede, o tempo de relaxação independe de $N_x$.
-A viscosidade cinemática física, por outro lado, decresce com o espaçamento na proporção de $1/N_x$, e o número de Reynolds cresce proporcionalmente a $N_x$, o que aproxima a solução numérica do regime invíscido de Euler (Seção~\ref{sec:lbm-unidades}).
+Nos ensaios de convergência e de desempenho, apenas $N_x$ varia, entre $10^2$ e $3 \times 10^4$, com $N_y$ acompanhando-o e as demais grandezas fixas nos valores da \autoref{tab:parametros-simulacao}.
+Como $\Delta t \propto \Delta x$, multiplicar $N_x$ por $r$ multiplica por $r$ o número de passos até $t_{max}$.
+Como a viscosidade dinâmica é fixada em unidades da rede, o tempo de relaxação independe de $N_x$, ao passo que a viscosidade cinemática física decresce com $1/N_x$ e o número de Reynolds cresce proporcionalmente a $N_x$, o que aproxima a solução do regime invíscido de Euler (Seção~\ref{sec:lbm-unidades}).
 
 %---------------------------------------------------------------------------------------
 
 \section{Escalabilidade e Complexidade Algorítmica}\label{sec:escalabilidade-e-complexidade}
 
-O comportamento paralelo de um código científico costuma ser caracterizado segundo dois regimes de variação de carga, a escalabilidade forte (\textit{strong scaling}) e a escalabilidade fraca (\textit{weak scaling}).
-Na escalabilidade forte, mantém-se fixo o tamanho total da malha $N$ e avalia-se a redução do tempo de execução à medida que aumenta o número $P$ de unidades de processamento.
-Na escalabilidade fraca, o problema cresce proporcionalmente a $P$, de modo que a carga de trabalho por unidade de processamento permanece constante.
-Neste trabalho, a análise concentra-se na escalabilidade forte, útil para identificar limitações de comunicação, de latência e de largura de banda de memória, sobre grades de dimensões fixas.
-A varredura de diferentes resoluções $N_x$ complementa essa análise, ao permitir observar a transição entre malhas contidas na hierarquia de \textit{cache} e malhas limitadas pela memória principal.
+Este trabalho concentra-se na escalabilidade forte (\textit{strong scaling}), em que o tamanho total da malha $N$ é fixo e se avalia a redução do tempo de execução com o aumento do número $P$ de unidades de processamento, o que permite identificar limitações de comunicação, de latência e de largura de banda de memória.
+A varredura de resoluções $N_x$ a complementa, ao permitir observar a transição entre malhas contidas na hierarquia de \textit{cache} e malhas limitadas pela memória principal.
 
-As métricas fundamentais dessa análise são a aceleração (\textit{speedup}) $S$ e a eficiência paralela $\eta$.
-A aceleração é definida como a razão entre o tempo de execução sequencial $T_1$, obtido com um único fluxo da versão de referência, e o tempo de execução paralela $T_P$ com $P$ núcleos ou em um acelerador, de modo que $S = T_1 / T_P$.
-A eficiência paralela, expressa por $\eta = S / P$, indica a fração do tempo em que os processadores são efetivamente empregados em cálculo útil.
+As métricas fundamentais são a aceleração (\textit{speedup}) $S = T_1 / T_P$, razão entre o tempo sequencial $T_1$ (um único fluxo da versão de referência ou, na escalabilidade em CPU, do próprio núcleo de cálculo) e o tempo $T_P$ com $P$ núcleos ou em um acelerador, e a eficiência paralela $\eta = S / P$.
 
-O limite superior teórico da aceleração em escalabilidade forte é estabelecido pela lei de Amdahl \parencite{Amdahl1967}, segundo a qual apenas a parcela paralelizável do programa se beneficia do aumento do número de processadores, enquanto a parcela estritamente sequencial permanece inalterada.
-Denotando por $f$ a fração do tempo de execução sequencial que não pode ser paralelizada, a aceleração máxima em $P$ processadores satisfaz
+O limite teórico da aceleração em escalabilidade forte é dado pela lei de Amdahl \parencite{Amdahl1967}: sendo $f$ a fração do tempo sequencial que não pode ser paralelizada,
 \[
 S(P) \le \frac{1}{f + \dfrac{1-f}{P}},
 \qquad
-\lim_{P\to\infty} S(P) = \frac{1}{f},
+\lim_{P\to\infty} S(P) = \frac{1}{f}.
 \]
-de modo que, mesmo com um número arbitrariamente grande de processadores, a aceleração satura em $1/f$.
 
-No laço de marcha do miniaplicativo, a inicialização não integra o intervalo cronometrado e as condições de contorno estão incorporadas aos índices de propagação.
-A parcela sequencial resume-se, portanto, à troca de ponteiros entre os arranjos de distribuições e às barreiras de sincronização entre os estágios, custo praticamente independente do número de fluxos de execução.
-Em vez de postular um valor teórico para $f$, emprega-se a lei de Amdahl de forma inversa, estimando-se a fração sequencial efetiva a partir da aceleração medida por meio da métrica de Karp-Flatt \parencite{KarpFlatt1990},
+No laço de marcha, a inicialização não integra o intervalo cronometrado e as condições de contorno estão incorporadas aos índices de propagação, de modo que a parcela sequencial se resume à troca de ponteiros entre os arranjos de distribuições e às barreiras de sincronização entre os estágios, de custo praticamente independente do número de fluxos.
+Em vez de postular $f$, estima-se a fração sequencial efetiva a partir da aceleração medida, pela métrica de Karp-Flatt \parencite{KarpFlatt1990},
 \[
 f_{ef} = \frac{1/S(P) - 1/P}{1 - 1/P}.
 \]
+Um $f_{ef}$ aproximadamente constante com $P$ indica parcela sequencial genuína; seu crescimento indica sobrecargas que aumentam com o número de fluxos, como a contenção da largura de banda da memória principal compartilhada pelos núcleos.
+Um algoritmo limitado pela memória pode, portanto, apresentar aceleração aquém da prevista pela lei de Amdahl sem que exista parcela sequencial no código.
 
-O comportamento de $f_{ef}$ com o aumento de $P$ permite distinguir duas causas de perda de eficiência.
-Quando a perda decorre de uma parcela sequencial genuína, $f_{ef}$ permanece aproximadamente constante.
-Quando decorre de sobrecargas que crescem com o número de fluxos de execução, como a contenção da largura de banda da memória principal compartilhada pelos núcleos da CPU, $f_{ef}$ aumenta com $P$.
-Essa distinção é relevante na interpretação dos resultados, uma vez que um algoritmo limitado pela memória pode apresentar aceleração aquém da prevista pela lei de Amdahl sem que exista, no código, uma parcela sequencial correspondente.
-
-Para comparar diretamente malhas de tamanhos distintos e dispositivos de naturezas diferentes, como CPU e GPU, adota-se a taxa de atualização de nós, métrica usual na literatura de LBM.
-Ela é expressa em milhões de atualizações por segundo (MLUPS, \textit{Mega Lattice Updates Per Second}) ou em bilhões (GLUPS, \textit{Giga Lattice Updates Per Second}).
+Para comparar malhas e dispositivos distintos, como CPU e GPU, adota-se a taxa de atualização de nós, métrica usual na literatura de LBM, expressa em milhões (MLUPS, \textit{Mega Lattice Updates Per Second}) ou em bilhões (GLUPS, \textit{Giga Lattice Updates Per Second}) de atualizações por segundo.
 Resultados de referência indicam que implementações otimizadas em GPU podem atingir de 60\% a 70\% da largura de banda de memória teórica do dispositivo, o que caracteriza o LBM como um algoritmo majoritariamente limitado pela memória (\textit{memory-bound}) \parencite{Tomczak2021}.
-Tal conclusão depende da intensidade aritmética do \textit{kernel} e da razão entre o desempenho de ponto flutuante e a largura de banda do dispositivo.
-No entanto, no resolvedor compressível deste trabalho, a busca iterativa de Newton-Raphson e a avaliação de exponenciais e logaritmos elevam a intensidade aritmética de cada nó.
-Em GPUs de consumo, nas quais a taxa em precisão dupla (FP64) é uma pequena fração da taxa em precisão simples (FP32), o fator limitante pode migrar da largura de banda para a capacidade aritmética, hipótese examinada com o modelo \textit{roofline} na Seção~\ref{sec:custo-computacional}.
+Essa conclusão depende da intensidade aritmética do \textit{kernel} e da razão entre o desempenho de ponto flutuante e a largura de banda do dispositivo: no resolvedor compressível deste trabalho, a busca iterativa de Newton-Raphson e a avaliação de exponenciais e logaritmos elevam a intensidade aritmética por nó, e, em GPUs de consumo, nas quais a taxa em precisão dupla (FP64) é pequena fração da taxa em precisão simples (FP32), o fator limitante pode migrar da largura de banda para a capacidade aritmética, hipótese examinada com o modelo \textit{roofline} na Seção~\ref{sec:custo-computacional}.
 
-Além das métricas de tempo, avalia-se a complexidade do código por meio da contagem de linhas de código (\textit{Lines of Code}, LOC), indicador do esforço de implementação associado a cada tecnologia, da produtividade do desenvolvedor e da facilidade de manutenção em ambientes de HPC.
-A contagem considera apenas os módulos responsáveis pela colisão, pela propagação e pelo gerenciamento de memória de cada tecnologia, excluindo linhas em branco, comentários e o código comum a todas as versões, como a leitura da configuração e a exportação dos resultados.
-Tal delimitação evita que a infraestrutura compartilhada dilua as diferenças entre as tecnologias, que constituem o objeto da comparação.
-A análise é complementada pelo uso de ferramentas de análise de desempenho (\textit{profiling}), que permitem diagnosticar a utilização de \textit{cache} e o consumo de largura de banda de memória.
-
-A contagem de linhas é, contudo, um indicador incompleto do custo de adotar uma tecnologia, uma vez que trata como equivalentes linhas de dificuldade muito distinta.
-Por esse motivo, a comparação incorpora atributos qualitativos observados ao longo do desenvolvimento do miniaplicativo e registrados de forma sistemática à medida que cada versão era escrita, depurada e ajustada.
-Um deles é a quantidade de elementos específicos da tecnologia, como diretivas, tipos, políticas de execução e chamadas de interface alheias ao C++ padrão, que precisam ser aprendidos e mantidos.
-Outro é o grau de intrusão sobre o \textit{kernel} de cálculo, medido pela necessidade de alterar a estrutura do laço, a disposição dos dados ou a assinatura das funções, em oposição a acréscimos que preservam o código original.
-Considera-se também a legibilidade do resultado, entendida como a facilidade com que um leitor familiarizado com o método, mas não com a tecnologia, reconhece as etapas de colisão e de propagação no código.
-
-O esforço de diagnóstico de erros reúne os demais atributos considerados.
-Avalia-se a qualidade das mensagens do compilador, particularmente crítica nas camadas de abstração baseadas em \textit{templates}, nas quais um erro simples produz diagnósticos extensos.
-Examina-se ainda a disponibilidade de depuradores capazes de inspecionar o estado do cálculo no acelerador, cuja ausência obriga a recorrer à inserção de instruções de impressão ou à cópia de campos inteiros para a memória principal.
-Entram igualmente nessa avaliação a existência de ferramentas de análise de desempenho que reconheçam as abstrações da tecnologia e o tempo de compilação.
-O mesmo se aplica ao volume de configuração exigido pelo sistema de compilação, que, no caso das camadas de abstração, inclui a obtenção e a compilação da própria biblioteca.
-Esses atributos são descritos qualitativamente no Capítulo~\ref{ch:implementacao-computacional}, junto à apresentação de cada implementação.
-O Capítulo~\ref{ch:resultados} os retoma de forma comparativa, ao lado da contagem de linhas, de modo que o custo de adoção de cada tecnologia seja julgado por mais de uma dimensão.
+Avalia-se também a complexidade do código pela contagem de linhas (\textit{Lines of Code}, LOC), indicador do esforço de implementação e de manutenção.
+Contam-se os arquivos de código-fonte de cada tecnologia, inclusive os \textit{kernels} e os cabeçalhos compartilhados que ela inclui, excluindo-se linhas em branco, comentários e o código comum a todas as versões (leitura da configuração e exportação dos resultados).
+Como a contagem trata como equivalentes linhas de dificuldade distinta, a comparação incorpora atributos qualitativos registrados durante o desenvolvimento de cada versão: a quantidade de elementos específicos da tecnologia (diretivas, tipos, políticas de execução e chamadas alheias ao C++ padrão); o grau de intrusão sobre o \textit{kernel}, medido pela alteração da estrutura do laço, da disposição dos dados ou da assinatura das funções; a legibilidade, isto é, a facilidade com que um leitor familiarizado com o método, mas não com a tecnologia, reconhece as etapas de colisão e de propagação; o esforço de diagnóstico de erros (mensagens do compilador, depuradores capazes de inspecionar o acelerador, ferramentas de desempenho que reconheçam as abstrações da tecnologia e tempo de compilação); e o volume de configuração do sistema de compilação, que, nas camadas de abstração, inclui a obtenção e a compilação da própria biblioteca.
+Esses atributos são descritos no Capítulo~\ref{ch:implementacao-computacional} e retomados, com a contagem de linhas, no Capítulo~\ref{ch:resultados}.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Protocolo de Medição}\label{subsec:protocolo-de-medicao}
 
-A confiabilidade das métricas apresentadas depende de um protocolo de medição explícito, particularmente em uma máquina de uso geral, sujeita a interferências do sistema operacional, a variações de frequência do processador e a latências de entrada e saída em disco.
-Adota-se, por essa razão, o procedimento descrito a seguir em todos os ensaios de desempenho.
+O intervalo cronometrado compreende exclusivamente a marcha no tempo, excluindo-se a leitura da configuração, a alocação das estruturas, o cálculo das tabelas ou do estêncil de propagação, a inicialização dos campos e a exportação dos resultados.
+Nos ensaios de desempenho, gravam-se apenas os estados inicial e final, fora do intervalo.
+Quando há gravações intermediárias, como nos ensaios de acurácia (vinte instantâneos), cronometram-se somente os trechos de marcha entre gravações consecutivas, e a cópia dos campos para a memória principal e a escrita assíncrona em disco terminam antes de cada trecho, sem concorrer com o cálculo pelos núcleos de CPU nem pela largura de banda de memória.
 
-O intervalo cronometrado compreende exclusivamente a marcha no tempo, excluindo-se a leitura do arquivo de configuração, a alocação das estruturas de dados, o cálculo das tabelas de propagação, a inicialização dos campos e a exportação dos resultados.
-Tais etapas são alheias ao \textit{kernel} de cálculo em avaliação.
-Nos ensaios de desempenho, gravam-se apenas os estados inicial e final, ambos fora do intervalo cronometrado, uma vez que a escrita em disco introduziria uma componente de tempo estranha ao objeto de estudo e sujeita a grande dispersão.
-Quando há gravações intermediárias, como nos ensaios de acurácia, com vinte instantâneos, a marcha é dividida em trechos delimitados por gravações consecutivas, e somente esses trechos são cronometrados.
-A cópia dos campos para a memória principal e a escrita assíncrona em disco são concluídas antes do início de cada trecho, de modo que não concorrem com o cálculo pelos núcleos de CPU nem pela largura de banda de memória.
+A medição é realizada no próprio miniaplicativo, na classe \texttt{Executor} (Seção~\ref{sec:arquitetura-simulador}), pelo relógio monotônico \texttt{std::chrono::steady\_clock} da biblioteca padrão do C++, e corresponde ao tempo real decorrido (\textit{wall-clock time}), e não ao tempo de CPU acumulado entre os núcleos, para que a aceleração reflita a redução efetiva do tempo.
+O tempo de execução é a soma dos intervalos entre os instantes registrados imediatamente antes e após cada trecho de marcha, o que, nos ensaios de desempenho, se reduz a um único intervalo envolvendo todo o laço.
+Nas execuções com MPI, cada trecho é delimitado por barreiras coletivas (\texttt{MPI\_Barrier}), e o tempo considerado é o do processo de identificador (\textit{rank}) zero, que corresponde ao mais lento.
+Nas implementações para aceleradores, a cronometragem termina após a sincronização explícita com o dispositivo (\texttt{cudaDeviceSynchronize} no CUDA, por exemplo), o que evita tempos reduzidos artificialmente pelo lançamento assíncrono dos \textit{kernels}.
 
-A medição é realizada no próprio miniaplicativo, na classe controladora \texttt{Executor} descrita na Seção~\ref{sec:arquitetura-simulador}, e não por ferramentas externas de cronometragem de processos, o que evita contabilizar o tempo de carregamento do executável e das bibliotecas dinâmicas.
-Registra-se um instante imediatamente antes do início de cada trecho de marcha e outro imediatamente após sua conclusão.
-O tempo de execução corresponde à soma das diferenças entre ambos, que, nos ensaios de desempenho, se reduz a um único intervalo envolvendo todo o laço de marcha.
-Os instantes são obtidos pelo relógio monotônico \texttt{std::chrono::steady\_clock} da biblioteca padrão do C++, imune a ajustes do relógio do sistema e com resolução da ordem de nanossegundos no ambiente de ensaio, e as diferenças são convertidas para segundos em ponto flutuante de dupla precisão.
-O resultado é o tempo real decorrido (\textit{wall-clock time}), e não o tempo de CPU acumulado entre os núcleos, escolha necessária para que a aceleração reflita a redução efetiva do tempo percebido pelo usuário.
+O número de passos, e com ele a duração da marcha, cresce com $N_x$.
+Para limitar a duração dos ensaios, o tempo físico simulado é reduzido nas malhas maiores ($t_{max} = 0{,}2$ para $N_x \le 1000$, $0{,}05$ para $2000 \le N_x \le 5000$ e $0{,}02$ para $N_x = 10^4$); como o custo de cada passo é constante, a taxa de atualização de nós não depende de $t_{max}$.
+Nas menores malhas, o intervalo medido aproxima-se das flutuações do sistema operacional e dos custos fixos de sincronização e de lançamento de \textit{kernels}, de modo que seus tempos medem esses custos, e não a capacidade de processamento.
+A taxa de atualização de nós é $\mathrm{MLUPS} = N_x N_y N_t / (10^6\,T)$, em que $T$ é o tempo medido e $N_t$, o número de passos efetivamente executados.
 
-Nas execuções com MPI, cada trecho é delimitado por barreiras coletivas (\texttt{MPI\_Barrier}), e o tempo considerado é o do processo de identificador (\textit{rank}) zero, de modo que a medição corresponda ao processo mais lento do conjunto.
-Nas implementações voltadas a aceleradores, a cronometragem é encerrada apenas após a sincronização explícita com o dispositivo, obtida pela primitiva própria de cada tecnologia (\texttt{cudaDeviceSynchronize} no CUDA, por exemplo), o que evita que o caráter assíncrono do lançamento dos \textit{kernels} produza tempos artificialmente reduzidos.
+Cada configuração é executada três vezes, ou cinco nas malhas de até $10^3$ nós em $x$, nas quais o intervalo medido é muito curto.
+Adota-se a melhor execução como estimativa da taxa sem interferência e registra-se também a mediana; uma diferença grande entre ambas indica contaminação por processos concorrentes, e a série é descartada e repetida.
+Antes de cada série, confirmam-se o tempo de CPU roubado pela virtualização, a frequência informada e a taxa de um laço de multiplicações e adições fundidas fixado em núcleos de desempenho, de modo que uma máquina não ociosa seja identificada antes da medição.
+As comparações entre variantes do código são feitas na mesma sessão, pois a variação entre sessões, da ordem de $15\%$ nas taxas com oito núcleos, supera o efeito de várias das alterações avaliadas (Seção~\ref{subsec:procedimento-de-otimizacao}).
 
-O número de passos de tempo de cada ensaio não é escolhido livremente, mas decorre do tempo final $t_{max}$ e do espaçamento da malha, crescendo proporcionalmente a $N_x$.
-Em consequência, a duração da marcha no tempo se estende da ordem de milissegundos, na menor malha ($N_x = 10^2$), a algumas horas, na maior malha executada pela versão sequencial ($N_x = 3 \times 10^4$).
-O intervalo medido supera a resolução do relógio em várias ordens de grandeza, mesmo no menor caso.
-Entretanto, aproxima-se das flutuações introduzidas pelo sistema operacional e dos custos fixos de sincronização e de lançamento de \textit{kernels}.
-Por essa razão, os tempos das menores malhas são interpretados como medida desses custos, e não da capacidade de processamento, e sua dispersão entre repetições é examinada com atenção particular.
-A partir do tempo medido $T$, a taxa de atualização de nós é calculada por $\mathrm{MLUPS} = N_x N_y N_t / (10^6\,T)$, em que $N_t$ é o número de passos de tempo efetivamente executados, o que permite comparar malhas de tamanhos distintos em uma mesma escala.
+O protocolo completo, com um a doze núcleos e malhas de $10^2$ a $3 \times 10^4$ nós em $x$, resulta de medições em escala menor, com até oito núcleos de desempenho e malhas de até $10^4$ nós, no equipamento de medição (Seção~\ref{subsec:ambiente-computacional}), e de extensões documentadas.
+A fração sequencial efetiva de Karp-Flatt é estendida a mais núcleos por uma reta ajustada aos quatro últimos números de núcleos medidos, e a aceleração decorre da lei de Amdahl; nas malhas que residem na memória principal, as taxas com um núcleo e a fração sequencial efetiva de $N_x = 10^4$ são mantidas até $N_x = 3 \times 10^4$.
+As demais tecnologias de CPU mantêm a razão com o OpenMP medida com oito núcleos, e as taxas das tecnologias de GPU acima de $10^4$ nós são mantidas constantes, pois o dispositivo já está saturado.
+Cada valor de desempenho do Capítulo~\ref{ch:resultados} é, assim, medido ou extrapolado por essas regras, e o repositório registra a origem de cada um (arquivo \texttt{protocol-otimizado.json}); a projeção das taxas de GPU para a plataforma de referência é feita à parte (Seção~\ref{sec:otimizacao-roofline}).
 
-Cada configuração é executada três vezes, após uma execução preliminar de aquecimento (\textit{warm-up}) cujo resultado é descartado, destinada a estabilizar o estado do \textit{cache} e a frequência de operação do processador.
-Adota-se a média aritmética das três medições como valor representativo, e a dispersão entre elas é monitorada como indicador de contaminação por processos concorrentes.
-Todas as execuções de uma mesma campanha são realizadas na mesma sessão, sem alteração das condições do sistema, e a máquina permanece sem outras cargas de trabalho ativas.
+%---------------------------------------------------------------------------------------
+
+\subsection{Procedimento de Otimização Orientado por Hipóteses}\label{subsec:procedimento-de-otimizacao}
+
+A otimização é orientada pela distância entre as taxas medidas e os tetos do modelo \textit{roofline}.
+O procedimento segue um ciclo de sete passos, repetido até que a taxa se aproxime dos tetos medidos, em que cada experimento se origina em uma hipótese explícita sobre a arquitetura do \textit{hardware} e é acompanhado de uma previsão que a medição pode refutar.
+\begin{enumerate}
+    \item \textbf{Medir os tetos.} Microprogramas medem o pico de ponto flutuante (FMA) com um e com oito fluxos, a largura de banda (\textit{triad} e cópia), o custo das instruções relevantes (como a divisão e a exponencial, em ciclos ou em posições de emissão do \textit{pipeline}) e a vazão de instruções FP64 do acelerador; cópias independentes do programa medem o teto da eficiência paralela da máquina, que não é o da aceleração linear.
+    \item \textbf{Contar o trabalho.} O número de instruções por nó e por passo é obtido da execução (\textit{callgrind} e desmontagem na CPU; histogramas de instruções SASS na GPU), pois os contadores de \textit{hardware} não estão acessíveis sob a virtualização; a contagem dinâmica substitui a estimativa analítica.
+    \item \textbf{Formular a hipótese e a previsão} que a medição possa refutar.
+    \item \textbf{Alterar um fator por vez}, preferencialmente em um único ponto do código compartilhado pelas tecnologias, e medi-lo isoladamente.
+    \item \textbf{Comparar A/B} pelo protocolo da Seção~\ref{subsec:protocolo-de-medicao}, em execuções alternadas e com o estado da máquina verificado.
+    \item \textbf{Decidir.} A alteração é aceita apenas se o ganho superar a dispersão e se a equivalência com a versão \textit{Plain} (tolerância relativa de $10^{-9}$), os testes unitários do núcleo vetorial, os \textit{sanitizers} de endereço e de comportamento indefinido e o Valgrind continuarem a passar; caso contrário, é revertida, e a hipótese refutada é registrada.
+    \item \textbf{Localizar o gargalo seguinte}, repetindo as contagens e a comparação com os tetos.
+\end{enumerate}
+Duas regras complementam o ciclo.
+Nenhuma alteração motivada apenas por intuição ou convenção foi incorporada sem medição, e as hipóteses plausíveis refutadas integram o resultado (\autoref{tab:hipoteses-otimizacao}).
+A correção de um defeito algorítmico encontrado em uma tecnologia é estendida a todas, pois a diferença de desempenho entre tecnologias só é atribuída a elas depois de verificado que todas executam o mesmo trabalho por nó (hipótese 15 da tabela).
+
+\begingroup
+\small
+\begin{longtable}{>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{7.0cm}>{\raggedright\arraybackslash}p{4.0cm}}
+    \caption{Hipóteses examinadas na otimização, evidências medidas e decisões}\label{tab:hipoteses-otimizacao} \\
+    \toprule
+    Hipótese & Evidência & Decisão \\
+    \midrule
+    \endfirsthead
+    \toprule
+    Hipótese & Evidência & Decisão \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endlastfoot
+    1. O \textit{kernel} de CPU é limitado pela memória, como prevê o modelo \textit{roofline}. &
+        Tráfego equivalente a $13\%$ da largura de banda do \textit{triad} com oito núcleos ($464$ \textit{bytes} por nó). &
+        Refutada; causa buscada no código por núcleo. \\
+    2. O código por núcleo é escalar e a disposição de memória impede a vetorização. &
+        Um núcleo atingiu cerca de $10\%$ do pico de FMA com a direção curta contígua ($n_y = n_x/100$), enquanto a propagação desloca as populações ao longo da longa. &
+                Confirmada; adotados $x$ contíguo e núcleo vetorial: taxa de um núcleo multiplicada por $2{,}8$. \\
+    3. A barreira de sincronização de cada passo limita a escalabilidade. &
+        Barreira e variação entre fluxos responderam por $0{,}2\%$ a $1\%$ do tempo do passo. &
+        Refutada para malhas médias e grandes. \\
+    4. O escalonamento estático desequilibra a carga em um processador híbrido virtualizado. &
+        Desequilíbrio de $18\%$ a $35\%$ do passo com oito fluxos. &
+        Confirmada; segmentos de $256$ células com escalonamento dinâmico: cerca de $3\%$ e ganho de $32\%$ a $79\%$ de taxa. \\
+    5. A largura do segmento de trabalho é sensível. &
+        Larguras de $64$ células a uma linha inteira diferiram pouco. &
+        Refutada; mantidas $256$ células. \\
+    6. O teto da eficiência paralela é do equipamento, e não do código. &
+        Oito cópias independentes e sem comunicação atingiram de $0{,}55$ a $0{,}73$ de oito vezes a taxa de uma (\autoref{tab:teto-copias}). &
+        Confirmada; as cópias são o referencial de eficiência. \\
+    7. Um registrador vetorial por bloco é limitado pela latência das dependências. &
+        IPC de cerca de $1{,}8$; dois registradores independentes, em lugar de um, elevam a taxa em $22\%$ e, com o fechamento fatorado, de dois para quatro, em $12\%$ a $16\%$ (no OpenACC do \texttt{nvc++}, o tempo do passo de Newton cai a cerca de metade). &
+        Confirmada; blocos de $16$ células ($4 \times 4$ valores). \\
+    8. A exponencial vetorial é o gargalo seguinte. &
+        Arredondamento pela soma de $1{,}5 \cdot 2^{52}$, protegida por barreira de compilador, em lugar da conversão para inteiro: $+12\%$. &
+        Aceita; a barreira é necessária, pois \texttt{-ffast-math} simplifica a soma. \\
+    9. O fechamento energético executa trabalho redundante. &
+        A contagem dinâmica deu $2209$ operações, $746$ instruções e $36$ exponenciais por nó e passo; com a jacobiana exatamente diagonal (Seção~\ref{subsec:lbm-equilibrio-g}), $851$ operações, $336$ instruções e $8$ exponenciais. &
+        Confirmada em todas as tecnologias: taxa de um núcleo de CPU multiplicada por $2{,}2$ e das GPUs, por $1{,}6$ a $2{,}1$. \\
+    10. O armazenamento não temporal reduz o tráfego em malhas grandes. &
+        De $464$ para $320$ \textit{bytes} por nó; $+5\%$ a $+15\%$ com $n_x = 10000$ e oito núcleos; sem ganho em malhas residentes na \textit{cache}. &
+        Aceita condicionalmente (conjunto de trabalho acima de quatro vezes a \textit{cache} de último nível). \\
+    11. Opções adicionais de compilação aceleram o \textit{kernel}. &
+        Nenhuma variação consistente; \texttt{-O2} foi cerca de quatro vezes mais lento que \texttt{-O3}. &
+        Rejeitada; mantido \texttt{-O3}. \\
+    12. Maior ocupação do multiprocessador acelera o \textit{kernel} de GPU. &
+        \texttt{\_\_launch\_bounds\_\_(128, 4)} (até $128$ registradores) e \texttt{maxregcount:128} no \texttt{nvc++} geraram \textit{spills} ($88$ \textit{bytes} no segundo), sem ganho e, no primeiro, com perda de desempenho; blocos de $64$ a $256$ fluxos e o desenrolamento do laço de Newton ficaram no ruído. &
+        Rejeitada; $128$ fluxos e cerca de $140$--$150$ registradores ($3$ blocos por multiprocessador), pois o limite é a vazão FP64. \\
+    13. O \textit{kernel} de GPU é limitado pela largura de banda, como na maior parte da literatura. &
+        Uso de $24\%$ da largura de banda de cópia medida; emissão de instruções FP64 estimada em $90\%$ a $100\%$ do limite. &
+        Refutada; o limite é a vazão FP64, que só a redução do número de instruções eleva. \\
+    14. A reassociação de \texttt{-ffast-math} não afeta a solução. &
+        Com $\Pi = 2$, $\mu = 10^{-2}$ e $N_x = 1000$, o núcleo vetorial divergiu da referência ($4{,}6 \times 10^{-2}$ na massa específica); a bisseção das opções localizou \texttt{-fassociative-math}, e sem ela a diferença foi de $1{,}7 \times 10^{-8}$. &
+        Refutada; instabilidade do esquema nesse regime (Seção~\ref{subsec:efeito-da-razao-de-pressoes-no-erro}); a equivalência é aferida em regimes com $\tau$ afastado de $0{,}5$. \\
+    15. A diferença entre as camadas de abstração e o CUDA decorre da abstração. &
+        Com fechamentos distintos (36 exponenciais por nó nas camadas e 12 no CUDA), as camadas ficaram $22\%$ abaixo do CUDA; com o mesmo fechamento fatorado em todas, alcançam de $100\%$ a $104\%$ da taxa do CUDA. &
+                Refutada; a diferença decorria do trabalho por nó, e não da camada. \\
+\end{longtable}
+\endgroup
+
+O procedimento tem limites que condicionam a leitura dos resultados.
+As medições provêm de uma única máquina, virtualizada e com processador híbrido, e a variação entre sessões é da ordem de $15\%$ nas taxas com oito núcleos; por isso, as decisões que dependiam de efeitos inferiores a cerca de $5\%$ basearam-se apenas em comparações alternadas na mesma sessão.
+A ausência de contadores de \textit{hardware} torna indireta a atribuição de um ganho a um gargalo específico (como a latência de dependência da hipótese 7), apoiada na contagem de instruções, no IPC estimado a partir do tempo e na previsão confirmada, e não na observação direta da ocupação das unidades funcionais.
+O conjunto de hipóteses reflete as consideradas plausíveis, e não uma busca exaustiva; outras otimizações (como blocagem temporal e instruções AVX-512, indisponíveis no equipamento de medição) permanecem abertas (Capítulo~\ref{ch:consideracoes-finais}).
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Ambiente Computacional de Ensaio}\label{subsec:ambiente-computacional}
 
-Os ensaios foram conduzidos em uma única estação de trabalho, o que garante uniformidade das condições experimentais entre as tecnologias comparadas, mas restringe o alcance das conclusões relativas à memória distribuída, conforme reconhecido na Seção~\ref{sec:delimitacao}.
-A \autoref{tab:ambiente-computacional} descreve o \textit{hardware} e o \textit{software} utilizados, com a versão ou a implementação de cada compilador, biblioteca e tecnologia de paralelização empregada.
-O registro dessas versões é condição de reprodutibilidade dos resultados, pois tanto a qualidade do código gerado quanto o comportamento das camadas de abstração variam de forma sensível entre lançamentos sucessivos.
-As versões das bibliotecas obtidas automaticamente durante a compilação estão fixadas no arquivo de configuração do sistema de compilação, descrito na Seção~\ref{sec:compilacao-configuracao}.
+A plataforma de referência é uma única estação de trabalho, o que uniformiza as condições experimentais entre as tecnologias, mas restringe o alcance das conclusões sobre memória distribuída (Seção~\ref{sec:delimitacao}).
+A \autoref{tab:ambiente-computacional} descreve seu \textit{hardware} e seu \textit{software}, com as versões que afetam o código gerado e o comportamento das camadas de abstração, necessárias à reprodutibilidade; suas especificações fundamentam os tetos do modelo \textit{roofline} (Seção~\ref{sec:custo-computacional}), e as versões das bibliotecas obtidas na compilação estão fixadas no sistema de compilação (Seção~\ref{sec:compilacao-configuracao}).
 
 \begin{table}[H]
     \centering
-    \caption{Ambiente computacional utilizado nos ensaios}
+    \caption{Plataforma de referência: \textit{hardware} e \textit{software}}
     \label{tab:ambiente-computacional}
     \begin{tabular}{llp{4.5cm}}
         \toprule
@@ -419,17 +410,17 @@ As versões das bibliotecas obtidas automaticamente durante a compilação estã
          & Acelerador gráfico & NVIDIA GeForce RTX 5070, com 12~GB \\
         \midrule
         Sistema & Sistema operacional & Fedora Linux 44 \\
-         & Compilador C++ & NVIDIA HPC SDK 26.1 (\texttt{nvc++}) \\
+         & Compilador C++ & GCC 13 (CPU) e NVIDIA HPC SDK 26.1 (\texttt{nvc++}: OpenACC e descarregamento) \\
          & Padrão da linguagem & C++20 \\
          & Sistema de compilação & CMake 3.20 ou superior \\
         \midrule
-        Paralelização & OpenMP & NVIDIA HPC SDK 26.1 (\texttt{-mp}) \\
+        Paralelização & OpenMP & GCC 13 (\texttt{-fopenmp}, CPU); NVIDIA HPC SDK 26.1 (\texttt{-mp=gpu}) \\
          & OpenACC & NVIDIA HPC SDK 26.1 (\texttt{-acc}) \\
          & CUDA & CUDA 13.1, incluído no NVIDIA HPC SDK 26.1 \\
          & OpenCL & OpenCL 3.0 (\textit{driver} NVIDIA) e POCL (CPU) \\
          & Kokkos & 5.2.1 \\
          & RAJA & 2026.07.0 \\
-         & Alpaka* & 3.0.0 (\textit{commit} \texttt{b7d339d}) \\
+         & Alpaka & 3.0.0 (\textit{commit} \texttt{b7d339d}) \\
          & MPI & Implementação incluída no NVIDIA HPC SDK 26.1 \\
         \midrule
         Bibliotecas & Eigen & 5.0.1 \\
@@ -437,44 +428,29 @@ As versões das bibliotecas obtidas automaticamente durante a compilação estã
         \bottomrule
     \end{tabular}
     \fonte{O autor (2026).}
-    \nota{*A biblioteca Alpaka foi integrada em etapa posterior à campanha experimental e não fez parte das medições de desempenho; sua versão é a registrada no submódulo do repositório, e ela exige GCC 12 ou superior, ou Clang 17 ou superior, como compilador C++.}
 \end{table}
 
-O processador empregado possui doze núcleos físicos idênticos, distribuídos em dois complexos de seis núcleos (\textit{Core Complex Dies}, CCDs), cada qual com seu próprio \textit{cache} de último nível.
-A execução simultânea de dois fluxos por núcleo (\textit{simultaneous multithreading}, SMT) expõe 24 fluxos de execução lógicos ao sistema operacional.
-Os fluxos que ultrapassam o primeiro complexo passam a trocar dados com o segundo, com latência superior à do \textit{cache} compartilhado no interior de cada complexo, o que pode reduzir a eficiência acima de seis núcleos.
-Por conseguinte, os ensaios de escalabilidade empregam um fluxo por núcleo físico, de um a doze, sem recorrer ao SMT, e com a afinidade dos fluxos fixada de modo a impedir sua migração durante a simulação.
+O processador de referência possui doze núcleos físicos, distribuídos em dois complexos de seis núcleos (\textit{Core Complex Dies}, CCDs), cada qual com seu próprio \textit{cache} de último nível; os fluxos que ultrapassam o primeiro complexo trocam dados com o segundo, com latência superior, o que pode reduzir a eficiência acima de seis núcleos.
+Os ensaios de escalabilidade empregam um fluxo por núcleo físico, sem execução simultânea de dois fluxos por núcleo (\textit{simultaneous multithreading}, SMT) e com afinidade fixada para impedir a migração dos fluxos: as variáveis \texttt{OMP\_PLACES=cores} e \texttt{OMP\_PROC\_BIND=close} atribuem a cada fluxo um núcleo físico distinto e completam o primeiro complexo antes do segundo, e, nas execuções com MPI, cada processo é vinculado a um núcleo.
 
-A fixação é obtida pelas variáveis de ambiente \texttt{OMP\_PLACES=cores} e \texttt{OMP\_PROC\_BIND=close}, que atribuem a cada fluxo um núcleo físico distinto e ocupam os núcleos em ordem, completando o primeiro complexo antes de passar ao segundo.
-Nas execuções com MPI, o mesmo efeito é obtido pela vinculação de cada processo a um núcleo.
-Além disso, todas as compilações utilizam o mesmo nível de otimização e a mesma precisão de ponto flutuante, condição sem a qual a comparação entre tecnologias perderia sentido.
+As medições, contudo, foram realizadas em um equipamento de menor porte, virtualizado (WSL2), com processador x86-64 híbrido (AVX2 e FMA) de oito núcleos de desempenho e GPU NVIDIA da arquitetura Ada Lovelace com $40$ multiprocessadores.
+Os tetos de desempenho (pico de ponto flutuante, largura de banda e vazão de instruções) foram medidos nesse equipamento por microprogramas (Seção~\ref{subsec:procedimento-de-otimizacao}), e não obtidos das especificações da plataforma de referência, e são os usados na análise das medições (Capítulo~\ref{ch:resultados}).
+Nesse equipamento, as tecnologias de CPU, exceto o OpenACC, foram compiladas com o GCC 13.4 (\texttt{-O3 -march=native} e \texttt{-ffast-math} no código do projeto); o OpenACC e as variantes de GPU do OpenACC e do OpenMP, com o \texttt{nvc++} 26.3 (NVIDIA HPC SDK); e as de CUDA, com o CUDA 12.9.
+O \textit{backend} Alpaka requer GCC 12 ou superior ou Clang 17 ou superior e não suporta o \texttt{nvc++} (Seção~\ref{sec:compilacao-configuracao}).
 
-No caso do \textit{backend} Alpaka, a implementação apoia-se na biblioteca moderna \texttt{alpaka3} (versão 3.0.0, instantâneo de desenvolvimento \texttt{b7d339d}), que utiliza conceitos e recursos avançados de C++20 \parencite{Zenker2016, Matthes2017, AlpakaContributors2026}.
-Essa biblioteca requer GCC 12 ou superior ou Clang 17 ou superior; como o Alpaka 3 não oferece suporte ao compilador \texttt{nvc++} como compilador C++, o sistema de construção do projeto desativa esse \textit{backend} quando o \texttt{nvc++} é selecionado.
-Em ambientes de contêiner baseados em distribuições corporativas como o Rocky Linux 9 (imagem base do NVIDIA HPC SDK), o compilador padrão do sistema é o GCC 11.5; em decorrência disso, a compilação do Alpaka é desativada por padrão na configuração com a imagem básica, exigindo a habilitação explícita de conjuntos de ferramentas mais recentes (como o \texttt{gcc-toolset-13}) por meio das variáveis \texttt{CMAKE\_CXX\_COMPILER} e \texttt{CMAKE\_CUDA\_HOST\_COMPILER}.
-Adicionalmente, no Alpaka, o suporte ao acelerador GPU via CUDA (\texttt{ENABLE\_ALPAKA\_CUDA=ON}, correspondente ao executor \texttt{exec::gpuCuda}) opera como uma opção de compilação condicional, enquanto o executor para CPU via OpenMP (\texttt{exec::cpuOmpBlocks}) é habilitado sempre que os requisitos de compilador são satisfeitos.
-
-A consistência da arquitetura alvo também afeta a reprodutibilidade dos ensaios em aceleradores gráficos.
-No \texttt{CMakeLists.txt}, a variável \texttt{CMAKE\_CUDA\_ARCHITECTURES} (cujo valor padrão é definido como 80) constitui a configuração central para o ecossistema NVIDIA, da qual são derivadas a opção \texttt{Kokkos\_ARCH\_<NOME>} do Kokkos e a definição \texttt{CUDA\_ARCH=sm\_<nn>} do RAJA/BLT.
-As receitas de contêiner (\textit{Docker} e \textit{Apptainer}) expõem o argumento de construção \texttt{CUDA\_ARCHITECTURES} (com valor padrão 89 para a microarquitetura Ada Lovelace) e o repassam a essa variável do CMake, assegurando coerência entre os diferentes \textit{backends} de acelerador.
-Binários compilados para uma determinada capacidade computacional contêm código de máquina nativo (SASS) compatível com revisões posteriores da mesma família (por exemplo, código gerado para \texttt{sm\_80} executa diretamente em dispositivos de capacidade 8.9 sem necessidade de compilação JIT), embora possam não usufruir de recursos específicos introduzidos na microarquitetura mais recente.
-A compilação JIT (\textit{Just-In-Time}) pelo \textit{driver} da NVIDIA ocorre apenas quando não há código nativo compatível no binário e código intermediário PTX foi incorporado, situação que introduz sobrecarga temporal durante a fase de inicialização.
-Adicionalmente, camadas como o Kokkos realizam verificações próprias e emitem alertas em tempo de execução caso a arquitetura de compilação divirja da arquitetura física detectada no dispositivo.
+A arquitetura alvo dos aceleradores é definida pela variável \texttt{CMAKE\_CUDA\_ARCHITECTURES} (padrão 80 no \texttt{CMakeLists.txt} e 89, microarquitetura Ada Lovelace, nas receitas de contêiner), da qual derivam a opção \texttt{Kokkos\_ARCH\_<NOME>} do Kokkos e a definição \texttt{CUDA\_ARCH=sm\_<nn>} do RAJA.
+Binários nativos de uma capacidade computacional executam em dispositivos de revisões posteriores da mesma família (como o código para \texttt{sm\_80} em capacidade 8.9), embora sem os recursos da microarquitetura mais recente.
 
 %---------------------------------------------------------------------------------------
 
 \section{Tecnologias de Paralelização e Portabilidade de Desempenho}\label{sec:tecnologias-de-paralelizacao}
 
-A seleção das tecnologias paralelas contempladas no miniaplicativo combinou três critérios.
-O projeto implementa oito tecnologias de paralelização, além da versão sequencial de referência (\textit{Plain}), das quais sete foram submetidas à campanha experimental relatada no Capítulo~\ref{ch:resultados}; a biblioteca Alpaka foi integrada em etapa posterior, com foco na portabilidade de desempenho baseada em C++20 \parencite{Zenker2016, Matthes2017, AlpakaContributors2026}.
-O primeiro critério foi a representatividade das categorias de programação paralela identificadas na Seção~\ref{sec:tecnologias-de-computacao-de-alto-desempenho}.
-Para o paralelismo no interior de um nó, contemplaram-se dois modelos por diretivas de compilador (OpenMP e OpenACC), dois de baixo nível (CUDA e OpenCL) e três camadas de abstração em C++ (Kokkos, RAJA e Alpaka).
-O conjunto foi completado com o padrão de referência para memória distribuída (MPI).
-Pesaram também a maturidade e a adoção efetiva pela comunidade de HPC, verificadas pela presença em códigos de produção de grandes centros de computação e pela existência de especificação estável.
-Por fim, considerou-se a disponibilidade de compiladores e de bibliotecas para o ambiente de ensaio descrito na Seção~\ref{subsec:ambiente-computacional}.
-Esse requisito excluiu do escopo o HIP e o SYCL, cuja avaliação representativa demandaria aceleradores de outros fabricantes, uma vez que, em GPUs NVIDIA, ambos recorrem à infraestrutura do próprio CUDA.
-A inclusão posterior do Alpaka fundamentou-se em ferramental atualizado com suporte a C++20.
-A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} apresenta uma síntese comparativa das tecnologias contempladas, que serve de referência para a discussão de implementação do Capítulo~\ref{ch:implementacao-computacional} e para a análise de complexidade do Capítulo~\ref{ch:resultados}.
+A seleção das tecnologias paralelas combinou três critérios.
+O primeiro foi a representatividade das categorias de programação paralela da Seção~\ref{sec:tecnologias-de-computacao-de-alto-desempenho}: para o paralelismo no interior de um nó, dois modelos por diretivas de compilador (OpenMP e OpenACC), dois de baixo nível (CUDA e OpenCL) e três camadas de abstração em C++ (Kokkos, RAJA e Alpaka), além do padrão de referência para memória distribuída (MPI).
+O segundo foi a maturidade e a adoção pela comunidade de HPC, verificadas pela presença em códigos de produção e pela existência de especificação estável.
+O terceiro foi a disponibilidade de compiladores e de bibliotecas para o ambiente da Seção~\ref{subsec:ambiente-computacional}, o que excluiu o HIP e o SYCL, cuja avaliação representativa demandaria aceleradores de outros fabricantes, pois, em GPUs NVIDIA, ambos recorrem à infraestrutura do CUDA.
+As oito tecnologias, além da versão sequencial (\textit{Plain}), foram submetidas à campanha experimental do Capítulo~\ref{ch:resultados}; o Alpaka, em sua versão 3, tem suporte a C++20 e foco em portabilidade de desempenho \parencite{Zenker2016, Matthes2017, AlpakaContributors2026}.
+A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} sintetiza as tecnologias e serve de referência para a discussão de implementação do Capítulo~\ref{ch:implementacao-computacional} e para a análise de complexidade do Capítulo~\ref{ch:resultados}.
 
 \begin{sidewaystable}
     \centering

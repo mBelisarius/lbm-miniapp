@@ -16,12 +16,18 @@
 #include "Lbm/Raja/Backends.hpp"
 #include "Lbm/Stencil.hpp"
 
+/// Unroll a short, fixed-trip loop (directions / dimensions).
+/// `LBMINI_RAJA_NO_UNROLL` keeps a loop rolled (the Newton iterations: one copy of the
+/// body instead of three, which is what the instruction cache of a GPU wants).
 #if defined(__CUDACC__) || defined(__HIPCC__) || defined(__clang__)
 #define LBMINI_RAJA_UNROLL _Pragma("unroll")
+#define LBMINI_RAJA_NO_UNROLL _Pragma("unroll 1")
 #elif defined(__GNUC__)
 #define LBMINI_RAJA_UNROLL _Pragma("GCC unroll 16")
+#define LBMINI_RAJA_NO_UNROLL _Pragma("GCC unroll 1")
 #else
 #define LBMINI_RAJA_UNROLL
+#define LBMINI_RAJA_NO_UNROLL
 #endif
 
 namespace lbmini::raja {
@@ -39,11 +45,10 @@ struct Params {
   Scalar ushiftY;
 
   Scalar cv;
-  Scalar cp;
   Scalar invCv;
   Scalar rgas;
   Scalar viscosity;
-  Scalar conductivity;
+  Scalar condOverCp; ///< `conductivity / cp`: `kappa / (rho cp) = condOverCp / rho`
 
   Scalar densityL;
   Scalar pressureL;
@@ -58,6 +63,9 @@ struct Params {
  *
  * Decorated with `RAJA_HOST_DEVICE inline` so they execute cleanly across host
  * and accelerator devices with zero warp divergence and fully unrolled loops.
+ * The arithmetic is that of the reference solver except for the energy closure,
+ * which is evaluated in the factorised form of `AxisExp`; it agrees with the
+ * reference to rounding error.
  */
 template<typename Scalar, typename LatticeType>
 struct Physics {
@@ -67,7 +75,15 @@ struct Physics {
   static constexpr Scalar kMaxExp = Scalar{ 700.0 };
   static constexpr int kMaxIter = 3;
 
-  static_assert(kD == 2, "the RAJA backend implements the 2-D closure");
+  static_assert(kD == 2 && kQ == 9, "the RAJA backend implements the D2Q9 closure");
+
+  RAJA_HOST_DEVICE inline static constexpr int Vx(const int idc) {
+    return static_cast<int>(LatticeType::Velocity(idc, 0));
+  }
+
+  RAJA_HOST_DEVICE inline static constexpr int Vy(const int idc) {
+    return static_cast<int>(LatticeType::Velocity(idc, 1));
+  }
 
   RAJA_HOST_DEVICE inline static void Feq(
     const Scalar rhoc,
@@ -104,6 +120,7 @@ struct Physics {
     const Scalar (&g)[kQ],
     const Params<Scalar, kQ>& p,
     Scalar& rho,
+    Scalar& invRho,
     Scalar& ux,
     Scalar& uy,
     Scalar& tem,
@@ -120,7 +137,7 @@ struct Physics {
       momX += LatticeType::Cshift(idc, 0, p.ushiftX) * f[idc];
       momY += LatticeType::Cshift(idc, 1, p.ushiftY) * f[idc];
     }
-    const Scalar invRho = Scalar{ 1 } / rhoSum;
+    invRho = Scalar{ 1 } / rhoSum;
     ux = momX * invRho;
     uy = momY * invRho;
     const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
@@ -129,9 +146,75 @@ struct Physics {
     pres = p.rgas * rhoSum * tem;
   }
 
+  /**
+   * @brief `p[c + 1] = W_c * exp(xi * c - max_c' (xi * c'))` for `c = -1, 0, 1`: one axis of the closure.
+   *
+   * Double precision runs at 1/64 of the single-precision rate on consumer
+   * GPUs and the kernel is bound by it, not by memory, so the number of FP64
+   * instructions per cell is the cost. The D2Q9 weights and the exponents of
+   * the energy equilibrium are tensor products, `W_q = Wx(c_x) Wy(c_y)` and
+   * `s_q = xi_0 (c_x + Ux) + xi_1 (c_y + Uy)`, hence
+   * `W_q exp(s_q - smax) = Px(c_x) Py(c_y)` (the `U` shift and the common maximum
+   * cancel), with a single exponential per axis, `E = exp(-|xi|)`: the exponents
+   * `xi c - max` are `0`, `-|xi|` and `-2 |xi|` in the order of the sign of `xi`,
+   * i.e. `1`, `E` and `E^2`. That is 2 exponentials per evaluation (8 per cell and
+   * step; the reference evaluates 9 per evaluation, 36 per cell and step) and it
+   * turns the nine-term sums of the Newton step into three-term ones.
+   *
+   * It equals the reference to rounding error while neither of its clamps
+   * (`|s - smax| <= 700`) is active; beyond that every omitted term is below
+   * `exp(-700)` relative to the largest one.
+   */
+  RAJA_HOST_DEVICE inline static void AxisExp(
+    const Scalar xi,
+    const Scalar wn,
+    const Scalar wZero,
+    Scalar (&p)[3]
+  ) {
+    const Scalar t = -std::fabs(xi);
+    const Scalar e = std::exp((t > -kMaxExp) ? t : -kMaxExp);
+    const Scalar e2 = e * e;
+    const bool pos = xi >= Scalar{ 0 };
+    p[0] = wn * (pos ? e2 : Scalar{ 1 });
+    p[1] = wZero * e;
+    p[2] = wn * (pos ? Scalar{ 1 } : e2);
+  }
+
+  /// Equilibrium energy populations from the Newton solution `xi`.
+  RAJA_HOST_DEVICE inline static void GeqFromXi(
+    const Scalar xi0,
+    const Scalar xi1,
+    const Scalar wn,
+    const Scalar wZero,
+    const Scalar targetE,
+    Scalar (&geq)[kQ]
+  ) {
+    Scalar px[3];
+    Scalar py[3];
+    AxisExp(xi0, wn, wZero, px);
+    AxisExp(xi1, wn, wZero, py);
+    const Scalar scale = targetE / ((px[0] + px[1] + px[2]) * (py[0] + py[1] + py[2]));
+    Scalar sx[3];
+    LBMINI_RAJA_UNROLL
+    for (int k = 0; k < 3; ++k)
+      sx[k] = scale * px[k];
+    LBMINI_RAJA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc)
+      geq[idc] = sx[Vx(idc) + 1] * py[Vy(idc) + 1];
+  }
+
+  /**
+   * @brief Equilibria + Newton-Raphson energy closure + BGK collision, in place.
+   *
+   * `f`/`g` enter as the pre-collision populations of the cell and leave as the
+   * post-collision ones; `xi` is the Newton warm start (read and updated). The
+   * Newton loop runs a fixed number of iterations with clamped reciprocals and
+   * a sticky `solverOk` predicate: control flow stays uniform across a warp.
+   */
   RAJA_HOST_DEVICE inline static void Collide(
     const Params<Scalar, kQ>& p,
     const Scalar rhoc,
+    const Scalar invRho,
     const Scalar ux,
     const Scalar uy,
     const Scalar temc,
@@ -139,120 +222,81 @@ struct Physics {
     Scalar (&g)[kQ],
     Scalar (&xi)[kD]
   ) {
-    const Scalar ushiftX = p.ushiftX;
-    const Scalar ushiftY = p.ushiftY;
     const Scalar u2 = ux * ux + uy * uy;
 
     Scalar feqLocal[kQ];
-    Feq(rhoc, ux, uy, temc, ushiftX, ushiftY, feqLocal);
+    Feq(rhoc, ux, uy, temc, p.ushiftX, p.ushiftY, feqLocal);
+
+    // The per-axis factors of the weights (`W_q = Wx(c_x) Wy(c_y)`, see `AxisExp`); the
+    // factor is exactly the one `LatticeType::Weights` evaluates for each dimension.
+    const Scalar wZero = Scalar{ 1 } - temc;
+    const Scalar wn = wZero + (Scalar{ 0.5 } * temc - wZero);
+    Scalar wi[kQ];
+    LBMINI_RAJA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc)
+      wi[idc] = (Vx(idc) == 0 ? wZero : wn) * (Vy(idc) == 0 ? wZero : wn);
 
     // Geq via Newton-Raphson on the normalised energy flux.
+    //
+    // The closure distribution `W_q exp(xi . (c_q + U))` is a product of an x and a
+    // y factor, so x and y are independent: the Jacobian of the reference is
+    // diagonal (its off-diagonal term is exactly `S2xy / Z - (S1x / Z) (S1y / Z) = 0`)
+    // and the iteration is two scalar Newton steps,
+    // `xi_a -= alpha (m1_a - target_a) / var_a`, each from three weighted
+    // exponentials of one axis (see `AxisExp`). Divisions are 8 FP64 slots each,
+    // so the two axes share one reciprocal per stage.
     const Scalar E = p.cv * temc + Scalar{ 0.5 } * u2;
     const Scalar targetE = Scalar{ 2 } * rhoc * E;
-    Scalar targetM[kD];
-    LBMINI_RAJA_UNROLL
-    for (int d = 0; d < kD; ++d)
-      targetM[d] = Scalar{ 2 } * rhoc * (d == 0 ? ux : uy) * (E + temc) / targetE;
+    const Scalar invE = Scalar{ 1 } / E;
+    const Scalar targetM0 = ux * (E + temc) * invE; // 2 rho u (E + T) / (2 rho E)
+    const Scalar targetM1 = uy * (E + temc) * invE;
 
     Scalar alpha = Scalar{ 1 };
-    Scalar si[kQ];
-    Scalar Z = Scalar{ 0 };
-    Scalar smax = Scalar{ 0 };
     bool solverOk = true;
 
+    LBMINI_RAJA_NO_UNROLL
     for (int iter = 0; iter < kMaxIter; ++iter) {
-      smax = -kMaxExp;
-      LBMINI_RAJA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar s = Scalar{ 0 };
-        LBMINI_RAJA_UNROLL
-        for (int d = 0; d < kD; ++d)
-          s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
-        si[idc] = s;
-        smax = (s > smax) ? s : smax;
-      }
-      smax = (smax < kMaxExp) ? smax : kMaxExp;
+      Scalar px[3];
+      Scalar py[3];
+      AxisExp(xi[0], wn, wZero, px);
+      AxisExp(xi[1], wn, wZero, py);
+      const Scalar zx = px[0] + px[1] + px[2];
+      const Scalar zy = py[0] + py[1] + py[2];
+      const Scalar zxy = zx * zy;
+      solverOk = solverOk && (zxy > kTiny);
+      const Scalar rz = Scalar{ 1 } / zxy;
+      const Scalar invZx = zy * rz;
+      const Scalar invZy = zx * rz;
 
-      Scalar S1[kD] = { Scalar{ 0 }, Scalar{ 0 } };
-      Scalar S2[kD][kD] = { { Scalar{ 0 }, Scalar{ 0 } }, { Scalar{ 0 }, Scalar{ 0 } } };
-      Z = Scalar{ 0 };
-      LBMINI_RAJA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar expo = si[idc] - smax;
-        expo = (expo < kMaxExp) ? expo : kMaxExp;
-        expo = (expo > -kMaxExp) ? expo : -kMaxExp;
-        const Scalar wev = LatticeType::Weights(idc, temc) * std::exp(expo);
-        Z += wev;
-        LBMINI_RAJA_UNROLL
-        for (int a = 0; a < kD; ++a) {
-          const Scalar cia = LatticeType::Cshift(idc, a, (a == 0 ? ushiftX : ushiftY));
-          S1[a] += cia * wev;
-          LBMINI_RAJA_UNROLL
-          for (int b = 0; b < kD; ++b)
-            S2[a][b] += cia * LatticeType::Cshift(idc, b, (b == 0 ? ushiftX : ushiftY)) * wev;
-        }
-      }
+      // Moments of the unshifted velocity; `c_a + U_a` shifts the mean only.
+      const Scalar m1x = (px[2] - px[0]) * invZx;
+      const Scalar m1y = (py[2] - py[0]) * invZy;
+      const Scalar jxx = ((px[2] + px[0]) * invZx - m1x * m1x) + kTiny;
+      const Scalar jyy = ((py[2] + py[0]) * invZy - m1y * m1y) + kTiny;
+      const Scalar jxy = jxx * jyy;
+      solverOk = solverOk && (std::fabs(jxy) > kTiny);
 
-      const Scalar Zsafe = (Z > kTiny) ? Z : kTiny;
-      solverOk = solverOk && (Z > kTiny);
-      const Scalar invZ = Scalar{ 1 } / Zsafe;
-
-      Scalar J[kD][kD];
-      LBMINI_RAJA_UNROLL
-      for (int a = 0; a < kD; ++a)
-        LBMINI_RAJA_UNROLL
-        for (int b = 0; b < kD; ++b)
-          J[a][b] = (S2[a][b] - S1[a] * S1[b] * invZ) * invZ;
-      J[0][0] += kTiny;
-      J[1][1] += kTiny;
-
-      const Scalar detJ = J[0][0] * J[1][1] - J[0][1] * J[1][0];
-      const Scalar absDet = std::fabs(detJ);
-      const Scalar detSafe = (absDet > kTiny) ? detJ : ((detJ >= Scalar{ 0 }) ? kTiny : -kTiny);
-      solverOk = solverOk && (absDet > kTiny);
-      const Scalar invDet = Scalar{ 1 } / detSafe;
-
-      const Scalar r0 = S1[0] * invZ - targetM[0];
-      const Scalar r1 = S1[1] * invZ - targetM[1];
-      xi[0] -= alpha * (J[1][1] * r0 - J[0][1] * r1) * invDet;
-      xi[1] -= alpha * (-J[1][0] * r0 + J[0][0] * r1) * invDet;
+      const Scalar rj = alpha * (Scalar{ 1 } / jxy);
+      const Scalar r0 = (m1x + p.ushiftX) - targetM0;
+      const Scalar r1 = (m1y + p.ushiftY) - targetM1;
+      xi[0] -= r0 * jyy * rj; // alpha r0 / jxx
+      xi[1] -= r1 * jxx * rj; // alpha r1 / jyy
       alpha *= Scalar{ 0.5 };
     }
 
     Scalar geqLocal[kQ];
     if (solverOk) {
-      smax = -kMaxExp;
-      LBMINI_RAJA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar s = Scalar{ 0 };
-        LBMINI_RAJA_UNROLL
-        for (int d = 0; d < kD; ++d)
-          s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
-        si[idc] = s;
-        smax = (s > smax) ? s : smax;
-      }
-      smax = (smax < kMaxExp) ? smax : kMaxExp;
-      Z = Scalar{ 0 };
-      LBMINI_RAJA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar expo = si[idc] - smax;
-        expo = (expo < kMaxExp) ? expo : kMaxExp;
-        expo = (expo > -kMaxExp) ? expo : -kMaxExp;
-        const Scalar wev = LatticeType::Weights(idc, temc) * std::exp(expo);
-        Z += wev;
-        geqLocal[idc] = wev;
-      }
-      const Scalar scale = targetE / Z;
-      LBMINI_RAJA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc)
-        geqLocal[idc] *= scale;
+      GeqFromXi(xi[0], xi[1], wn, wZero, targetE, geqLocal);
+      // The reference also stores `log(scale / rho) - smax` as warm-start
+      // component 0; nothing ever reads it, so it is neither computed nor stored.
     } else {
+      // Fallback: normalised-Wi distribution, cold restart of the warm start.
       xi[0] = Scalar{ 0 };
       xi[1] = Scalar{ 0 };
       Scalar sumW = Scalar{ 0 };
       LBMINI_RAJA_UNROLL
       for (int idc = 0; idc < kQ; ++idc)
-        sumW += LatticeType::Weights(idc, temc);
+        sumW += wi[idc];
       if (sumW <= kTiny) {
         const Scalar uni = targetE / Scalar(kQ);
         LBMINI_RAJA_UNROLL
@@ -262,16 +306,18 @@ struct Physics {
         const Scalar sc = targetE / sumW;
         LBMINI_RAJA_UNROLL
         for (int idc = 0; idc < kQ; ++idc)
-          geqLocal[idc] = LatticeType::Weights(idc, temc) * sc;
+          geqLocal[idc] = wi[idc] * sc;
       }
     }
 
     // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
-    const Scalar tau = p.viscosity / (rhoc * temc) + Scalar{ 0.5 };
-    const Scalar omega = Scalar{ 1 } / tau;
-    const Scalar diffusivity = p.conductivity / (rhoc * p.cp);
-    const Scalar tauT = diffusivity / temc + Scalar{ 0.5 };
-    Scalar omegaT = Scalar{ 1 } / tauT;
+    // `tau` and `tauT` share `1 / (rho T)`, `omega` and `omegaT` one division.
+    const Scalar invT = Scalar{ 1 } / temc;
+    const Scalar tau = p.viscosity * invRho * invT + Scalar{ 0.5 };
+    const Scalar tauT = p.condOverCp * invRho * invT + Scalar{ 0.5 };
+    const Scalar rTau = Scalar{ 1 } / (tau * tauT);
+    const Scalar omega = tauT * rTau;
+    Scalar omegaT = tau * rTau;
 
     Scalar eps = Scalar{ 0 };
     LBMINI_RAJA_UNROLL
@@ -280,16 +326,16 @@ struct Physics {
       const Scalar den = (feqLocal[idc] > kTiny) ? feqLocal[idc] : kTiny;
       eps += std::fabs(diff) / den;
     }
-    eps /= Scalar(kQ);
-    Scalar sigma = Scalar{ 1 };
+    eps *= Scalar{ 1 } / Scalar(kQ);
+    // `omega / sigma` with `sigma` in {omega, 1.35, 1.05, 1}, without a division.
+    Scalar omegaL = omega;
     if (eps >= Scalar{ 1 })
-      sigma = omega;
+      omegaL = Scalar{ 1 };
     else if (eps >= Scalar{ 0.1 })
-      sigma = Scalar{ 1.35 };
+      omegaL = omega * (Scalar{ 1 } / Scalar{ 1.35 });
     else if (eps >= Scalar{ 0.01 })
-      sigma = Scalar{ 1.05 };
+      omegaL = omega * (Scalar{ 1 } / Scalar{ 1.05 });
 
-    Scalar omegaL = omega / sigma;
     omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };
     omegaL = (omegaL < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaL : (Scalar{ 2 } - Scalar{ 1e-7 });
     omegaT = (omegaT > Scalar{ 1 }) ? omegaT : Scalar{ 1 };
@@ -299,23 +345,21 @@ struct Physics {
     Scalar L[kD] = { Scalar{ 0 }, Scalar{ 0 } };
     LBMINI_RAJA_UNROLL
     for (int idc = 0; idc < kQ; ++idc) {
-      const Scalar cix0 = static_cast<Scalar>(LatticeType::Velocity(idc, 0));
-      const Scalar ciy0 = static_cast<Scalar>(LatticeType::Velocity(idc, 1));
+      const Scalar cix0 = static_cast<Scalar>(Vx(idc));
+      const Scalar ciy0 = static_cast<Scalar>(Vy(idc));
       const Scalar uvi = ux * cix0 + uy * ciy0;
       const Scalar aux = Scalar{ 2 } * uvi * (f[idc] - feqLocal[idc]);
       L[0] += aux * cix0;
       L[1] += aux * ciy0;
     }
 
-    const Scalar invT = Scalar{ 1 } / temc;
     LBMINI_RAJA_UNROLL
     for (int idc = 0; idc < kQ; ++idc) {
       const Scalar fOld = f[idc];
       f[idc] = fOld + omegaL * (feqLocal[idc] - fOld);
-      const Scalar cidotL = L[0] * LatticeType::Cshift(idc, 0, ushiftX)
-        + L[1] * LatticeType::Cshift(idc, 1, ushiftY);
-      const Scalar Wi = LatticeType::Weights(idc, temc);
-      const Scalar gDiff = Wi * cidotL * invT;
+      const Scalar cidotL = L[0] * LatticeType::Cshift(idc, 0, p.ushiftX)
+        + L[1] * LatticeType::Cshift(idc, 1, p.ushiftY);
+      const Scalar gDiff = wi[idc] * cidotL * invT;
       const Scalar gOld = g[idc];
       g[idc] = gOld + omegaL * (geqLocal[idc] - gOld) + (omegaL - omegaT) * gDiff;
     }
@@ -461,11 +505,10 @@ LbmTube<Scalar, LatticeType, Backend>::LbmTube(
   params_.ushiftX = control.U(0);
   params_.ushiftY = control.U(1);
   params_.cv = fluid.specificHeatCv;
-  params_.cp = fluid.specificHeatCp;
   params_.invCv = Scalar{ 1 } / fluid.specificHeatCv;
   params_.rgas = fluid.constant;
   params_.viscosity = fluid.viscosity;
-  params_.conductivity = fluid.conductivity;
+  params_.condOverCp = fluid.conductivity / fluid.specificHeatCp;
   params_.densityL = fluid.densityL;
   params_.pressureL = fluid.pressureL;
   params_.densityR = fluid.densityR;
@@ -578,11 +621,12 @@ void LbmTube<Scalar, LatticeType, Backend>::Init() {
       }
 
       Scalar rho;
+      Scalar invRho;
       Scalar ux;
       Scalar uy;
       Scalar tem;
       Scalar pres;
-      Phys::Macroscopic(f, g, p, rho, ux, uy, tem, pres);
+      Phys::Macroscopic(f, g, p, rho, invRho, ux, uy, tem, pres);
       rhoOut[cell] = rho;
       pOut[cell] = pres;
       temOut[cell] = tem;
@@ -590,7 +634,7 @@ void LbmTube<Scalar, LatticeType, Backend>::Init() {
       uOut[1 * N + cell] = uy;
 
       Scalar xi[kD] = { Scalar{ 0 }, Scalar{ 0 } };
-      Phys::Collide(p, rho, ux, uy, tem, f, g, xi);
+      Phys::Collide(p, rho, invRho, ux, uy, tem, f, g, xi);
 
       LBMINI_RAJA_UNROLL
       for (int idc = 0; idc < kQ; ++idc) {
@@ -671,11 +715,12 @@ void LbmTube<Scalar, LatticeType, Backend>::step() {
       }
 
       Scalar rho;
+      Scalar invRho;
       Scalar ux;
       Scalar uy;
       Scalar tem;
       Scalar pres;
-      Phys::Macroscopic(f, g, p, rho, ux, uy, tem, pres);
+      Phys::Macroscopic(f, g, p, rho, invRho, ux, uy, tem, pres);
       if (kStoreMacro) {
         rhoOut[cell] = rho;
         pOut[cell] = pres;
@@ -689,7 +734,7 @@ void LbmTube<Scalar, LatticeType, Backend>::step() {
       for (int d = 0; d < kD; ++d)
         xi[d] = xiIo[d * N + cell];
 
-      Phys::Collide(p, rho, ux, uy, tem, f, g, xi);
+      Phys::Collide(p, rho, invRho, ux, uy, tem, f, g, xi);
 
       LBMINI_RAJA_UNROLL
       for (int idc = 0; idc < kQ; ++idc) {

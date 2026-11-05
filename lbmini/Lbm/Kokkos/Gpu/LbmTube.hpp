@@ -26,10 +26,10 @@ inline constexpr bool kHasDeviceBackend =
  * @brief GPU instantiation of the portable Kokkos LBM tube solver.
  *
  * Binds the shared implementation to `Kokkos::DefaultExecutionSpace` — CUDA,
- * HIP or SYCL, whichever Kokkos was configured with. Not a single line of the
- * solver differs from the CPU instantiation below the alias: the views move to
- * device memory and the `parallel_for` bodies become device kernels purely
- * through the execution-space template argument.
+ * HIP or SYCL, whichever Kokkos was configured with. The solver is the per-cell
+ * single-source template; the CPU target no longer instantiates it (it runs the
+ * vectorised `lbmini::kokkos::cpu::LbmTube`, see `Cpu/LbmTube.hpp`), so this one
+ * is tuned for the device: cell-major SoA, one thread per cell.
  */
 template<typename Scalar, typename LatticeType>
 using LbmTube = lbmini::kokkos::LbmTube<Scalar, LatticeType, Kokkos::DefaultExecutionSpace>;

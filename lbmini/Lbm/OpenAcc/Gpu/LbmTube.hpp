@@ -19,8 +19,9 @@ namespace lbmini::openacc::gpu {
 /**
  * @brief OpenACC (GPU) variant of the compressible LBM tube solver.
  *
- * Numerically equivalent to `lbmini::plain::LbmTube` (same arithmetic,
- * operation for operation, see `Lbm/OpenAcc/CellPhysics.hpp`); the design is
+ * Numerically equivalent to `lbmini::plain::LbmTube` (to rounding error: the
+ * per-cell physics, with the factorised energy closure of `lbmini::cuda::gpu`,
+ * is in `Lbm/OpenAcc/CellPhysics.hpp`); the design is
  * the one of `lbmini::alpaka::LbmTube`.
  *
  * ### State and data layout
@@ -408,11 +409,12 @@ void LbmTube<Scalar, LatticeType>::enqueueStep() {
       Cell::Gather(*prm, fIn, gIn, i, j, f, g);
 
       Scalar rho;
+      Scalar invRho;
       Scalar ux;
       Scalar uy;
       Scalar tem;
       Scalar pres;
-      Cell::Macroscopic(f, g, *prm, rho, ux, uy, tem, pres);
+      Cell::Macroscopic(f, g, *prm, rho, invRho, ux, uy, tem, pres);
       if constexpr (kStoreMacro) {
         rhoOut[cell] = rho;
         pOut[cell] = pres;
@@ -422,7 +424,7 @@ void LbmTube<Scalar, LatticeType>::enqueueStep() {
       }
 
       Scalar xi[kD] = { xiIo[0 * N + cell], xiIo[1 * N + cell] };
-      Cell::Collide(*prm, rho, ux, uy, tem, f, g, xi);
+      Cell::Collide(*prm, rho, invRho, ux, uy, tem, f, g, xi);
 
       for (int idc = 0; idc < kQ; ++idc) {
         fOut[idc * N + cell] = f[idc];

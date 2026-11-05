@@ -1,0 +1,786 @@
+{
+  "cpu_technologies": {
+    "Kokkos": {
+      "100": {
+        "mlups": 4.652746212090142,
+        "origin": "extrapolated",
+        "runtime": 0.0007307512262682873,
+        "speedup": 1.4667624166648294
+      },
+      "1000": {
+        "mlups": 13.000406638155248,
+        "origin": "extrapolated",
+        "runtime": 0.2661455211597114,
+        "speedup": 3.2888845339032056
+      },
+      "10000": {
+        "mlups": 9.127969658425398,
+        "origin": "extrapolated",
+        "runtime": 379.4929354089845,
+        "speedup": 2.552612404503254
+      },
+      "30000": {
+        "mlups": 6.586895711699207,
+        "origin": "extrapolated",
+        "runtime": 14199.101381532695,
+        "speedup": 1.8420078429306606
+      }
+    },
+    "MPI": {
+      "100": {
+        "mlups": 3.2241544024750444,
+        "origin": "extrapolated",
+        "runtime": 0.0010545400671227055,
+        "speedup": 1.016403708155493
+      },
+      "1000": {
+        "mlups": 16.401259991615756,
+        "origin": "extrapolated",
+        "runtime": 0.21095940200745159,
+        "speedup": 4.149243314023353
+      },
+      "10000": {
+        "mlups": 11.957615873566583,
+        "origin": "extrapolated",
+        "runtime": 289.689854284205,
+        "speedup": 3.3439154323850384
+      },
+      "30000": {
+        "mlups": 8.628815790052599,
+        "origin": "extrapolated",
+        "runtime": 10839.030786567513,
+        "speedup": 2.413025354606773
+      }
+    },
+    "OpenACC": {
+      "100": {
+        "mlups": 6.524322372951745,
+        "origin": "estimated",
+        "runtime": 0.0005211269164282215,
+        "speedup": 2.056770435057143
+      },
+      "1000": {
+        "mlups": 15.373135534931354,
+        "origin": "estimated",
+        "runtime": 0.2250679435004051,
+        "speedup": 3.8891450941266883
+      },
+      "10000": {
+        "mlups": 11.14600733805502,
+        "origin": "estimated",
+        "runtime": 310.783933200287,
+        "speedup": 3.1169512669821358
+      },
+      "30000": {
+        "mlups": 8.043145484147814,
+        "origin": "estimated",
+        "runtime": 11628.286493677599,
+        "speedup": 2.2492442133732626
+      }
+    },
+    "OpenCL": {
+      "100": {
+        "mlups": 0.33625738558430673,
+        "origin": "extrapolated",
+        "runtime": 0.010111302073237434,
+        "speedup": 0.10600399699846765
+      },
+      "1000": {
+        "mlups": 13.250116622310564,
+        "origin": "extrapolated",
+        "runtime": 0.2611297770899652,
+        "speedup": 3.352056965943852
+      },
+      "10000": {
+        "mlups": 13.195715948185605,
+        "origin": "extrapolated",
+        "runtime": 262.50943970010934,
+        "speedup": 3.690146820826583
+      },
+      "30000": {
+        "mlups": 9.522249530231058,
+        "origin": "extrapolated",
+        "runtime": 9822.04884497818,
+        "speedup": 2.662871720570119
+      }
+    },
+    "OpenMP": {
+      "100": {
+        "mlups": 7.2492470810574945,
+        "origin": "extrapolated",
+        "runtime": 0.00046901422478539935,
+        "speedup": 2.2853004833968256
+      },
+      "1000": {
+        "mlups": 17.08126170547928,
+        "origin": "extrapolated",
+        "runtime": 0.20256114915036458,
+        "speedup": 4.321272326807431
+      },
+      "10000": {
+        "mlups": 12.38445259783891,
+        "origin": "extrapolated",
+        "runtime": 279.7055398802583,
+        "speedup": 3.4632791855357064
+      },
+      "30000": {
+        "mlups": 8.936828315719794,
+        "origin": "extrapolated",
+        "runtime": 10465.457844309838,
+        "speedup": 2.499160237081403
+      }
+    },
+    "Plain": {
+      "100": {
+        "mlups": 3.172119873830489,
+        "origin": "measured",
+        "runtime": 0.0010718384346220607,
+        "speedup": 1.0
+      },
+      "1000": {
+        "mlups": 3.952831576828431,
+        "origin": "measured",
+        "runtime": 0.8753218883097832,
+        "speedup": 1.0
+      },
+      "10000": {
+        "mlups": 3.575932500493246,
+        "origin": "measured",
+        "runtime": 968.6983743463261,
+        "speedup": 1.0
+      },
+      "30000": {
+        "mlups": 3.575932500493246,
+        "origin": "extrapolated",
+        "runtime": 26154.856107350806,
+        "speedup": 1.0
+      }
+    },
+    "RAJA": {
+      "100": {
+        "mlups": 5.651379859448539,
+        "origin": "extrapolated",
+        "runtime": 0.0006016229813884376,
+        "speedup": 1.7815782770605775
+      },
+      "1000": {
+        "mlups": 12.4439477377048,
+        "origin": "extrapolated",
+        "runtime": 0.2780468122279476,
+        "speedup": 3.148109777975728
+      },
+      "10000": {
+        "mlups": 9.317874697876075,
+        "origin": "extrapolated",
+        "runtime": 371.7585943487293,
+        "speedup": 2.605718843012505
+      },
+      "30000": {
+        "mlups": 6.723934367259717,
+        "origin": "extrapolated",
+        "runtime": 13909.713404611437,
+        "speedup": 1.880330337983799
+      }
+    }
+  },
+  "gpu_technologies": {
+    "CUDA": {
+      "100": {
+        "mlups": 0.9559004187174353,
+        "origin": "measured",
+        "runtime": 0.003556855853836635,
+        "speedup": 0.30134435542725535
+      },
+      "1000": {
+        "mlups": 72.34426222187119,
+        "origin": "measured",
+        "runtime": 0.047826875190026735,
+        "speedup": 18.301883299545203
+      },
+      "10000": {
+        "mlups": 88.79684868601889,
+        "origin": "measured",
+        "runtime": 39.01039340087988,
+        "speedup": 24.831802242847342
+      },
+      "30000": {
+        "mlups": 88.79684868601889,
+        "origin": "extrapolated",
+        "runtime": 1053.2806218237567,
+        "speedup": 24.831802242847342
+      }
+    },
+    "Kokkos": {
+      "100": {
+        "mlups": 0.9345966625277363,
+        "origin": "measured",
+        "runtime": 0.0036379329568803132,
+        "speedup": 0.2946284187549209
+      },
+      "1000": {
+        "mlups": 59.87552343675713,
+        "origin": "measured",
+        "runtime": 0.05778655118822615,
+        "speedup": 15.147501802947668
+      },
+      "10000": {
+        "mlups": 73.75301639402703,
+        "origin": "measured",
+        "runtime": 46.96757053967133,
+        "speedup": 20.62483460855425
+      },
+      "30000": {
+        "mlups": 73.75301639402703,
+        "origin": "extrapolated",
+        "runtime": 1268.1244045711258,
+        "speedup": 20.62483460855425
+      }
+    },
+    "OpenACC": {
+      "100": {
+        "mlups": 0.9463414145302609,
+        "origin": "estimated",
+        "runtime": 0.003592783690744076,
+        "speedup": 0.2983309118729828
+      },
+      "1000": {
+        "mlups": 71.62081959965248,
+        "origin": "estimated",
+        "runtime": 0.04830997493942094,
+        "speedup": 18.118864466549752
+      },
+      "10000": {
+        "mlups": 87.9088801991587,
+        "origin": "estimated",
+        "runtime": 39.40443777866654,
+        "speedup": 24.58348422041887
+      },
+      "30000": {
+        "mlups": 87.9088801991587,
+        "origin": "estimated",
+        "runtime": 1063.9198200239966,
+        "speedup": 24.58348422041887
+      }
+    },
+    "OpenCL": {
+      "100": {
+        "mlups": 0.8603103768456918,
+        "origin": "estimated",
+        "runtime": 0.003952062059818483,
+        "speedup": 0.2712099198845298
+      },
+      "1000": {
+        "mlups": 65.10983599968408,
+        "origin": "estimated",
+        "runtime": 0.053140972433363035,
+        "speedup": 16.471694969590683
+      },
+      "10000": {
+        "mlups": 79.917163817417,
+        "origin": "estimated",
+        "runtime": 43.34488155653319,
+        "speedup": 22.34862201856261
+      },
+      "30000": {
+        "mlups": 79.917163817417,
+        "origin": "estimated",
+        "runtime": 1170.311802026396,
+        "speedup": 22.34862201856261
+      }
+    },
+    "OpenMP": {
+      "100": {
+        "mlups": 0.9367824103430865,
+        "origin": "estimated",
+        "runtime": 0.003629444748812893,
+        "speedup": 0.2953174683187102
+      },
+      "1000": {
+        "mlups": 70.89737697743377,
+        "origin": "estimated",
+        "runtime": 0.04880293386737422,
+        "speedup": 17.935845633554298
+      },
+      "10000": {
+        "mlups": 87.02091171229851,
+        "origin": "estimated",
+        "runtime": 39.80652387844885,
+        "speedup": 24.335166197990397
+      },
+      "30000": {
+        "mlups": 87.02091171229851,
+        "origin": "estimated",
+        "runtime": 1074.776144718119,
+        "speedup": 24.335166197990397
+      }
+    },
+    "RAJA": {
+      "100": {
+        "mlups": 0.6978009055124502,
+        "origin": "measured",
+        "runtime": 0.004872449968380468,
+        "speedup": 0.2199793618359768
+      },
+      "1000": {
+        "mlups": 49.073760234630214,
+        "origin": "measured",
+        "runtime": 0.07050611127937081,
+        "speedup": 12.414837131513892
+      },
+      "10000": {
+        "mlups": 74.70128914672448,
+        "origin": "measured",
+        "runtime": 46.37135502703557,
+        "speedup": 20.890016558316066
+      },
+      "30000": {
+        "mlups": 74.70128914672448,
+        "origin": "extrapolated",
+        "runtime": 1252.0265857299605,
+        "speedup": 20.890016558316066
+      }
+    }
+  },
+  "scalability": {
+    "100": [
+      {
+        "cores": 1,
+        "efficiency": 1.0,
+        "mlups": 3.1230115345181826,
+        "origin": "measured",
+        "runtime": 0.0010905655,
+        "serial_fraction": null,
+        "speedup": 1.0
+      },
+      {
+        "cores": 2,
+        "efficiency": 0.844540014698218,
+        "mlups": 5.300300166506586,
+        "origin": "measured",
+        "runtime": 0.0006456565,
+        "serial_fraction": 0.18407651810001324,
+        "speedup": 1.689080029396436
+      },
+      {
+        "cores": 3,
+        "efficiency": 0.7202709588406876,
+        "mlups": 6.7797913170928,
+        "origin": "measured",
+        "runtime": 0.0005047015,
+        "serial_fraction": 0.1941832012841045,
+        "speedup": 2.160812876522063
+      },
+      {
+        "cores": 4,
+        "efficiency": 0.5946701019684825,
+        "mlups": 7.456069048338017,
+        "origin": "measured",
+        "runtime": 0.000458475,
+        "serial_fraction": 0.2272015451310964,
+        "speedup": 2.37868040787393
+      },
+      {
+        "cores": 5,
+        "efficiency": 0.49941635221277847,
+        "mlups": 7.787643689554137,
+        "origin": "measured",
+        "runtime": 0.000436736,
+        "serial_fraction": 0.25058432987289614,
+        "speedup": 2.4970817610638925
+      },
+      {
+        "cores": 6,
+        "efficiency": 0.4194318392008551,
+        "mlups": 7.859342830610676,
+        "origin": "interpolated",
+        "runtime": 0.0004333503079140973,
+        "serial_fraction": 0.2768355220267987,
+        "speedup": 2.5165910352051304
+      },
+      {
+        "cores": 7,
+        "efficiency": 0.36230004419233836,
+        "mlups": 7.920270518783839,
+        "origin": "interpolated",
+        "runtime": 0.0004300167055620417,
+        "serial_fraction": 0.29335719846481656,
+        "speedup": 2.5361003093463683
+      },
+      {
+        "cores": 8,
+        "efficiency": 0.3194511979359508,
+        "mlups": 8.175233906153508,
+        "origin": "measured",
+        "runtime": 0.000426734,
+        "serial_fraction": 0.3043383717634828,
+        "speedup": 2.5556095834876063
+      },
+      {
+        "cores": 9,
+        "efficiency": 0.2773310861073723,
+        "mlups": 7.79497362714401,
+        "origin": "extrapolated",
+        "runtime": 0.00043692882087343943,
+        "serial_fraction": 0.3257248060594429,
+        "speedup": 2.4959797749663504
+      },
+      {
+        "cores": 10,
+        "efficiency": 0.24440742790335496,
+        "mlups": 7.632872164640987,
+        "origin": "extrapolated",
+        "runtime": 0.0004462080016779351,
+        "serial_fraction": 0.3435031862704207,
+        "speedup": 2.4440742790335497
+      },
+      {
+        "cores": 11,
+        "efficiency": 0.21678733178693488,
+        "mlups": 7.447322714788196,
+        "origin": "extrapolated",
+        "runtime": 0.00045732523835506335,
+        "serial_fraction": 0.36128156648139853,
+        "speedup": 2.3846606496562837
+      },
+      {
+        "cores": 12,
+        "efficiency": 0.19343634077056293,
+        "mlups": 7.249247081057494,
+        "origin": "extrapolated",
+        "runtime": 0.000469821016936666,
+        "serial_fraction": 0.3790599466923763,
+        "speedup": 2.321236089246755
+      }
+    ],
+    "1000": [
+      {
+        "cores": 1,
+        "efficiency": 1.0,
+        "mlups": 3.343927638552202,
+        "origin": "measured",
+        "runtime": 1.0352670860000002,
+        "serial_fraction": null,
+        "speedup": 1.0
+      },
+      {
+        "cores": 2,
+        "efficiency": 0.8661285536353273,
+        "mlups": 5.802357376730022,
+        "origin": "measured",
+        "runtime": 0.5976405475,
+        "serial_fraction": 0.1545630216239675,
+        "speedup": 1.7322571072706545
+      },
+      {
+        "cores": 3,
+        "efficiency": 0.7696644233186912,
+        "mlups": 7.825062955878963,
+        "origin": "measured",
+        "runtime": 0.4483629725,
+        "serial_fraction": 0.1496337687586833,
+        "speedup": 2.3089932699560736
+      },
+      {
+        "cores": 4,
+        "efficiency": 0.7230004156843324,
+        "mlups": 9.673705440345868,
+        "origin": "measured",
+        "runtime": 0.357975965,
+        "serial_fraction": 0.12770835641151637,
+        "speedup": 2.8920016627373295
+      },
+      {
+        "cores": 5,
+        "efficiency": 0.669670182577088,
+        "mlups": 11.193135921393907,
+        "origin": "measured",
+        "runtime": 0.309187153,
+        "serial_fraction": 0.12331809972175617,
+        "speedup": 3.34835091288544
+      },
+      {
+        "cores": 6,
+        "efficiency": 0.5834493641533158,
+        "mlups": 11.705309081932295,
+        "origin": "measured",
+        "runtime": 0.295731772,
+        "serial_fraction": 0.1427889587132107,
+        "speedup": 3.500696184919895
+      },
+      {
+        "cores": 7,
+        "efficiency": 0.5690426431740696,
+        "mlups": 13.397877064272276,
+        "origin": "measured",
+        "runtime": 0.25990195950000006,
+        "serial_fraction": 0.1262229237109801,
+        "speedup": 3.9832985022184872
+      },
+      {
+        "cores": 8,
+        "efficiency": 0.5336926692283712,
+        "mlups": 14.281250114173005,
+        "origin": "measured",
+        "runtime": 0.242477353,
+        "serial_fraction": 0.12481965147411521,
+        "speedup": 4.26954135382697
+      },
+      {
+        "cores": 9,
+        "efficiency": 0.49746875269147167,
+        "mlups": 14.971495602969922,
+        "origin": "extrapolated",
+        "runtime": 0.23122995283597889,
+        "serial_fraction": 0.12627206346872713,
+        "speedup": 4.477218774223245
+      },
+      {
+        "cores": 10,
+        "efficiency": 0.47045687721448415,
+        "mlups": 15.731737544644732,
+        "origin": "extrapolated",
+        "runtime": 0.2200556812198572,
+        "serial_fraction": 0.12506592549421175,
+        "speedup": 4.7045687721448415
+      },
+      {
+        "cores": 11,
+        "efficiency": 0.44670818778116406,
+        "mlups": 16.43135841037902,
+        "origin": "extrapolated",
+        "runtime": 0.21068606354372293,
+        "serial_fraction": 0.12385978751969637,
+        "speedup": 4.913790065592805
+      },
+      {
+        "cores": 12,
+        "efficiency": 0.4256786118951137,
+        "mlups": 17.08126170547928,
+        "origin": "extrapolated",
+        "runtime": 0.2026699363225794,
+        "serial_fraction": 0.122653649545181,
+        "speedup": 5.108143342741364
+      }
+    ],
+    "10000": [
+      {
+        "cores": 1,
+        "efficiency": 1.0,
+        "mlups": 2.976466340653991,
+        "origin": "extrapolated",
+        "runtime": 1163.796127201925,
+        "serial_fraction": null,
+        "speedup": 1.0
+      },
+      {
+        "cores": 2,
+        "efficiency": 0.9168992177446763,
+        "mlups": 5.458239318778007,
+        "origin": "extrapolated",
+        "runtime": 634.6368852099952,
+        "serial_fraction": 0.09063240609990826,
+        "speedup": 1.8337984354893526
+      },
+      {
+        "cores": 3,
+        "efficiency": 0.840877380633768,
+        "mlups": 7.5085296602211145,
+        "origin": "extrapolated",
+        "runtime": 461.341987946278,
+        "serial_fraction": 0.09461701731487973,
+        "speedup": 2.5226321419013042
+      },
+      {
+        "cores": 4,
+        "efficiency": 0.7299533659409203,
+        "mlups": 8.69072649588094,
+        "origin": "extrapolated",
+        "runtime": 398.5857801004093,
+        "serial_fraction": 0.12331684308398057,
+        "speedup": 2.9198134637636812
+      },
+      {
+        "cores": 5,
+        "efficiency": 0.699958549689559,
+        "mlups": 10.417015315019782,
+        "origin": "extrapolated",
+        "runtime": 332.5328700444003,
+        "serial_fraction": 0.10716400651278331,
+        "speedup": 3.4997927484477946
+      },
+      {
+        "cores": 6,
+        "efficiency": 0.6560822303694263,
+        "mlups": 11.716840052374769,
+        "origin": "extrapolated",
+        "runtime": 295.64285118818503,
+        "serial_fraction": 0.10483983674940285,
+        "speedup": 3.9364933822165575
+      },
+      {
+        "cores": 7,
+        "efficiency": 0.5936843306588934,
+        "mlups": 12.369569990259231,
+        "origin": "extrapolated",
+        "runtime": 280.0420712060181,
+        "serial_fraction": 0.11406613704687195,
+        "speedup": 4.155790314612253
+      },
+      {
+        "cores": 8,
+        "efficiency": 0.5093079322181809,
+        "mlups": 12.127503338203999,
+        "origin": "extrapolated",
+        "runtime": 285.6317498662503,
+        "serial_fraction": 0.1376355292969297,
+        "speedup": 4.0744634577454475
+      },
+      {
+        "cores": 9,
+        "efficiency": 0.46977188086018656,
+        "mlups": 12.58434172049456,
+        "origin": "extrapolated",
+        "runtime": 275.26270955902385,
+        "serial_fraction": 0.14108659456397404,
+        "speedup": 4.227946927741679
+      },
+      {
+        "cores": 10,
+        "efficiency": 0.42366488093812726,
+        "mlups": 12.610242578295166,
+        "origin": "extrapolated",
+        "runtime": 274.69733262405754,
+        "serial_fraction": 0.15115068142896487,
+        "speedup": 4.236648809381273
+      },
+      {
+        "cores": 11,
+        "efficiency": 0.3828267469451264,
+        "mlups": 12.53418019242655,
+        "origin": "extrapolated",
+        "runtime": 276.36430518950345,
+        "serial_fraction": 0.1612147682939557,
+        "speedup": 4.211094216396391
+      },
+      {
+        "cores": 12,
+        "efficiency": 0.34673253394151127,
+        "mlups": 12.38445259783891,
+        "origin": "extrapolated",
+        "runtime": 279.70553988025836,
+        "serial_fraction": 0.17127885515894653,
+        "speedup": 4.160790407298135
+      }
+    ],
+    "30000": [
+      {
+        "cores": 1,
+        "efficiency": 1.0,
+        "mlups": 2.976466340653991,
+        "origin": "extrapolated",
+        "runtime": 31422.495434451972,
+        "serial_fraction": null,
+        "speedup": 1.0
+      },
+      {
+        "cores": 2,
+        "efficiency": 0.9278285978014952,
+        "mlups": 5.52330118250468,
+        "origin": "extrapolated",
+        "runtime": 16933.35143414855,
+        "serial_fraction": 0.07778527453186522,
+        "speedup": 1.8556571956029904
+      },
+      {
+        "cores": 3,
+        "efficiency": 0.8529399700116507,
+        "mlups": 7.616241334014308,
+        "origin": "extrapolated",
+        "runtime": 12280.073056811083,
+        "serial_fraction": 0.08620772572443791,
+        "speedup": 2.558819910034952
+      },
+      {
+        "cores": 4,
+        "efficiency": 0.679605122923715,
+        "mlups": 8.091287093273824,
+        "origin": "extrapolated",
+        "runtime": 11559.100415278623,
+        "serial_fraction": 0.15714756813384065,
+        "speedup": 2.71842049169486
+      },
+      {
+        "cores": 5,
+        "efficiency": 0.6655688963175088,
+        "mlups": 9.905217086376455,
+        "origin": "extrapolated",
+        "runtime": 9442.296840584904,
+        "serial_fraction": 0.1256185143013922,
+        "speedup": 3.327844481587544
+      },
+      {
+        "cores": 6,
+        "efficiency": 0.6503433836722688,
+        "mlups": 11.614351148205197,
+        "origin": "extrapolated",
+        "runtime": 8052.795959630787,
+        "serial_fraction": 0.1075298450345842,
+        "speedup": 3.9020603020336133
+      },
+      {
+        "cores": 7,
+        "efficiency": 0.5471876322370726,
+        "mlups": 11.400798985630608,
+        "origin": "extrapolated",
+        "runtime": 8203.635562549718,
+        "serial_fraction": 0.13792111428386708,
+        "speedup": 3.830313425659508
+      },
+      {
+        "cores": 8,
+        "efficiency": 0.42302213672180744,
+        "mlups": 10.072889210431924,
+        "origin": "extrapolated",
+        "runtime": 9285.121482636612,
+        "serial_fraction": 0.19484892605974266,
+        "speedup": 3.3841770937744595
+      },
+      {
+        "cores": 9,
+        "efficiency": 0.38343531694500244,
+        "mlups": 10.271540832343153,
+        "origin": "extrapolated",
+        "runtime": 9105.547213081985,
+        "serial_fraction": 0.20100022605098009,
+        "speedup": 3.450917852505022
+      },
+      {
+        "cores": 10,
+        "efficiency": 0.3307669906960401,
+        "mlups": 9.845168144061752,
+        "origin": "extrapolated",
+        "runtime": 9499.888537344352,
+        "serial_fraction": 0.22480847650341354,
+        "speedup": 3.307669906960401
+      },
+      {
+        "cores": 11,
+        "efficiency": 0.2868479687512676,
+        "mlups": 9.391726562604275,
+        "origin": "extrapolated",
+        "runtime": 9958.552282857901,
+        "serial_fraction": 0.248616726955847,
+        "speedup": 3.155327656263944
+      },
+      {
+        "cores": 12,
+        "efficiency": 0.2502080009455157,
+        "mlups": 8.936828315719794,
+        "origin": "extrapolated",
+        "runtime": 10465.45784430984,
+        "serial_fraction": 0.2724249774082804,
+        "speedup": 3.0024960113461883
+      }
+    ]
+  }
+}

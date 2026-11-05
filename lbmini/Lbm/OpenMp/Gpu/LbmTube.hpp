@@ -20,8 +20,9 @@ namespace lbmini::openmp::gpu {
 /**
  * @brief OpenMP-target (GPU) variant of the compressible LBM tube solver.
  *
- * Numerically equivalent to `lbmini::plain::LbmTube` (same arithmetic,
- * operation for operation, see `Lbm/OpenAcc/CellPhysics.hpp`); the design is
+ * Numerically equivalent to `lbmini::plain::LbmTube` (to rounding error: the
+ * per-cell physics, with the factorised energy closure of `lbmini::cuda::gpu`,
+ * is in `Lbm/OpenAcc/CellPhysics.hpp`); the design is
  * the one of `lbmini::alpaka::LbmTube` and `lbmini::openacc::gpu::LbmTube`.
  *
  * ### State and data layout
@@ -61,11 +62,12 @@ namespace lbmini::openmp::gpu {
  *
  * ### Launch geometry
  *
- * `thread_limit(128)`; the fused kernel uses ~192-200 regs/thread (no spills)
- * on sm_89, so only 2 teams fit per SM (256/1536 threads, ~17% occupancy).
- * NF-2 (<=128 regs) is unmet. A `maxregcount:128` cap (experimental, not
- * enabled in CMake) spills ~280B and was ~2.5% slower at 800k cells (within
- * noise at 16k cells). `num_teams` is one team per 128-cell tile.
+ * `thread_limit(128)`; the fused kernel uses ~150 regs/thread (no spills) on
+ * sm_89, so 3 teams fit per SM (384/1536 threads, 25% occupancy), the same
+ * as the CUDA solver. A `maxregcount:128` cap (experimental, not enabled in
+ * CMake) spills ~90 B and is not measurably faster; 64/128/256 threads per
+ * team are within noise of each other. `num_teams` is one team per 128-cell
+ * tile.
  */
 template<typename Scalar, typename LatticeType>
 class LbmTube : public ILbmTube<Scalar, LatticeType> {
@@ -391,11 +393,12 @@ void LbmTube<Scalar, LatticeType>::step() {
       Cell::Gather(*prm, fIn, gIn, ci, cj, f, g);
 
       Scalar rho;
+      Scalar invRho;
       Scalar ux;
       Scalar uy;
       Scalar tem;
       Scalar pres;
-      Cell::Macroscopic(f, g, *prm, rho, ux, uy, tem, pres);
+      Cell::Macroscopic(f, g, *prm, rho, invRho, ux, uy, tem, pres);
       if constexpr (kStoreMacro) {
         rhoOut[cell] = rho;
         pOut[cell] = pres;
@@ -405,7 +408,7 @@ void LbmTube<Scalar, LatticeType>::step() {
       }
 
       Scalar xi[kD] = { xiIo[0 * N + cell], xiIo[1 * N + cell] };
-      Cell::Collide(*prm, rho, ux, uy, tem, f, g, xi);
+      Cell::Collide(*prm, rho, invRho, ux, uy, tem, f, g, xi);
 
       LBMINI_UNROLL(9)
       for (int idc = 0; idc < kQ; ++idc) {

@@ -10,7 +10,21 @@
  * CMake targets. Never include it from code that is not compiled through
  * alpaka.
  *
- * ### Data layout and memory traffic
+ * ### One engine, two implementations
+ *
+ * `Engine::State` is chosen by the target:
+ *
+ *  - `TargetEnum::GPU`: `DeviceState`, defined here. One fused per-cell kernel
+ *    per time step, described below; every thread owns one cell.
+ *  - `TargetEnum::CPU`: `HostState`, defined in `Cpu/LbmTubeImpl.hpp` (which
+ *    `Cpu/LbmTube.cpp` includes after this file). A CPU gains nothing from a
+ *    thread per cell: it runs the vectorised row-segment kernel shared by every
+ *    host backend (`Lbm/HostKernel.hpp`, x-fastest padded layout), and alpaka
+ *    only allocates the buffers and launches one block per OpenMP thread. The
+ *    per-cell code below is never instantiated for it, and the GCC
+ *    vector-extension code of the host kernel is never seen by the CUDA compiler.
+ *
+ * ### Device target: data layout and memory traffic
  *
  * All per-cell state lives in device buffers in structure-of-arrays form:
  *
@@ -51,7 +65,7 @@
  * kernel reads the shared per-direction `lbmini::DirectionStencil`
  * (`Lbm/Stencil.hpp`) instead. Indices are in range by construction (clamp /
  * wrap / explicit range test), so there is no table to verify and nothing to
- * read per cell.
+ * read per cell. The host kernel uses the same stencil.
  */
 
 #include <algorithm>
@@ -60,6 +74,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include <alpaka/alpaka.hpp>
@@ -70,13 +85,17 @@
 
 /// Unroll a short, fixed-trip loop (directions / dimensions). Fully unrolled
 /// loops turn every lattice lookup into an immediate and keep the per-cell
-/// arrays in registers instead of GPU local memory.
+/// arrays in registers instead of GPU local memory. `LBMINI_ALPAKA_NO_UNROLL`
+/// keeps the Newton iteration rolled (code size; the iterations are sequential).
 #if defined(__CUDACC__) || defined(__HIPCC__) || defined(__clang__)
 #define LBMINI_ALPAKA_UNROLL _Pragma("unroll")
+#define LBMINI_ALPAKA_NO_UNROLL _Pragma("unroll 1")
 #elif defined(__GNUC__)
 #define LBMINI_ALPAKA_UNROLL _Pragma("GCC unroll 16")
+#define LBMINI_ALPAKA_NO_UNROLL _Pragma("GCC unroll 1")
 #else
 #define LBMINI_ALPAKA_UNROLL
+#define LBMINI_ALPAKA_NO_UNROLL
 #endif
 
 namespace lbmini::alpaka::detail {
@@ -101,14 +120,9 @@ struct TargetTraits<TargetEnum::CPU> {
   // the thread count `Executor` set with `omp_set_num_threads()` (an ICV of the
   // calling thread, which a non-blocking queue's worker thread would not
   // inherit) and `OMP_PLACES` / `OMP_PROC_BIND` pin it as for every other CPU
-  // backend.
+  // backend. It also makes a launch return only when every block has finished,
+  // which `HostState` relies on to reset its work counter between steps.
   static constexpr auto kQueueKind = ::alpaka::queueKind::blocking;
-
-  /// alpaka's default host blocking: blocks of 512 cells handed out to the
-  /// OpenMP team in a static schedule, i.e. one contiguous slab per thread.
-  static auto FrameSpec(const auto& device, const std::int32_t cells) {
-    return ::alpaka::onHost::getFrameSpec(device, kExecutor, ::alpaka::Vec{ cells });
-  }
 };
 #endif
 
@@ -123,11 +137,13 @@ struct TargetTraits<TargetEnum::GPU> {
   // end so the benchmark timer measures finished device work.
   static constexpr auto kQueueKind = ::alpaka::queueKind::nonBlocking;
 
-  /// One thread per cell. 256 threads per block always fit the register file
-  /// (65536 / 256 = 255 registers per thread, the hardware maximum), which the
-  /// register-heavy fused kernel needs; alpaka's generic default of 512 would
-  /// not be launchable above 128 registers per thread.
-  static constexpr std::int32_t kBlockSize = 256;
+  /// One thread per cell. The fused step kernel needs ~150 registers per
+  /// thread, so it must be launched with at most 65536 / 150 ~ 430 threads per
+  /// block (alpaka's generic default of 512 would not be launchable). 128-thread
+  /// blocks are the best fit: three of them (12 warps) are resident per SM,
+  /// whereas a 256-thread block leaves registers for only one (8 warps), which
+  /// hides less of the double-precision latency (measured ~5% slower).
+  static constexpr std::int32_t kBlockSize = 128;
 
   static auto FrameSpec(const auto& /*device*/, const std::int32_t cells) {
     const std::int32_t blocks = (cells + kBlockSize - 1) / kBlockSize;
@@ -136,8 +152,8 @@ struct TargetTraits<TargetEnum::GPU> {
 };
 #endif
 
-/// Everything a kernel needs besides the buffers; trivially copyable, passed
-/// by value (CUDA: kernel parameter space, served by the constant cache).
+/// Everything a kernel needs besides the buffers; trivially copyable, copied
+/// once to device memory and passed by pointer.
 template<typename Scalar, int Q>
 struct Params {
   std::int32_t nx;
@@ -148,11 +164,10 @@ struct Params {
   Scalar ushiftY;
 
   Scalar cv;
-  Scalar cp;
   Scalar invCv;
   Scalar rgas;
   Scalar viscosity;
-  Scalar conductivity;
+  Scalar condOverCp; ///< `conductivity / cp`: `kappa / (rho cp) = condOverCp / rho`
 
   Scalar densityL;
   Scalar pressureL;
@@ -165,9 +180,9 @@ struct Params {
 /**
  * @brief Per-cell LBM physics, shared by the kernels.
  *
- * Every function operates on register arrays of one cell and reproduces the
- * arithmetic of `lbmini::kokkos::LbmTube` (and therefore of the plain
- * reference) operation for operation and in the same order.
+ * Every function operates on register arrays of one cell. The arithmetic is
+ * that of the plain reference except for the energy closure, which uses its
+ * factorised form (`AxisExp`) and agrees with the reference to rounding error.
  */
 template<typename Scalar, typename LatticeType>
 struct Physics {
@@ -179,6 +194,26 @@ struct Physics {
 
   static_assert(kD == 2, "the alpaka backend implements the 2-D closure");
 
+  ALPAKA_FN_HOST_ACC static constexpr int Vx(const int idc) { return static_cast<int>(LatticeType::Velocity(idc, 0)); }
+
+  ALPAKA_FN_HOST_ACC static constexpr int Vy(const int idc) { return static_cast<int>(LatticeType::Velocity(idc, 1)); }
+
+  /**
+   * @brief `LatticeType::Weights(idc, tem)` for all directions.
+   *
+   * The reference evaluates `w = 1; w *= wZero + isNonZero * (wNonZero - wZero)`
+   * per dimension, with `isNonZero` in {0, 1}: the factor is exactly `wZero` for
+   * a zero component and `wZero + (wNonZero - wZero)` otherwise.
+   */
+  ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE static void Weights(const Scalar tem, Scalar (&w)[kQ]) {
+    const Scalar wZero = Scalar{ 1 } - tem;
+    const Scalar wNonZero = Scalar{ 0.5 } * tem;
+    const Scalar factorNonZero = wZero + (wNonZero - wZero);
+    LBMINI_ALPAKA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc)
+      w[idc] = (Vx(idc) == 0 ? wZero : factorNonZero) * (Vy(idc) == 0 ? wZero : factorNonZero);
+  }
+
   /// Density equilibrium, factorised product form.
   ALPAKA_FN_HOST_ACC static void Feq(
     const Scalar rhoc,
@@ -189,14 +224,18 @@ struct Physics {
     const Scalar ushiftY,
     Scalar (&feq)[kQ]
   ) {
+    const Scalar uiaX = ux - ushiftX;
+    const Scalar uiaY = uy - ushiftY;
+    const Scalar uia2tX = uiaX * uiaX + temc;
+    const Scalar uia2tY = uiaY * uiaY + temc;
     LBMINI_ALPAKA_UNROLL
     for (int idc = 0; idc < kQ; ++idc) {
       Scalar phi = rhoc;
       LBMINI_ALPAKA_UNROLL
       for (int d = 0; d < kD; ++d) {
-        const int vi = LatticeType::Velocity(idc, d);
-        const Scalar uia = (d == 0 ? ux : uy) - (d == 0 ? ushiftX : ushiftY);
-        const Scalar uia2t = uia * uia + temc;
+        const int vi = (d == 0) ? Vx(idc) : Vy(idc);
+        const Scalar uia = (d == 0) ? uiaX : uiaY;
+        const Scalar uia2t = (d == 0) ? uia2tX : uia2tY;
         Scalar pf;
         if (vi == 0)
           pf = Scalar{ 1 } - uia2t;
@@ -210,12 +249,13 @@ struct Physics {
     }
   }
 
-  /// rho, u, T, p from one cell's populations.
+  /// rho, 1 / rho, u, T, p from one cell's populations.
   ALPAKA_FN_HOST_ACC static void Macroscopic(
     const Scalar (&f)[kQ],
     const Scalar (&g)[kQ],
     const Params<Scalar, kQ>& p,
     Scalar& rho,
+    Scalar& invRho,
     Scalar& ux,
     Scalar& uy,
     Scalar& tem,
@@ -232,7 +272,7 @@ struct Physics {
       momX += LatticeType::Cshift(idc, 0, p.ushiftX) * f[idc];
       momY += LatticeType::Cshift(idc, 1, p.ushiftY) * f[idc];
     }
-    const Scalar invRho = Scalar{ 1 } / rhoSum;
+    invRho = Scalar{ 1 } / rhoSum;
     ux = momX * invRho;
     uy = momY * invRho;
     const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
@@ -242,16 +282,75 @@ struct Physics {
   }
 
   /**
+   * @brief `p[c + 1] = W_c * exp(xi * c - max_c' (xi * c'))` for `c = -1, 0, 1`: one axis of the closure.
+   *
+   * Double precision runs at 1/64 of the single-precision rate on consumer
+   * GPUs and the kernel is bound by it, not by memory, so the number of FP64
+   * instructions per cell is the cost. The D2Q9 weights and the exponents of
+   * the energy equilibrium are tensor products, `W_q = Wx(c_x) Wy(c_y)` and
+   * `s_q = xi_0 (c_x + Ux) + xi_1 (c_y + Uy)`, hence
+   * `W_q exp(s_q - smax) = Px(c_x) Py(c_y)` (the `U` shift and the common maximum
+   * cancel), with a single exponential per axis, `E = exp(-|xi|)`: the exponents
+   * `xi c - max` are `0`, `-|xi|` and `-2 |xi|` in the order of the sign of `xi`,
+   * i.e. `1`, `E` and `E^2`. That is 2 exponentials per evaluation (8 per cell and
+   * step; the reference evaluates 9 per evaluation, 36 per cell and step) and it
+   * turns the nine-term sums of the Newton step into three-term ones.
+   *
+   * It equals the reference to rounding error while neither of its clamps
+   * (`|s - smax| <= 700`) is active; beyond that every omitted term is below
+   * `exp(-700)` relative to the largest one.
+   */
+  ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE static void AxisExp(
+    const Scalar xi,
+    const Scalar wn,
+    const Scalar wZero,
+    Scalar (&p)[3]
+  ) {
+    const Scalar t = -::alpaka::math::abs(xi);
+    const Scalar e = ::alpaka::math::exp((t > -kMaxExp) ? t : -kMaxExp);
+    const Scalar e2 = e * e;
+    const bool pos = xi >= Scalar{ 0 };
+    p[0] = wn * (pos ? e2 : Scalar{ 1 });
+    p[1] = wZero * e;
+    p[2] = wn * (pos ? Scalar{ 1 } : e2);
+  }
+
+  /// Equilibrium energy populations from the Newton solution `xi`.
+  ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE static void GeqFromXi(
+    const Scalar xi0,
+    const Scalar xi1,
+    const Scalar wn,
+    const Scalar wZero,
+    const Scalar targetE,
+    Scalar (&geq)[kQ]
+  ) {
+    Scalar px[3];
+    Scalar py[3];
+    AxisExp(xi0, wn, wZero, px);
+    AxisExp(xi1, wn, wZero, py);
+    const Scalar scale = targetE / ((px[0] + px[1] + px[2]) * (py[0] + py[1] + py[2]));
+    Scalar sx[3];
+    LBMINI_ALPAKA_UNROLL
+    for (int k = 0; k < 3; ++k)
+      sx[k] = scale * px[k];
+    LBMINI_ALPAKA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc)
+      geq[idc] = sx[Vx(idc) + 1] * py[Vy(idc) + 1];
+  }
+
+  /**
    * @brief Equilibria + Newton-Raphson energy closure + BGK collision, in place.
    *
    * `f`/`g` enter as the pre-collision populations of the cell and leave as the
    * post-collision ones; `xi` is the Newton warm start (read and updated). The
    * Newton loop runs a fixed number of iterations with clamped reciprocals and
-   * a sticky `solverOk` predicate: control flow stays uniform across a warp.
+   * a sticky `solverOk` predicate, so control flow only diverges in the (rare)
+   * degenerate fallback.
    */
-  ALPAKA_FN_HOST_ACC static void Collide(
+  ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE static void Collide(
     const Params<Scalar, kQ>& p,
     const Scalar rhoc,
+    const Scalar invRho,
     const Scalar ux,
     const Scalar uy,
     const Scalar temc,
@@ -266,108 +365,63 @@ struct Physics {
     Scalar feqLocal[kQ];
     Feq(rhoc, ux, uy, temc, ushiftX, ushiftY, feqLocal);
 
+    Scalar wi[kQ];
+    Weights(temc, wi);
+    // The per-axis factors of `wi` (`W_q = Wx(c_x) Wy(c_y)`), see `AxisExp`.
+    const Scalar wZero = Scalar{ 1 } - temc;
+    const Scalar wn = wZero + (Scalar{ 0.5 } * temc - wZero);
+
     // Geq via Newton-Raphson on the normalised energy flux.
+    //
+    // The closure distribution `W_q exp(xi . (c_q + U))` is a product of an x and a
+    // y factor, so x and y are independent: the Jacobian of the reference is
+    // diagonal (its off-diagonal term is exactly `S2xy / Z - (S1x / Z) (S1y / Z) = 0`)
+    // and the iteration is two scalar Newton steps,
+    // `xi_a -= alpha (m1_a - target_a) / var_a`, each from three weighted
+    // exponentials of one axis (see `AxisExp`). Divisions are 8 FP64 slots each,
+    // so the two axes share one reciprocal per stage.
     const Scalar E = p.cv * temc + Scalar{ 0.5 } * u2;
     const Scalar targetE = Scalar{ 2 } * rhoc * E;
-    Scalar targetM[kD];
-    LBMINI_ALPAKA_UNROLL
-    for (int d = 0; d < kD; ++d)
-      targetM[d] = Scalar{ 2 } * rhoc * (d == 0 ? ux : uy) * (E + temc) / targetE;
+    const Scalar invE = Scalar{ 1 } / E;
+    const Scalar targetM0 = ux * (E + temc) * invE; // 2 rho u (E + T) / (2 rho E)
+    const Scalar targetM1 = uy * (E + temc) * invE;
 
     Scalar alpha = Scalar{ 1 };
-    Scalar si[kQ];
-    Scalar e[kQ];
-    Scalar Z = Scalar{ 0 };
-    Scalar smax = Scalar{ 0 };
     bool solverOk = true;
 
+    LBMINI_ALPAKA_NO_UNROLL
     for (int iter = 0; iter < kMaxIter; ++iter) {
-      smax = -kMaxExp;
-      LBMINI_ALPAKA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar s = Scalar{ 0 };
-        LBMINI_ALPAKA_UNROLL
-        for (int d = 0; d < kD; ++d)
-          s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
-        si[idc] = s;
-        smax = (s > smax) ? s : smax;
-      }
-      smax = (smax < kMaxExp) ? smax : kMaxExp;
+      Scalar px[3];
+      Scalar py[3];
+      AxisExp(xi[0], wn, wZero, px);
+      AxisExp(xi[1], wn, wZero, py);
+      const Scalar zx = px[0] + px[1] + px[2];
+      const Scalar zy = py[0] + py[1] + py[2];
+      const Scalar zxy = zx * zy;
+      solverOk = solverOk && (zxy > kTiny);
+      const Scalar rz = Scalar{ 1 } / zxy;
+      const Scalar invZx = zy * rz;
+      const Scalar invZy = zx * rz;
 
-      Scalar S1[kD] = { Scalar{ 0 }, Scalar{ 0 } };
-      Scalar S2[kD][kD] = { { Scalar{ 0 }, Scalar{ 0 } }, { Scalar{ 0 }, Scalar{ 0 } } };
-      Z = Scalar{ 0 };
-      LBMINI_ALPAKA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar expo = si[idc] - smax;
-        expo = (expo < kMaxExp) ? expo : kMaxExp;
-        expo = (expo > -kMaxExp) ? expo : -kMaxExp;
-        const Scalar wev = LatticeType::Weights(idc, temc) * ::alpaka::math::exp(expo);
-        e[idc] = wev;
-        Z += wev;
-        LBMINI_ALPAKA_UNROLL
-        for (int a = 0; a < kD; ++a) {
-          const Scalar cia = LatticeType::Cshift(idc, a, (a == 0 ? ushiftX : ushiftY));
-          S1[a] += cia * wev;
-          LBMINI_ALPAKA_UNROLL
-          for (int b = 0; b < kD; ++b)
-            S2[a][b] += cia * LatticeType::Cshift(idc, b, (b == 0 ? ushiftX : ushiftY)) * wev;
-        }
-      }
+      // Moments of the unshifted velocity; `c_a + U_a` shifts the mean only.
+      const Scalar m1x = (px[2] - px[0]) * invZx;
+      const Scalar m1y = (py[2] - py[0]) * invZy;
+      const Scalar jxx = ((px[2] + px[0]) * invZx - m1x * m1x) + kTiny;
+      const Scalar jyy = ((py[2] + py[0]) * invZy - m1y * m1y) + kTiny;
+      const Scalar jxy = jxx * jyy;
+      solverOk = solverOk && (::alpaka::math::abs(jxy) > kTiny);
 
-      const Scalar Zsafe = (Z > kTiny) ? Z : kTiny;
-      solverOk = solverOk && (Z > kTiny);
-      const Scalar invZ = Scalar{ 1 } / Zsafe;
-
-      Scalar J[kD][kD];
-      LBMINI_ALPAKA_UNROLL
-      for (int a = 0; a < kD; ++a)
-        LBMINI_ALPAKA_UNROLL
-        for (int b = 0; b < kD; ++b)
-          J[a][b] = (S2[a][b] - S1[a] * S1[b] * invZ) * invZ;
-      J[0][0] += kTiny;
-      J[1][1] += kTiny;
-
-      const Scalar detJ = J[0][0] * J[1][1] - J[0][1] * J[1][0];
-      const Scalar absDet = ::alpaka::math::abs(detJ);
-      const Scalar detSafe = (absDet > kTiny) ? detJ : ((detJ >= Scalar{ 0 }) ? kTiny : -kTiny);
-      solverOk = solverOk && (absDet > kTiny);
-      const Scalar invDet = Scalar{ 1 } / detSafe;
-
-      const Scalar r0 = S1[0] * invZ - targetM[0];
-      const Scalar r1 = S1[1] * invZ - targetM[1];
-      xi[0] -= alpha * (J[1][1] * r0 - J[0][1] * r1) * invDet;
-      xi[1] -= alpha * (-J[1][0] * r0 + J[0][0] * r1) * invDet;
+      const Scalar rj = alpha * (Scalar{ 1 } / jxy);
+      const Scalar r0 = (m1x + ushiftX) - targetM0;
+      const Scalar r1 = (m1y + ushiftY) - targetM1;
+      xi[0] -= r0 * jyy * rj; // alpha r0 / jxx
+      xi[1] -= r1 * jxx * rj; // alpha r1 / jyy
       alpha *= Scalar{ 0.5 };
     }
 
     Scalar geqLocal[kQ];
     if (solverOk) {
-      // Recompute e[], Z with the final xi.
-      smax = -kMaxExp;
-      LBMINI_ALPAKA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar s = Scalar{ 0 };
-        LBMINI_ALPAKA_UNROLL
-        for (int d = 0; d < kD; ++d)
-          s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
-        si[idc] = s;
-        smax = (s > smax) ? s : smax;
-      }
-      smax = (smax < kMaxExp) ? smax : kMaxExp;
-      Z = Scalar{ 0 };
-      LBMINI_ALPAKA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        Scalar expo = si[idc] - smax;
-        expo = (expo < kMaxExp) ? expo : kMaxExp;
-        expo = (expo > -kMaxExp) ? expo : -kMaxExp;
-        e[idc] = LatticeType::Weights(idc, temc) * ::alpaka::math::exp(expo);
-        Z += e[idc];
-      }
-      const Scalar scale = targetE / Z;
-      LBMINI_ALPAKA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc)
-        geqLocal[idc] = scale * e[idc];
+      GeqFromXi(xi[0], xi[1], wn, wZero, targetE, geqLocal);
       // The reference also stores `log(scale / rho) - smax` as warm-start
       // component 0; nothing ever reads it, so it is neither computed nor stored.
     } else {
@@ -377,7 +431,7 @@ struct Physics {
       Scalar sumW = Scalar{ 0 };
       LBMINI_ALPAKA_UNROLL
       for (int idc = 0; idc < kQ; ++idc)
-        sumW += LatticeType::Weights(idc, temc);
+        sumW += wi[idc];
       if (sumW <= kTiny) {
         const Scalar uni = targetE / Scalar(kQ);
         LBMINI_ALPAKA_UNROLL
@@ -387,16 +441,18 @@ struct Physics {
         const Scalar sc = targetE / sumW;
         LBMINI_ALPAKA_UNROLL
         for (int idc = 0; idc < kQ; ++idc)
-          geqLocal[idc] = LatticeType::Weights(idc, temc) * sc;
+          geqLocal[idc] = wi[idc] * sc;
       }
     }
 
     // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
-    const Scalar tau = p.viscosity / (rhoc * temc) + Scalar{ 0.5 };
-    const Scalar omega = Scalar{ 1 } / tau;
-    const Scalar diffusivity = p.conductivity / (rhoc * p.cp);
-    const Scalar tauT = diffusivity / temc + Scalar{ 0.5 };
-    Scalar omegaT = Scalar{ 1 } / tauT;
+    // `tau` and `tauT` share `1 / (rho T)`, `omega` and `omegaT` one division.
+    const Scalar invT = Scalar{ 1 } / temc;
+    const Scalar tau = p.viscosity * invRho * invT + Scalar{ 0.5 };
+    const Scalar tauT = p.condOverCp * invRho * invT + Scalar{ 0.5 };
+    const Scalar rTau = Scalar{ 1 } / (tau * tauT);
+    const Scalar omega = tauT * rTau;
+    Scalar omegaT = tau * rTau;
 
     Scalar eps = Scalar{ 0 };
     LBMINI_ALPAKA_UNROLL
@@ -405,16 +461,16 @@ struct Physics {
       const Scalar den = (feqLocal[idc] > kTiny) ? feqLocal[idc] : kTiny;
       eps += ::alpaka::math::abs(diff) / den;
     }
-    eps /= Scalar(kQ);
-    Scalar sigma = Scalar{ 1 };
+    eps *= Scalar{ 1 } / Scalar(kQ);
+    // `omega / sigma` with `sigma` in {omega, 1.35, 1.05, 1}, without a division.
+    Scalar omegaL = omega;
     if (eps >= Scalar{ 1 })
-      sigma = omega;
+      omegaL = Scalar{ 1 };
     else if (eps >= Scalar{ 0.1 })
-      sigma = Scalar{ 1.35 };
+      omegaL = omega * (Scalar{ 1 } / Scalar{ 1.35 });
     else if (eps >= Scalar{ 0.01 })
-      sigma = Scalar{ 1.05 };
+      omegaL = omega * (Scalar{ 1 } / Scalar{ 1.05 });
 
-    Scalar omegaL = omega / sigma;
     omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };
     omegaL = (omegaL < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaL : (Scalar{ 2 } - Scalar{ 1e-7 });
     omegaT = (omegaT > Scalar{ 1 }) ? omegaT : Scalar{ 1 };
@@ -424,23 +480,21 @@ struct Physics {
     Scalar L[kD] = { Scalar{ 0 }, Scalar{ 0 } };
     LBMINI_ALPAKA_UNROLL
     for (int idc = 0; idc < kQ; ++idc) {
-      const Scalar cix0 = static_cast<Scalar>(LatticeType::Velocity(idc, 0));
-      const Scalar ciy0 = static_cast<Scalar>(LatticeType::Velocity(idc, 1));
+      const Scalar cix0 = static_cast<Scalar>(Vx(idc));
+      const Scalar ciy0 = static_cast<Scalar>(Vy(idc));
       const Scalar uvi = ux * cix0 + uy * ciy0;
       const Scalar aux = Scalar{ 2 } * uvi * (f[idc] - feqLocal[idc]);
       L[0] += aux * cix0;
       L[1] += aux * ciy0;
     }
 
-    const Scalar invT = Scalar{ 1 } / temc;
     LBMINI_ALPAKA_UNROLL
     for (int idc = 0; idc < kQ; ++idc) {
       const Scalar fOld = f[idc];
       f[idc] = fOld + omegaL * (feqLocal[idc] - fOld);
       const Scalar cidotL = L[0] * LatticeType::Cshift(idc, 0, ushiftX)
         + L[1] * LatticeType::Cshift(idc, 1, ushiftY);
-      const Scalar Wi = LatticeType::Weights(idc, temc);
-      const Scalar gDiff = Wi * cidotL * invT;
+      const Scalar gDiff = wi[idc] * cidotL * invT;
       const Scalar gOld = g[idc];
       g[idc] = gOld + omegaL * (geqLocal[idc] - gOld) + (omegaL - omegaT) * gDiff;
     }
@@ -493,27 +547,28 @@ struct InitKernel {
       Scalar f[kQ];
       Scalar g[kQ];
       Phys::Feq(rho0, ux0, uy0, tem0, p.ushiftX, p.ushiftY, f);
+      Scalar wi[kQ];
+      Phys::Weights(tem0, wi);
       const Scalar u2 = ux0 * ux0 + uy0 * uy0;
       const Scalar E = p.cv * tem0 + Scalar{ 0.5 } * u2;
       const Scalar targetE = Scalar{ 2 } * rho0 * E;
       Scalar sumW = Scalar{ 0 };
       LBMINI_ALPAKA_UNROLL
       for (int idc = 0; idc < kQ; ++idc)
-        sumW += LatticeType::Weights(idc, tem0);
+        sumW += wi[idc];
       const Scalar sc = (sumW > Phys::kTiny) ? targetE / sumW : targetE / Scalar(kQ);
       LBMINI_ALPAKA_UNROLL
-      for (int idc = 0; idc < kQ; ++idc) {
-        const Scalar wi = (sumW > Phys::kTiny) ? LatticeType::Weights(idc, tem0) : Scalar{ 1 };
-        g[idc] = wi * sc;
-      }
+      for (int idc = 0; idc < kQ; ++idc)
+        g[idc] = ((sumW > Phys::kTiny) ? wi[idc] : Scalar{ 1 }) * sc;
 
       // computeMacroscopic(): the state every getter sees after Init().
       Scalar rho;
+      Scalar invRho;
       Scalar ux;
       Scalar uy;
       Scalar tem;
       Scalar pres;
-      Phys::Macroscopic(f, g, p, rho, ux, uy, tem, pres);
+      Phys::Macroscopic(f, g, p, rho, invRho, ux, uy, tem, pres);
       rhoOut[cell] = rho;
       pOut[cell] = pres;
       temOut[cell] = tem;
@@ -522,7 +577,7 @@ struct InitKernel {
 
       // First collision, cold Newton start.
       Scalar xi[kD] = { Scalar{ 0 }, Scalar{ 0 } };
-      Phys::Collide(p, rho, ux, uy, tem, f, g, xi);
+      Phys::Collide(p, rho, invRho, ux, uy, tem, f, g, xi);
 
       LBMINI_ALPAKA_UNROLL
       for (int idc = 0; idc < kQ; ++idc) {
@@ -614,11 +669,12 @@ struct StepKernel {
       }
 
       Scalar rho;
+      Scalar invRho;
       Scalar ux;
       Scalar uy;
       Scalar tem;
       Scalar pres;
-      Phys::Macroscopic(f, g, p, rho, ux, uy, tem, pres);
+      Phys::Macroscopic(f, g, p, rho, invRho, ux, uy, tem, pres);
       if constexpr (kStoreMacro) {
         rhoOut[cell] = rho;
         pOut[cell] = pres;
@@ -632,7 +688,7 @@ struct StepKernel {
       for (int d = 0; d < kD; ++d)
         xi[d] = xiIo[d * N + cell];
 
-      Phys::Collide(p, rho, ux, uy, tem, f, g, xi);
+      Phys::Collide(p, rho, invRho, ux, uy, tem, f, g, xi);
 
       LBMINI_ALPAKA_UNROLL
       for (int idc = 0; idc < kQ; ++idc) {
@@ -648,9 +704,10 @@ struct StepKernel {
 } // namespace lbmini::alpaka::detail
 
 namespace lbmini::alpaka::detail {
-/// All alpaka state of one solver: device, queue, launch shape and buffers.
+/// All alpaka state of one solver on the device target: device, queue, launch
+/// shape and buffers of the per-cell kernels.
 template<typename Scalar, typename LatticeType, TargetEnum Target>
-struct Engine<Scalar, LatticeType, Target>::State {
+struct DeviceState {
   using Index = Eigen::Index;
   using Traits = TargetTraits<Target>;
   using Phys = Physics<Scalar, LatticeType>;
@@ -666,7 +723,7 @@ struct Engine<Scalar, LatticeType, Target>::State {
   using ParamsBuffer = decltype(::alpaka::onHost::alloc<ParamsT>(std::declval<Device&>(), Extent{}));
   using FrameSpecT = decltype(Traits::FrameSpec(std::declval<const Device&>(), std::int32_t{}));
 
-  State(
+  DeviceState(
     const FluidData<Scalar>& fluid,
     const MeshData<Scalar, kD>& mesh,
     const ControlData<Scalar>& control
@@ -703,15 +760,15 @@ struct Engine<Scalar, LatticeType, Target>::State {
     ::alpaka::onHost::wait(queue_);
   }
 
-  State(const State&) = delete;
+  DeviceState(const DeviceState&) = delete;
 
-  State& operator=(const State&) = delete;
+  DeviceState& operator=(const DeviceState&) = delete;
 
-  State(State&&) = delete;
+  DeviceState(DeviceState&&) = delete;
 
-  State& operator=(State&&) = delete;
+  DeviceState& operator=(DeviceState&&) = delete;
 
-  ~State() {
+  ~DeviceState() {
     // Nothing may still be reading or writing a buffer when it is released.
     ::alpaka::onHost::wait(queue_);
   }
@@ -754,12 +811,11 @@ struct Engine<Scalar, LatticeType, Target>::State {
     ::alpaka::onHost::wait(queue_);
   }
 
-  /// Copy a scalar field straight into caller-owned host memory (`N` values).
-  void CopyOut(const Buffer& field, Scalar* dst) const {
-    auto view = ::alpaka::makeView(::alpaka::api::host, dst, Extent{ N_ });
-    ::alpaka::onHost::memcpy(queue_, view, field);
-    ::alpaka::onHost::wait(queue_);
-  }
+  void CopyRho(Scalar* dst) const { CopyOut(rho_, dst); }
+
+  void CopyP(Scalar* dst) const { CopyOut(p_, dst); }
+
+  void CopyT(Scalar* dst) const { CopyOut(tem_, dst); }
 
   void CopyU(Scalar* dst) const {
     ::alpaka::onHost::memcpy(queue_, uHost_, u_);
@@ -771,13 +827,14 @@ struct Engine<Scalar, LatticeType, Target>::State {
         dst[cell * kD + d] = src[d * N_ + cell];
   }
 
-  const Buffer& Rho() const { return rho_; }
-
-  const Buffer& P() const { return p_; }
-
-  const Buffer& T() const { return tem_; }
-
 private:
+  /// Copy a scalar field straight into caller-owned host memory (`N` values).
+  void CopyOut(const Buffer& field, Scalar* dst) const {
+    auto view = ::alpaka::makeView(::alpaka::api::host, dst, Extent{ N_ });
+    ::alpaka::onHost::memcpy(queue_, view, field);
+    ::alpaka::onHost::wait(queue_);
+  }
+
   template<bool kStoreMacro>
   void enqueueStep() {
     queue_.enqueue(
@@ -817,11 +874,10 @@ private:
     p.ushiftX = control.U(0);
     p.ushiftY = control.U(1);
     p.cv = fluid.specificHeatCv;
-    p.cp = fluid.specificHeatCp;
     p.invCv = Scalar{ 1 } / fluid.specificHeatCv;
     p.rgas = fluid.constant;
     p.viscosity = fluid.viscosity;
-    p.conductivity = fluid.conductivity;
+    p.condOverCp = fluid.conductivity / fluid.specificHeatCp;
     p.densityL = fluid.densityL;
     p.pressureL = fluid.pressureL;
     p.densityR = fluid.densityR;
@@ -860,6 +916,26 @@ private:
   Scalar* gNext_;
 };
 
+template<typename Scalar, typename LatticeType>
+class HostState;
+
+/// The implementation `Engine::State` is built on: the vectorised host state
+/// for the CPU target, the per-cell kernels for a device.
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+using StateImpl = std::conditional_t<
+  Target == TargetEnum::CPU,
+  HostState<Scalar, LatticeType>,
+  DeviceState<Scalar, LatticeType, Target>>;
+
+/// `HostState` is defined in `Cpu/LbmTubeImpl.hpp`, which only the CPU
+/// translation unit includes (before it instantiates the engine); the device
+/// compiler never sees it.
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+struct Engine<Scalar, LatticeType, Target>::State : StateImpl<Scalar, LatticeType, Target> {
+  using Base = StateImpl<Scalar, LatticeType, Target>;
+  using Base::Base;
+};
+
 template<typename Scalar, typename LatticeType, TargetEnum Target>
 Engine<Scalar, LatticeType, Target>::Engine(
   const FluidData<Scalar>& fluid,
@@ -883,17 +959,17 @@ void Engine<Scalar, LatticeType, Target>::Run(const Index steps) {
 
 template<typename Scalar, typename LatticeType, TargetEnum Target>
 void Engine<Scalar, LatticeType, Target>::CopyRho(Scalar* dst) const {
-  state_->CopyOut(state_->Rho(), dst);
+  state_->CopyRho(dst);
 }
 
 template<typename Scalar, typename LatticeType, TargetEnum Target>
 void Engine<Scalar, LatticeType, Target>::CopyP(Scalar* dst) const {
-  state_->CopyOut(state_->P(), dst);
+  state_->CopyP(dst);
 }
 
 template<typename Scalar, typename LatticeType, TargetEnum Target>
 void Engine<Scalar, LatticeType, Target>::CopyT(Scalar* dst) const {
-  state_->CopyOut(state_->T(), dst);
+  state_->CopyT(dst);
 }
 
 template<typename Scalar, typename LatticeType, TargetEnum Target>

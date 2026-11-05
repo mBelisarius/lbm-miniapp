@@ -21,7 +21,7 @@ corruption stops being latent.
 | Bug class | Where it lives in this code base |
 |---|---|
 | Out-of-bounds read | The streaming gather reads four source cells per direction with no bounds check: through the precomputed `streamIdx_` table in the `Plain` reference, and through the shared per-direction `lbmini::DirectionStencil` (`lbmini/Lbm/Stencil.hpp`, clamp in x, wrap in y) in every optimised backend |
-| Out-of-bounds write | Buffers sized from `nx * ny` while kernels index `i * ny + j`, `d * N + cell`, `idc * N + cell`; zero/negative extents and overflowing products break the assumptions, while one-cell and odd extents exercise boundary paths |
+| Out-of-bounds write | Buffers sized from `nx * ny` while kernels index `i * ny + j`, `d * N + cell`, `idc * N + cell` (the GPU and `Plain` layouts) or `idc * plane + j * pitch + i` (the padded x-fastest layout of the vector CPU backends, `host::Geometry`, where the last vector block of a row may write up to `kLanes - 1` cells into pad columns that are sized for it); zero/negative extents and overflowing products break the assumptions, while one-cell and odd extents exercise boundary paths |
 | Integer overflow into a wild address | The reference streaming table and the device kernels' cell indices are `std::int32_t`; `nx * ny > 2^31` wraps to a negative index. `cellIndex()` casts extents to `int` in some backends |
 | Use-after-free | Global runtimes must outlive every solver allocation; cached `fCur_`/`fAlt_` pointers must never outlive their owning object |
 | Double free | Raw `cudaMalloc` / `omp_target_alloc` / command-buffer handles must have exclusive ownership and non-copyable owners |

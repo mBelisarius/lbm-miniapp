@@ -24,9 +24,10 @@ namespace lbmini::opencl::gpu {
  *
  * - **One fused, JIT-specialised kernel per step.** Streaming (pull, through
  *   the per-direction IDW stencil), macroscopics, Newton-Raphson closure and
- *   collision in one pass that reads `f`/`g` once and writes them once. Mesh
- *   extents, fluid constants and the whole stencil are compile-time constants
- *   of the program built for this instance.
+ *   collision in one pass that reads `f`/`g` once and writes them once. The
+ *   closure is factorised per axis (8 exponentials per cell and step, see
+ *   `AxisExp` in `kernels.cl`). Mesh extents, fluid constants and the whole
+ *   stencil are compile-time constants of the program built for this instance.
  * - **Ping-pong post-collision state**, no copies, no per-cell tables; the
  *   macroscopic fields are written only on the last step of a `Run()`.
  * - **No host synchronisation inside a `Run()`**: all steps are enqueued back
