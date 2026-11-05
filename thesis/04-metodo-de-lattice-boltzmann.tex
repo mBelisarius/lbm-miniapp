@@ -961,7 +961,7 @@ No caso do tubo de choque simulado neste trabalho, a geometria dispensa paredes 
 Nas extremidades do tubo, aplica-se a condição de gradiente nulo, implementada pela limitação do índice do nó de origem ao intervalo válido da malha, o que equivale a estender indefinidamente o estado da célula de borda.
 Isso é compatível com o fato de as ondas não alcançarem as extremidades no intervalo de tempo simulado.
 Na direção transversal, adota-se periodicidade, o que reproduz um escoamento invariante nessa direção e torna cada linha da malha comparável à solução analítica unidimensional.
-Ambas as condições são incorporadas às próprias tabelas de propagação, de modo que a etapa de propagação permanece livre de desvios condicionais, propriedade relevante para as implementações em aceleradores de \textit{hardware}.
+Na implementação sequencial de referência (\textit{Plain}), ambas as condições são incorporadas às próprias tabelas de propagação pré-calculadas, ao passo que nas versões paralelas modernas baseadas em estêncil compacto (\texttt{DirectionStencil}) o confinamento longitudinal é obtido por fixação aritmética (\textit{clamping}) e a periodicidade transversal pela adição de deslocamentos pré-ajustados (\texttt{oy0} e \texttt{oy1}) com correção por subtração condicional, eliminando divisões por módulo em tempo de execução e mantendo a etapa de propagação altamente eficiente nos núcleos de cálculo.
 
 A condição de gradiente nulo nas extremidades e a periodicidade na direção transversal delimitam, assim, um problema em que o tratamento das fronteiras não interfere na dinâmica das ondas durante o intervalo simulado.
 Dessa forma, a comparação entre tecnologias de paralelização fica isolada de qualquer efeito associado ao contorno.

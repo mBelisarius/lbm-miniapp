@@ -254,6 +254,10 @@ Sua abrangência é, entretanto, deliberadamente menor: o RAJA abstrai apenas os
 A decisão sobre onde os dados residem permanece sob responsabilidade da aplicação, o que facilita a adoção incremental em códigos já existentes com estruturas de dados próprias.
 Ambas as bibliotecas dispõem de implementações baseadas no padrão SYCL e nas interfaces de programação de outros fabricantes, como o HIP, o que amplia o conjunto de aceleradores alcançáveis a partir de uma única base de código.
 
+Originada de pesquisas no Helmholtz-Zentrum Dresden-Rossendorf (HZDR) e na Technische Universität Dresden, a biblioteca Alpaka propõe uma abordagem distinta para a portabilidade de desempenho baseada em um modelo hierárquico explícito de paralelismo que mapeia a execução em malhas, blocos, fluxos e elementos \parencite{Zenker2016, Matthes2017}.
+Diferentemente do Kokkos, que acopla a execução ao gerenciamento de estruturas multidimensionais de dados, e do RAJA, que restringe seu escopo às políticas de travessia de laços, o Alpaka expressa a hierarquia computacional de maneira próxima aos modelos nativos como CUDA, mas com abstrações resolvidas estaticamente em tempo de compilação sem sobrecarga em tempo de execução.
+Essa filosofia evoluiu para o Alpaka 3 (\textit{alpaka3}), uma reformulação baseada no padrão C++20 que emprega conceitos (\textit{concepts}), metaprogramação estática e filas unificadas de comandos para simplificar o despacho de operações e o controle de fluxos assíncronos em CPUs e aceleradores gráficos \parencite{AlpakaContributors2026}.
+
 %---------------------------------------------------------------------------------------
 
 \subsection{Paralelismo em Memória Distribuída}\label{subsec:paralelismo-distribuido}
@@ -313,4 +317,4 @@ Verifica-se, por fim, a existência de um número considerável de tecnologias d
 Os estudos comparativos disponíveis, no entanto, concentram-se em \textit{kernels} de cálculo simples ou em versões isotérmicas do LBM, cujo custo aritmético por nó é reduzido.
 Raramente confrontam, sob um mesmo algoritmo e um mesmo caso de teste, o conjunto completo formado por modelos por diretivas, modelos de baixo nível, camadas de abstração e paralelismo distribuído.
 Observa-se escassez ainda maior de trabalhos que associem as métricas de desempenho a uma medida objetiva do esforço de implementação, informação relevante para quem precisa decidir qual tecnologia adotar no início de um projeto.
-Tendo em vista essa lacuna, a metodologia do Capítulo~\ref{ch:metodologia} implementa a mesma formulação do LBM compressível em sete tecnologias distintas e a avalia quanto ao desempenho, à escalabilidade e à complexidade do código produzido.
+Tendo em vista essa lacuna, a metodologia do Capítulo~\ref{ch:metodologia} implementa a mesma formulação do LBM compressível em oito tecnologias distintas de paralelização, sete das quais são avaliadas quanto ao desempenho, à escalabilidade e à complexidade do código produzido, ao passo que a solução em Alpaka é examinada quanto à arquitetura e à equivalência numérica.

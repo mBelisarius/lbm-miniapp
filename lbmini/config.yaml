@@ -24,5 +24,5 @@ Control:
 
 Performance:
     target: GPU     # Target device (CPU; GPU)
-    backend: CUDA  # Backend to use (Plain; OpenMP; OpenACC; CUDA; OpenCL; Kokkos; RAJA; MPI)
+    backend: CUDA  # Backend to use (Plain; OpenMP; OpenACC; CUDA; OpenCL; Kokkos; RAJA; MPI; Alpaka)
     cores: 0        # Number of CPU cores (0 for auto)

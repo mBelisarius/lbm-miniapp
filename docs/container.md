@@ -18,6 +18,14 @@ The container encapsulates all compilers, runtimes, and dependencies needed to b
 | `Kokkos` | Yes | Yes | Kokkos Framework (OpenMP CPU & CUDA Device Backends) |
 | `RAJA` | Yes | Yes | LLNL RAJA Framework (OpenMP CPU & CUDA Device Backends) |
 | `MPI` | Yes | No | OpenMPI / HPC-X Multi-Node Domain Decomposition |
+| `Alpaka` | Yes | Yes | Alpaka3 (`deps/alpaka3`): `exec::cpuOmpBlocks` CPU & `exec::gpuCuda` device (`-DENABLE_ALPAKA_CUDA=ON`) |
+
+> **Alpaka3 needs GCC >= 12.** The Rocky Linux 9 system compiler is GCC 11.5, so with the
+> default image the Alpaka backend is skipped at configure time (CMake prints a warning and
+> the solver reports `Alpaka backend not enabled.`, which the test runners treat as a skip).
+> To include it, build with a newer toolset, e.g. install `gcc-toolset-13` and configure with
+> `-DCMAKE_CXX_COMPILER=/opt/rh/gcc-toolset-13/root/usr/bin/g++
+> -DCMAKE_CUDA_HOST_COMPILER=/opt/rh/gcc-toolset-13/root/usr/bin/g++ -DENABLE_ALPAKA_CUDA=ON`.
 
 ---
 
@@ -52,7 +60,7 @@ docker build --build-arg CUDA_ARCHITECTURES=80 -t lbm-miniapp:latest .
 `CUDA_ARCHITECTURES` (default `89`) is the single place the compute capability is
 chosen: `CMakeLists.txt` derives `CMAKE_CUDA_ARCHITECTURES`, Kokkos'
 `Kokkos_ARCH_<NAME>` and RAJA/BLT's `CUDA_ARCH=sm_<nn>` from it, so the CUDA,
-Kokkos and RAJA device backends can never disagree. Kokkos and BLT accept a
+Kokkos, and RAJA device backends can never disagree. Kokkos and BLT accept a
 single architecture, so this is one capability, not a list:
 
 | Value | GPUs |
@@ -442,7 +450,7 @@ aborting the whole test binary before its first case.
 
 The OpenCL GPU sweep runs from the sanitized tree (`build-asan`), and there — and
 only there — the NVIDIA platform can disappear: the sanitized process enumerates
-`Intel(R) OpenCL` alone, finds no `CL_DEVICE_TYPE_GPU` device and skips all 13
+`Intel(R) OpenCL` alone, finds no `CL_DEVICE_TYPE_GPU` device, and skips all 13
 cases, which the stage reports as a failure.
 
 The NVIDIA driver maps its unified address space over the region AddressSanitizer
@@ -450,7 +458,7 @@ reserves as an unmapped `PROT_NONE` *shadow gap*. The mapping fails, the vendor'
 `clGetPlatformIDs` init fails with it, and the ICD loader drops that vendor
 without a word — two platforms become one. `test/run-tests.sh` therefore runs
 that one pass with `protect_shadow_gap=0` (`LBMINI_ASAN_OPTIONS_DEVICE`). No
-allocation ever lives in the gap, so redzones, use-after-free and leak detection
+allocation ever lives in the gap, so redzones, use-after-free, and leak detection
 are exactly as strict as everywhere else.
 
 The related `AddressSanitizer CHECK failed: ... sigaltstack` aborts from the same

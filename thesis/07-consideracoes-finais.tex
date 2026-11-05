@@ -27,9 +27,9 @@ Os estudos de sensibilidade acrescentaram a esse quadro os limites práticos de 
 
 Quanto ao segundo objetivo específico, a análise de desempenho das diferentes filosofias de programação, o modelo \textit{roofline} indicava que as tecnologias voltadas à CPU multinúcleo deveriam convergir para acelerações da mesma ordem de grandeza nas malhas grandes.
 Essa expectativa não se confirmou: o OpenMP alcançou \(6{,}8\) vezes o desempenho da versão sequencial, contra \(4{,}6\) do MPI, \(3{,}3\) do OpenACC, cerca de \(2{,}0\) do Kokkos e do RAJA e \(0{,}3\) do OpenCL.
-As taxas ficaram abaixo do teto de largura de banda, e a diferença decorreu da eficiência do código executado em cada núcleo, em particular da vetorização explícita da colisão, presente apenas no OpenMP, de modo que a escolha entre as tecnologias afetou o desempenho alcançável, e não apenas a portabilidade e o esforço de desenvolvimento.
+As taxas ficaram abaixo do teto de largura de banda, e a diferença decorreu da eficiência do código executado em cada núcleo, em particular da vetorização explícita da colisão, presente apenas na variante do OpenMP medida, de modo que a escolha entre as tecnologias afetou o desempenho alcançável, e não apenas a portabilidade e o esforço de desenvolvimento.
 O uso de aceleradores gráficos trouxe ganho sobre a CPU multinúcleo, porém moderado em precisão dupla, entre \(1{,}5\) e \(3{,}2\) vezes sobre a melhor versão de CPU, pois o modelo situa o teto da GPU considerada entre cerca de \(1{,}85\) e \(3{,}9\) vezes o da CPU.
-Esses valores variam conforme os pesos de interpolação sejam calculados durante a propagação ou lidos de tabelas mantidas na memória do acelerador, e as versões com tabelas, Kokkos e RAJA, foram as de maior desempenho, com taxas cerca de duas vezes superiores às das versões nativas.
+Esses valores variam conforme os pesos de interpolação sejam calculados durante a propagação ou lidos de tabelas mantidas na memória do acelerador, e as versões da campanha com tabelas, Kokkos e RAJA, foram as de maior desempenho, com taxas cerca de duas vezes superiores às das versões nativas.
 O ganho também esteve condicionado a malhas suficientemente refinadas para amortizar a latência de lançamento dos \textit{kernels}: com cem nós, todas as tecnologias de GPU foram mais lentas do que um único núcleo de CPU.
 Embora moderado, tal ganho indica o potencial das arquiteturas heterogêneas para o LBM compressível.
 
@@ -42,7 +42,7 @@ Nesse regime, a contenção do barramento compartilhado entre os núcleos passa 
 Quanto ao quarto objetivo específico, que confronta desempenho e custo de desenvolvimento, a contagem de linhas de código mostrou que as tecnologias baseadas em diretivas exigem o menor acréscimo por alvo, entre 8\% e 19\% sobre a versão sequencial.
 Essa característica as torna atraentes quando o prazo de desenvolvimento é restritivo e um único alvo é suficiente.
 Os modelos de baixo nível, como o CUDA e o OpenCL, exigem os maiores acréscimos por alvo, entre 32\% e 60\%.
-Quando o mesmo código precisa atender a CPUs e a aceleradores ao mesmo tempo, as camadas de abstração apresentam as menores contagens, com acréscimos de 24\% e de 34\% sobre uma única base de código.
+Quando o mesmo código precisa atender a CPUs e a aceleradores ao mesmo tempo, as camadas de abstração avaliadas experimentalmente (Kokkos e RAJA) apresentam as menores contagens, com acréscimos de 24\% e de 34\% sobre uma única base de código, proposta de unificação em C++20 que o Alpaka, integrado em etapa posterior, também adota, embora sem contagem de linhas na presente campanha.
 Nas tecnologias que mantêm uma versão por alvo, a contagem corresponde a mais do que o dobro da versão sequencial.
 Entretanto, a menor contagem das camadas de abstração acarreta compilação mais lenta e diagnósticos de erro mais extensos.
 O confronto desse custo com o desempenho mostrou resultados distintos nos dois alvos: em GPU, as camadas de abstração alcançaram as maiores taxas, ao passo que, em CPU, ficaram aquém do OpenMP, com menos de um terço do seu desempenho.
@@ -65,6 +65,9 @@ Além disso, as malhas foram limitadas a 11~GB de ocupação de memória, de mod
 As explicações apresentadas para as diferenças de desempenho entre as tecnologias, em particular o papel da vetorização da colisão em CPU, decorrem da estrutura do código e do modelo \textit{roofline}, e não de análises com contadores de desempenho dos dispositivos, de modo que permanecem como hipóteses fundamentadas.
 Os tetos do modelo \textit{roofline}, por sua vez, baseiam-se em valores de especificação e em uma premissa de custo das funções transcendentes na GPU, e o fato de nenhuma taxa medida exceder esses tetos não basta para verificá-la.
 Por fim, a ausência de testes com escoamentos multidimensionais também delimita o escopo da validação planejada.
+Ressalta-se igualmente que a campanha de medições foi realizada sobre as implementações anteriores à adoção dos núcleos fundidos com estêncil compacto de propagação e que a biblioteca Alpaka foi integrada em etapa posterior.
+Embora o código atual e o Alpaka tenham sido verificados quanto à equivalência numérica em relação à referência sequencial, seu desempenho e sua escalabilidade, bem como a contagem de linhas de código, permanecem a ser aferidos em campanhas posteriores.
+Isso se aplica em particular ao OpenMP em CPU, cujo núcleo fundido atual substituiu a variante com colisão vetorizada explicitamente que foi medida.
 
 %---------------------------------------------------------------------------------------
 
@@ -72,10 +75,10 @@ Por fim, a ausência de testes com escoamentos multidimensionais também delimit
 
 Como trabalhos futuros, propõe-se um roteiro de evolução em quatro frentes, relacionadas às limitações reconhecidas na seção anterior.
 
-Na frente de portabilidade de desempenho, sugere-se estender as implementações em Kokkos e em RAJA a espaços de execução ainda não avaliados, em particular HIP e SYCL, para verificar se as conclusões obtidas com GPUs NVIDIA se mantêm em aceleradores de outros fabricantes.
+Na frente de portabilidade de desempenho, sugere-se estender as implementações em camadas de abstração (Kokkos, RAJA e Alpaka) a espaços de execução ainda não avaliados, em particular HIP e SYCL, para verificar se as conclusões obtidas com GPUs NVIDIA se mantêm em aceleradores de outros fabricantes.
 No mesmo esforço, recomenda-se investigar disposições alternativas de dados, com particionamento da malha em blocos (\textit{tiling}) e busca antecipada explícita, que possam reduzir a pressão sobre o subsistema de memória, identificada pelo modelo \textit{roofline} como fator limitante do desempenho em CPU.
-Convém também reproduzir, nas camadas de abstração, a organização da colisão em blocos de células empregada no OpenMP para CPU, a fim de verificar se a diferença de desempenho observada decorre do \textit{kernel} ou da camada de abstração.
-Convém ainda avaliar o uso das tabelas de propagação também nas versões nativas para GPU, que o modelo indica ser vantajoso em aceleradores com baixa taxa de ponto flutuante em precisão dupla.
+Convém também repetir a campanha de medições com os núcleos fundidos atuais e com o Alpaka, a fim de aferir o efeito do estêncil compacto sobre o desempenho nos dois alvos.
+Convém ainda avaliar, no núcleo fundido de CPU e nas camadas de abstração, a organização da colisão em blocos de células com laços vetorizados planos empregada na variante do OpenMP medida na campanha, para verificar se a diferença de desempenho observada decorre do \textit{kernel} ou da camada de abstração.
 
 Na frente de paralelismo distribuído, propõe-se estender a decomposição de domínio unidimensional atualmente implementada para uma decomposição multidimensional, combinada com a agregação de mensagens, para mitigar a latência, e com estratégias de balanceamento de carga para partições desiguais em sistemas heterogêneos.
 Propõe-se também avaliar a combinação do MPI com as implementações voltadas a aceleradores, em uma configuração híbrida que explore ao mesmo tempo o paralelismo local no interior de cada dispositivo e o paralelismo distribuído entre nós de computação.

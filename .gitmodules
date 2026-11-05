@@ -1,0 +1,3 @@
+[submodule "deps/alpaka3"]
+	path = deps/alpaka3
+	url = https://github.com/alpaka-group/alpaka3.git

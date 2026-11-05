@@ -3,7 +3,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <new>
+#include <type_traits>
+#include <utility>
+#include <vector>
 #include <omp.h>
 #include <unsupported/Eigen/CXX11/Tensor>
 
@@ -11,42 +16,116 @@
 #include "Guards.hpp"
 #include "Lbm/DeviceBuffer.hpp"
 #include "Lbm/ILbmTube.hpp"
-#include "Utils.hpp"
+#include "Lbm/Stencil.hpp"
+
+/// Force inlining of the per-cell physics into the cell loops: the populations
+/// of one cell then live in registers and every lattice lookup folds into an
+/// immediate once the direction loops are unrolled.
+#if defined(__GNUC__) || defined(__clang__)
+#define LBMINI_OMP_CPU_INLINE        [[gnu::always_inline]] inline
+#define LBMINI_OMP_CPU_LAMBDA_INLINE __attribute__((always_inline))
+#else
+#define LBMINI_OMP_CPU_INLINE inline
+#define LBMINI_OMP_CPU_LAMBDA_INLINE
+#endif
 
 namespace lbmini::openmp::cpu {
+namespace detail {
 /**
- * @brief OpenMP multi-core/SIMD variant of `lbmini::plain::LbmTube`.
+ * @brief `AlignedAllocator` that default-initialises instead of zero-filling.
  *
- * Numerically identical to the plain reference; the data layout, kernel
- * bodies, and `DeviceBuffer<Scalar>` storage policy are shared verbatim
- * (see `lbmini::plain::LbmTube` for the full design rationale on SoA
- * velocity-major layout, kernel fission, stack-local Newton-Raphson
- * workspaces, and `LBMINI_UNROLL(N)` scalarisation of `kQ_`-sized arrays).
+ * `resize()` then only reserves address space: the first write to every page
+ * happens in `Init()` / the first time step, from the thread that owns the
+ * page under the `schedule(static)` partition (NUMA first touch), instead of
+ * from the constructing thread.
+ */
+template<typename T>
+struct FirstTouchAllocator : lbmini::AlignedAllocator<T, 64> {
+  template<class U>
+  struct rebind {
+    using other = FirstTouchAllocator<U>;
+  };
+
+  FirstTouchAllocator() noexcept = default;
+
+  template<class U>
+  explicit FirstTouchAllocator(const FirstTouchAllocator<U>&) noexcept {}
+
+  template<class U>
+  void construct(U* p) noexcept(std::is_nothrow_default_constructible_v<U>) {
+    ::new (static_cast<void*>(p)) U;
+  }
+
+  template<class U, class... Args>
+  void construct(U* p, Args&&... args) {
+    ::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+  }
+};
+
+template<typename T>
+using FirstTouchBuffer = std::vector<T, FirstTouchAllocator<T>>;
+} // namespace detail
+
+/**
+ * @brief OpenMP multi-core variant of `lbmini::plain::LbmTube`.
  *
- * OpenMP-specific design decisions:
- *  - The `#pragma omp parallel` region is **hoisted around the `Run()`
- *    time loop**, so the thread pool forks once per `Run(steps)`; each
- *    kernel inside uses `#pragma omp for simd schedule(static)` to amortise
- *    fork/join and to vectorise the cell loop: every thread receives a
- *    contiguous block of cells and sweeps it in SIMD lanes. The O(1) buffer
- *    swap between kernels is guarded by `#pragma omp single`, whose implicit
- *    barrier orders the ping-pong.
- *  - The cell-loop bodies are branch-free (selects instead of `if`), so the
- *    compiler can map them onto SIMD lanes without masking around divergent
- *    paths. The per-cell arithmetic is the plain reference's, so results
- *    agree with it up to round-off (contractions into FMA may differ).
- *  - The collision kernel is tiled (`kTile_` cells at a time, `omp for` over
- *    tiles) with the direction/iteration loops outside flat `omp simd` loops
- *    over the tile's cells. GCC does not vectorize a cell loop that nests
- *    those loops, so `exp`/`log` would stay scalar; in the tiled form they
- *    become libmvec calls under `-ffast-math` (`LBMINI_FAST_MATH`).
+ * Numerically equivalent to the plain reference (same operations in the same
+ * order per cell), but organised around a single fused kernel.
+ *
+ * ### State and data layout
+ *
+ * | buffer        | size    | layout              | role                               |
+ * | :------------ | :------ | :------------------ | :--------------------------------- |
+ * | `fA_/fB_`     | `Q * N` | `f[idc * N + cell]` | post-collision density (ping-pong) |
+ * | `gA_/gB_`     | `Q * N` | `g[idc * N + cell]` | post-collision energy (ping-pong)  |
+ * | `xi_`         | `D * N` | `xi[d * N + cell]`  | Newton-Raphson warm start          |
+ * | `rho_/p_/tem_`| `N`     | `x[cell]`           | macroscopic output                 |
+ * | `u_`          | `D * N` | `u[d * N + cell]`   | macroscopic output                 |
+ *
+ * with `cell = i * ny + j`. The solver state is the set of *post*-collision
+ * populations: `Init()` seeds the equilibria, recovers the macroscopic fields
+ * (what the getters see after `Init()`) and already runs the first collision;
+ * every time step then
+ *
+ *  1. pulls the 9 directions of each cell from their four inverse-distance
+ *     source cells of the previous post-collision state,
+ *  2. reduces them to `rho`, `u`, `T`, `p`,
+ *  3. evaluates the equilibria, the Newton-Raphson energy closure and the
+ *     BGK / Knudsen collision in registers, and
+ *  4. writes the new post-collision populations into the other ping-pong
+ *     buffer (the pointers are swapped, never copied).
+ *
+ * Per cell and step that is 2 x 9 x 8 B of streamed reads (the neighbouring
+ * rows are reused from cache), 2 x 9 x 8 B of writes and 2 x 2 x 8 B for the
+ * warm start, ~320 B in total. The reference's warm-start component 0
+ * (`log(scale / rho) - smax`) is never read and is therefore not kept. The
+ * macroscopic fields are written only by the last step of a `Run()`, the only
+ * point where a getter can observe them.
+ *
+ * ### Streaming
+ *
+ * With a uniform lattice shift the four source cells and weights of direction
+ * `idc` are the same for every cell up to a clamp of the source column to the
+ * tube and a periodic wrap of the source row, so the kernel uses the shared
+ * per-direction `lbmini::DirectionStencil` (`Lbm/Stencil.hpp`) and resolves the
+ * sources exactly like `lbmini::GatherSources`. The clamped source columns
+ * depend on the row `i` only and are hoisted out of the inner `j` loop; the
+ * wrap only matters in the first / last few columns `j`, which are peeled so
+ * that the interior `j` loop reads four contiguous runs per direction without
+ * any index arithmetic.
+ *
+ * ### Threading
+ *
+ *  - One `#pragma omp parallel` region per `Run()`; each step is one
+ *    `#pragma omp for schedule(static)` over the rows `i`, whose implicit
+ *    barrier is the only synchronisation per step. Every thread swaps its own
+ *    copy of the ping-pong pointers, so no `single` is needed.
+ *  - `Init()` uses the same static row partition, so the distributions are
+ *    first touched by the threads that update them (NUMA locality).
  *  - The thread count (`cores` from `config.yaml`, or the performance-core
  *    count on hybrid Intel hosts when `cores == 0`) and the
  *    `OMP_PLACES=cores` / `OMP_PROC_BIND=close` affinity are process-global
  *    settings owned by `lbmini::Executor`; this class only consumes them.
- *    They are applied once per process, before any solver exists, so the
- *    first parallel region here already sees the final configuration and
- *    first-touch allocations are NUMA-local.
  */
 template<typename Scalar, typename LatticeType>
 class LbmTube : public ILbmTube<Scalar, LatticeType> {
@@ -82,10 +161,10 @@ public:
 
   /**
    * @name Macroscopic field getters
-   * @brief Lazy copy-out accessors for pressure / density / temperature / velocity.
+   * @brief Copy-out accessors for pressure / density / temperature / velocity.
    *
-   * Macroscopic fields (`rho`, `p`, `tem`, `u`) are kept in a small, canonical
-   * RowMajor Eigen layout so these getters can return by value cheaply.
+   * They return the fields of the last `Init()` or of the last step of the
+   * last `Run()`.
    * @{
    */
   [[nodiscard]] Tensor<Scalar, kDim_> P() const override;
@@ -104,113 +183,115 @@ public:
 
   void Run(Index steps, bool save) override;
 
-protected:
-  // `Index` (64-bit) throughout: a mesh with `nx_ * ny_` beyond 2^31 would
-  // wrap a 32-bit product to a negative flat index and gather from a wild
-  // address. `ValidateMeshExtents()` rejects such meshes, and this signature
-  // keeps the arithmetic itself out of the narrow type.
-  [[nodiscard]] Index cellIndex(const Index i, const Index j) const { return i * ny_ + j; }
-
-  /**
-   * @brief Recomputes macroscopic fields (rho, p, T, u) from f_ and g_.
-   *
-   * Worksharing SIMD loop over cells (`#pragma omp for simd`, static
-   * schedule). Called from `Init()`, outside any parallel region, so the
-   * calling thread sweeps every cell on its own.
-   */
-  void computeMacroscopic();
-
-  /**
-   * @brief Initializes f_ and g_ using local equilibria.
-   *
-   * Evaluated once during Init. Uses OpenMP parallelization over cells.
-   */
-  void seedEquilibria();
-
-  /**
-   * @brief Fused BGK collision and equilibrium computation.
-   *
-   * Processes the cells in tiles of `kTile_` (worksharing over tiles). Each
-   * stage is a flat `omp simd` loop over the lanes of a tile, so every `exp`
-   * and `log` is vectorized through the compiler's SIMD math library (libmvec
-   * with `-ffast-math`) instead of being a scalar call per cell. Tile scratch
-   * lives on the stack; thread locality is maintained across steps.
-   */
-  void collisionAndEquilibria();
-
-  /**
-   * @brief Combined streaming and macroscopic update.
-   *
-   * Calls stream() followed by computeMacroscopic() to complete a step.
-   */
-  void streamAndMacroscopic();
-
-  // Deliberately `protected` rather than `private`: the memory-safety suite
-  // (`test/streaming_table_test.cpp`) derives from this class to assert that
-  // every precomputed gather index stays inside `[0, N_)`. The streaming
-  // kernel dereferences `streamIdx_` without any bounds check, so that table
-  // is the one place where a geometry mistake becomes an out-of-bounds read.
-protected:
-  /**
-   * @brief Precompute per-(cell, idc) streaming neighbor indices and weights.
-   *
-   * Allocated on device, but static across time steps. Evaluated on host.
-   */
-  void buildStreamingTables();
-
-  /**
-   * @brief Performs the IDW streaming gather into the alternate buffers.
-   *
-   * Every thread walks the `kQ_` velocity planes in the same order and the
-   * cells of each plane are shared out by a worksharing SIMD loop, so the
-   * innermost loop is unit-stride in the output and gathers from the source
-   * plane. Data locality is preserved by OMP thread binding.
-   */
-  void stream();
-
+private:
+  static constexpr int kQ = static_cast<int>(kQ_);
+  static constexpr int kD = static_cast<int>(kDim_);
   static constexpr Scalar kTiny_ = Scalar{ 1.0e-12 };
   static constexpr Scalar kMaxExp_ = Scalar{ 700.0 };
+  static constexpr int kMaxIter_ = 3;
 
-  // Cells per tile in `collisionAndEquilibria()`: a multiple of every SIMD width
-  // (8 doubles / 16 floats at 512 bits) and small enough that the per-tile
-  // working set stays in L1.
-  static constexpr Index kTile_ = 32;
+  static_assert(kD == 2, "openmp::cpu::LbmTube implements the 2-D closure");
+
+  /// Fluid and lattice constants of the per-cell physics.
+  struct Constants {
+    Scalar ushiftX;
+    Scalar ushiftY;
+    Scalar cv;
+    Scalar cp;
+    Scalar invCv;
+    Scalar rgas;
+    Scalar viscosity;
+    Scalar conductivity;
+  };
+
+  /// Density equilibrium, factorised product form.
+  LBMINI_OMP_CPU_INLINE static void Feq(
+    Scalar rhoc,
+    Scalar ux,
+    Scalar uy,
+    Scalar temc,
+    const Constants& c,
+    Scalar (&feq)[kQ]
+  );
+
+  /// `rho`, `u`, `T`, `p` from the populations of one cell.
+  LBMINI_OMP_CPU_INLINE static void Macroscopic(
+    const Scalar (&f)[kQ],
+    const Scalar (&g)[kQ],
+    const Constants& c,
+    Scalar& rho,
+    Scalar& ux,
+    Scalar& uy,
+    Scalar& tem,
+    Scalar& pres
+  );
+
+  /**
+   * @brief Equilibria + Newton-Raphson energy closure + BGK collision, in place.
+   *
+   * `f`/`g` enter as the pre-collision populations of the cell and leave as
+   * the post-collision ones; `xi` is the Newton warm start (read and updated).
+   * The Newton loop runs a fixed number of iterations with clamped reciprocals
+   * and a sticky `solverOk` predicate, exactly as the reference.
+   */
+  LBMINI_OMP_CPU_INLINE static void Collide(
+    const Constants& c,
+    Scalar rhoc,
+    Scalar ux,
+    Scalar uy,
+    Scalar temc,
+    Scalar (&f)[kQ],
+    Scalar (&g)[kQ],
+    Scalar (&xi)[kD]
+  );
+
+  /**
+   * @brief One time step over the rows of the calling thread.
+   *
+   * Must be called by every thread of the enclosing parallel region (it
+   * contains the work-sharing `omp for` and its implicit barrier).
+   *
+   * @tparam kStoreMacro write `rho`, `p`, `T`, `u` (last step of a `Run()`).
+   */
+  template<bool kStoreMacro>
+  void step(const Scalar* fIn, const Scalar* gIn, Scalar* fOut, Scalar* gOut);
 
   const FluidData<Scalar> kFluid_;
   const MeshData<Scalar, kDim_> kMesh_;
   const ControlData<Scalar> kControl_;
   const PerformanceData kPerformance_;
 
-  // Cached mesh extents (promoted to primitive ints for register residency).
   Index nx_;
   Index ny_;
-  Index N_;        // nx_ * ny_
-  Index uSize_;    // N_ * Dim
-  Index distSize_; // N_ * Q
+  Index N_; // nx_ * ny_
 
-  // Flat SoA storage (all contiguous, 64B-aligned by std::vector on most libs).
-  lbmini::DeviceBuffer<Scalar> rho_;    // size N_
-  lbmini::DeviceBuffer<Scalar> p_;      // size N_
-  lbmini::DeviceBuffer<Scalar> tem_;    // size N_
-  lbmini::DeviceBuffer<Scalar> u_;      // size uSize_,   d-major
-  lbmini::DeviceBuffer<Scalar> f_;      // size distSize_, idc-major
-  lbmini::DeviceBuffer<Scalar> g_;      // size distSize_, idc-major
-  lbmini::DeviceBuffer<Scalar> faux_;   // size distSize_  (swap partner of f_)
-  lbmini::DeviceBuffer<Scalar> gaux_;   // size distSize_  (swap partner of g_)
-  lbmini::DeviceBuffer<Scalar> lastGx_; // size N_ * (Dim + 1)   (Newton warm-start)
+  Constants constants_;
+  lbmini::DirectionStencil<Scalar, kQ> stencil_;
+  bool anyNearest_ = false; // some direction uses the nearest-node fallback
 
-  // Ping-pong aliases: swapped each step in Run() without moving data.
-  Scalar* fCur_ = nullptr; // points to active distribution (f_ or faux_)
-  Scalar* fAlt_ = nullptr; // points to alternate buffer   (faux_ or f_)
+  // Columns `j` in `[jLo_, jHi_)` read row `j + sy0_[idc]` / `j + sy1_[idc]`
+  // of every direction without a periodic wrap (empty if `jHi_ <= jLo_`).
+  Index jLo_ = 0;
+  Index jHi_ = 0;
+  Index sy0_[kQ] = {};
+  Index sy1_[kQ] = {};
+
+  detail::FirstTouchBuffer<Scalar> fA_; // size Q * N, idc-major
+  detail::FirstTouchBuffer<Scalar> fB_; // size Q * N  (swap partner of fA_)
+  detail::FirstTouchBuffer<Scalar> gA_; // size Q * N, idc-major
+  detail::FirstTouchBuffer<Scalar> gB_; // size Q * N  (swap partner of gA_)
+  detail::FirstTouchBuffer<Scalar> xi_; // size D * N, d-major (Newton warm start)
+
+  lbmini::DeviceBuffer<Scalar> rho_; // size N
+  lbmini::DeviceBuffer<Scalar> p_;   // size N
+  lbmini::DeviceBuffer<Scalar> tem_; // size N
+  lbmini::DeviceBuffer<Scalar> u_;   // size D * N, d-major
+
+  // Ping-pong roles: `fCur_`/`gCur_` hold the current post-collision state.
+  Scalar* fCur_ = nullptr;
+  Scalar* fAlt_ = nullptr;
   Scalar* gCur_ = nullptr;
   Scalar* gAlt_ = nullptr;
-
-  // Precomputed streaming tables (static across time steps).
-  // For each (cell, idc) we store up to 4 source cell indices + 4 weights.
-  // The tables are allocated in [idc][cell][k] order (k=0..3) so the streaming
-  // kernel accesses them coalesced across cells for fixed idc.
-  lbmini::DeviceBuffer<std::int32_t> streamIdx_; // size distSize_ * 4
-  lbmini::DeviceBuffer<Scalar> streamW_;         // size distSize_ * 4
 };
 
 template<typename Scalar, typename LatticeType>
@@ -223,8 +304,7 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   : kFluid_(fluid), kMesh_(mesh), kControl_(control), kPerformance_(performance) {
   // Everything below derives from these two extents, so they are checked
   // before the first allocation: a zero extent yields an empty buffer the
-  // kernels still index, and a cell count beyond int32 wraps the streaming
-  // tables into negative (wild) indices.
+  // kernels still index, and the flat indices must not overflow.
   ValidateMeshExtents(mesh.size[0], mesh.size[1], kQ_, "openmp::cpu::LbmTube");
 
   // Thread count and affinity (`omp_set_num_threads`, `OMP_PLACES`,
@@ -236,27 +316,60 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   nx_ = mesh.size[0];
   ny_ = mesh.size[1];
   N_ = nx_ * ny_;
-  uSize_ = N_ * kDim_;
-  distSize_ = N_ * kQ_;
+
+  constants_.ushiftX = control.U(0);
+  constants_.ushiftY = control.U(1);
+  constants_.cv = fluid.specificHeatCv;
+  constants_.cp = fluid.specificHeatCp;
+  constants_.invCv = Scalar{ 1 } / fluid.specificHeatCv;
+  constants_.rgas = fluid.constant;
+  constants_.viscosity = fluid.viscosity;
+  constants_.conductivity = fluid.conductivity;
+
+  stencil_ = lbmini::BuildDirectionStencil<LatticeType>(ny_, control.U(0), control.U(1), control.idw);
+
+  // Corner row `(j + o) mod ny` with `o` in `[0, ny)` wraps for `j >= ny - o`.
+  // A small `o` is a forward offset (valid for `j < ny - o`), a large one a
+  // backward offset `o - ny` (valid for `j >= ny - o`).
+  jLo_ = 0;
+  jHi_ = ny_;
+  auto classify = [this](const Index o) -> Index {
+    if (2 * o <= ny_) {
+      jHi_ = std::min(jHi_, ny_ - o);
+      return o;
+    }
+    jLo_ = std::max(jLo_, ny_ - o);
+    return o - ny_;
+  };
+  for (int idc = 0; idc < kQ; ++idc) {
+    anyNearest_ = anyNearest_ || (stencil_.nearest[idc] != 0);
+    sy0_[idc] = classify(stencil_.oy0[idc]);
+    sy1_[idc] = classify(stencil_.oy1[idc]);
+  }
+  jHi_ = std::max(jHi_, jLo_);
+  if (anyNearest_) {
+    // Degenerate weights: every cell takes the generic gather.
+    jLo_ = ny_;
+    jHi_ = ny_;
+  }
+
+  // Distributions and warm start are first written by `Init()` (see
+  // `FirstTouchAllocator`); the macroscopic fields are zero until then.
+  fA_.resize(N_ * kQ_);
+  fB_.resize(N_ * kQ_);
+  gA_.resize(N_ * kQ_);
+  gB_.resize(N_ * kQ_);
+  xi_.resize(N_ * kDim_);
 
   rho_.assign(N_, Scalar{ 0 });
   p_.assign(N_, Scalar{ 0 });
   tem_.assign(N_, Scalar{ 0 });
-  u_.assign(uSize_, Scalar{ 0 });
+  u_.assign(N_ * kDim_, Scalar{ 0 });
 
-  f_.assign(distSize_, Scalar{ 0 });
-  g_.assign(distSize_, Scalar{ 0 });
-  faux_.assign(distSize_, Scalar{ 0 });
-  gaux_.assign(distSize_, Scalar{ 0 });
-
-  lastGx_.assign(N_ * (kDim_ + 1), Scalar{ 0 });
-
-  fCur_ = f_.data();
-  fAlt_ = faux_.data();
-  gCur_ = g_.data();
-  gAlt_ = gaux_.data();
-
-  buildStreamingTables();
+  fCur_ = fA_.data();
+  fAlt_ = fB_.data();
+  gCur_ = gA_.data();
+  gAlt_ = gB_.data();
 }
 
 template<typename Scalar, typename LatticeType>
@@ -292,38 +405,343 @@ auto LbmTube<Scalar, LatticeType>::U() const -> Tensor<Scalar, kDim_ + 1> {
 }
 
 template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::Init() {
-  // Initialize macroscopic fields with the Sod-like left/right state.
-  // NUMA first-touch: the same `schedule(static)` partition also binds
-  // each thread's pages to its local NUMA node so the hot kernels later
-  // find their data on the right side of the interconnect.
-  #pragma omp parallel for schedule(static)
-  for (Index i = 0; i < nx_; ++i) {
-    for (Index j = 0; j < ny_; ++j) {
-      const Index cell = cellIndex(i, j);
-      u_[0 * N_ + cell] = Scalar{ 0 };
-      u_[1 * N_ + cell] = Scalar{ 0 };
-      if (i < nx_ / 2) {
-        rho_[cell] = kFluid_.densityL;
-        p_[cell] = kFluid_.pressureL;
-      } else {
-        rho_[cell] = kFluid_.densityR;
-        p_[cell] = kFluid_.pressureR;
+void LbmTube<Scalar, LatticeType>::Feq(
+  const Scalar rhoc,
+  const Scalar ux,
+  const Scalar uy,
+  const Scalar temc,
+  const Constants& c,
+  Scalar (&feq)[kQ]
+) {
+  LBMINI_UNROLL(9)
+  for (int idc = 0; idc < kQ; ++idc) {
+    Scalar phi = rhoc;
+    LBMINI_UNROLL(2)
+    for (int d = 0; d < kD; ++d) {
+      const auto vi = LatticeType::Velocity(idc, d);
+      const Scalar uia = (d == 0 ? ux : uy) - (d == 0 ? c.ushiftX : c.ushiftY);
+      const Scalar uia2t = uia * uia + temc;
+      Scalar pf;
+      if (vi == 0)
+        pf = Scalar{ 1 } - uia2t;
+      else if (vi == 1)
+        pf = Scalar{ 0.5 } * (uia + uia2t);
+      else
+        pf = Scalar{ 0.5 } * (-uia + uia2t);
+      phi *= pf;
+    }
+    feq[idc] = phi;
+  }
+}
+
+template<typename Scalar, typename LatticeType>
+void LbmTube<Scalar, LatticeType>::Macroscopic(
+  const Scalar (&f)[kQ],
+  const Scalar (&g)[kQ],
+  const Constants& c,
+  Scalar& rho,
+  Scalar& ux,
+  Scalar& uy,
+  Scalar& tem,
+  Scalar& pres
+) {
+  Scalar rhoSum = Scalar{ 0 };
+  Scalar nrg = Scalar{ 0 };
+  Scalar momX = Scalar{ 0 };
+  Scalar momY = Scalar{ 0 };
+  LBMINI_UNROLL(9)
+  for (int idc = 0; idc < kQ; ++idc) {
+    rhoSum += f[idc];
+    nrg += g[idc];
+    momX += LatticeType::Cshift(idc, 0, c.ushiftX) * f[idc];
+    momY += LatticeType::Cshift(idc, 1, c.ushiftY) * f[idc];
+  }
+  const Scalar invRho = Scalar{ 1 } / rhoSum;
+  ux = momX * invRho;
+  uy = momY * invRho;
+  const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
+  tem = (Scalar{ 0.5 } * nrg * invRho - kin) * c.invCv;
+  rho = rhoSum;
+  pres = c.rgas * rhoSum * tem;
+}
+
+template<typename Scalar, typename LatticeType>
+void LbmTube<Scalar, LatticeType>::Collide(
+  const Constants& c,
+  const Scalar rhoc,
+  const Scalar ux,
+  const Scalar uy,
+  const Scalar temc,
+  Scalar (&f)[kQ],
+  Scalar (&g)[kQ],
+  Scalar (&xi)[kD]
+) {
+  using std::exp;
+  using std::fabs;
+
+  const Scalar ushiftX = c.ushiftX;
+  const Scalar ushiftY = c.ushiftY;
+  const Scalar u2 = ux * ux + uy * uy;
+
+  Scalar feqLocal[kQ];
+  Feq(rhoc, ux, uy, temc, c, feqLocal);
+
+  // Geq via Newton-Raphson on the normalised energy flux.
+  const Scalar E = c.cv * temc + Scalar{ 0.5 } * u2;
+  const Scalar targetE = Scalar{ 2 } * rhoc * E;
+  Scalar targetM[kD];
+  LBMINI_UNROLL(2)
+  for (int d = 0; d < kD; ++d)
+    targetM[d] = Scalar{ 2 } * rhoc * (d == 0 ? ux : uy) * (E + temc) / targetE;
+
+  Scalar alpha = Scalar{ 1 };
+  Scalar si[kQ];
+  Scalar e[kQ];
+  Scalar Z = Scalar{ 0 };
+  Scalar smax = Scalar{ 0 };
+  bool solverOk = true;
+
+  LBMINI_UNROLL(3)
+  for (int iter = 0; iter < kMaxIter_; ++iter) {
+    smax = -kMaxExp_;
+    LBMINI_UNROLL(9)
+    for (int idc = 0; idc < kQ; ++idc) {
+      Scalar s = Scalar{ 0 };
+      LBMINI_UNROLL(2)
+      for (int d = 0; d < kD; ++d)
+        s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
+      si[idc] = s;
+      smax = (s > smax) ? s : smax;
+    }
+    smax = (smax < kMaxExp_) ? smax : kMaxExp_;
+
+    Scalar S1[kD] = { Scalar{ 0 }, Scalar{ 0 } };
+    Scalar S2[kD][kD] = { { Scalar{ 0 }, Scalar{ 0 } }, { Scalar{ 0 }, Scalar{ 0 } } };
+    Z = Scalar{ 0 };
+    LBMINI_UNROLL(9)
+    for (int idc = 0; idc < kQ; ++idc) {
+      Scalar expo = si[idc] - smax;
+      expo = (expo < kMaxExp_) ? expo : kMaxExp_;
+      expo = (expo > -kMaxExp_) ? expo : -kMaxExp_;
+      const Scalar wev = LatticeType::Weights(idc, temc) * exp(expo);
+      e[idc] = wev;
+      Z += wev;
+      LBMINI_UNROLL(2)
+      for (int a = 0; a < kD; ++a) {
+        const Scalar cia = LatticeType::Cshift(idc, a, (a == 0 ? ushiftX : ushiftY));
+        S1[a] += cia * wev;
+        LBMINI_UNROLL(2)
+        for (int b = 0; b < kD; ++b)
+          S2[a][b] += cia * LatticeType::Cshift(idc, b, (b == 0 ? ushiftX : ushiftY)) * wev;
       }
-      tem_[cell] = LatticeType::Cs2 * p_[cell] / (rho_[cell] * kFluid_.constant);
-      for (Index d = 0; d < kDim_ + 1; ++d)
-        lastGx_[cell * (kDim_ + 1) + d] = Scalar{ 0 };
+    }
+
+    const Scalar Zsafe = (Z > kTiny_) ? Z : kTiny_;
+    solverOk = solverOk && (Z > kTiny_);
+    const Scalar invZ = Scalar{ 1 } / Zsafe;
+
+    Scalar J[kD][kD];
+    LBMINI_UNROLL(2)
+    for (int a = 0; a < kD; ++a)
+      LBMINI_UNROLL(2)
+      for (int b = 0; b < kD; ++b)
+        J[a][b] = (S2[a][b] - S1[a] * S1[b] * invZ) * invZ;
+    J[0][0] += kTiny_;
+    J[1][1] += kTiny_;
+
+    const Scalar detJ = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+    const Scalar absDet = fabs(detJ);
+    const Scalar detSafe = (absDet > kTiny_) ? detJ : ((detJ >= Scalar{ 0 }) ? kTiny_ : -kTiny_);
+    solverOk = solverOk && (absDet > kTiny_);
+    const Scalar invDet = Scalar{ 1 } / detSafe;
+
+    const Scalar r0 = S1[0] * invZ - targetM[0];
+    const Scalar r1 = S1[1] * invZ - targetM[1];
+    xi[0] -= alpha * (J[1][1] * r0 - J[0][1] * r1) * invDet;
+    xi[1] -= alpha * (-J[1][0] * r0 + J[0][0] * r1) * invDet;
+    alpha *= Scalar{ 0.5 };
+  }
+
+  Scalar geqLocal[kQ];
+  if (solverOk) {
+    // Recompute e[], Z with the final xi.
+    smax = -kMaxExp_;
+    LBMINI_UNROLL(9)
+    for (int idc = 0; idc < kQ; ++idc) {
+      Scalar s = Scalar{ 0 };
+      LBMINI_UNROLL(2)
+      for (int d = 0; d < kD; ++d)
+        s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
+      si[idc] = s;
+      smax = (s > smax) ? s : smax;
+    }
+    smax = (smax < kMaxExp_) ? smax : kMaxExp_;
+    Z = Scalar{ 0 };
+    LBMINI_UNROLL(9)
+    for (int idc = 0; idc < kQ; ++idc) {
+      Scalar expo = si[idc] - smax;
+      expo = (expo < kMaxExp_) ? expo : kMaxExp_;
+      expo = (expo > -kMaxExp_) ? expo : -kMaxExp_;
+      e[idc] = LatticeType::Weights(idc, temc) * exp(expo);
+      Z += e[idc];
+    }
+    const Scalar scale = targetE / Z;
+    LBMINI_UNROLL(9)
+    for (int idc = 0; idc < kQ; ++idc)
+      geqLocal[idc] = scale * e[idc];
+  } else {
+    // Fallback: normalised-Wi distribution, cold restart of the warm start.
+    xi[0] = Scalar{ 0 };
+    xi[1] = Scalar{ 0 };
+    Scalar sumW = Scalar{ 0 };
+    LBMINI_UNROLL(9)
+    for (int idc = 0; idc < kQ; ++idc)
+      sumW += LatticeType::Weights(idc, temc);
+    if (sumW <= kTiny_) {
+      const Scalar uni = targetE / Scalar(kQ);
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc)
+        geqLocal[idc] = uni;
+    } else {
+      const Scalar sc = targetE / sumW;
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc)
+        geqLocal[idc] = LatticeType::Weights(idc, temc) * sc;
     }
   }
 
-  // Seed f = feq, g = geq. The fused collision kernel is idempotent when
-  // f == feq and g == geq (omegaL*(feq-f) == 0), so calling it twice gives
-  // the same result as a dedicated "compute equilibria only" path while
-  // avoiding duplicating ~200 lines of NR logic.
-  // First call: f/g are zero -> writes relaxed BGK = feq (since omegaL*(feq-0)+0 = omegaL*feq,
-  // which is NOT exactly feq). So we do a plain feq seed instead:
-  seedEquilibria();
-  computeMacroscopic();
+  // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
+  const Scalar tau = c.viscosity / (rhoc * temc) + Scalar{ 0.5 };
+  const Scalar omega = Scalar{ 1 } / tau;
+  const Scalar diffusivity = c.conductivity / (rhoc * c.cp);
+  const Scalar tauT = diffusivity / temc + Scalar{ 0.5 };
+  Scalar omegaT = Scalar{ 1 } / tauT;
+
+  Scalar eps = Scalar{ 0 };
+  LBMINI_UNROLL(9)
+  for (int idc = 0; idc < kQ; ++idc) {
+    const Scalar diff = f[idc] - feqLocal[idc];
+    const Scalar den = (feqLocal[idc] > kTiny_) ? feqLocal[idc] : kTiny_;
+    eps += fabs(diff) / den;
+  }
+  eps /= Scalar(kQ);
+  Scalar sigma = Scalar{ 1 };
+  if (eps >= Scalar{ 1 })
+    sigma = omega;
+  else if (eps >= Scalar{ 0.1 })
+    sigma = Scalar{ 1.35 };
+  else if (eps >= Scalar{ 0.01 })
+    sigma = Scalar{ 1.05 };
+
+  Scalar omegaL = omega / sigma;
+  omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };
+  omegaL = (omegaL < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaL : (Scalar{ 2 } - Scalar{ 1e-7 });
+  omegaT = (omegaT > Scalar{ 1 }) ? omegaT : Scalar{ 1 };
+  omegaT = (omegaT < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaT : (Scalar{ 2 } - Scalar{ 1e-7 });
+
+  // L[a] = sum_i 2 * (u . c_i) * c_i_a * (f - feq)   (c_i unshifted)
+  Scalar L[kD] = { Scalar{ 0 }, Scalar{ 0 } };
+  LBMINI_UNROLL(9)
+  for (int idc = 0; idc < kQ; ++idc) {
+    const Scalar cix0 = static_cast<Scalar>(LatticeType::Velocity(idc, 0));
+    const Scalar ciy0 = static_cast<Scalar>(LatticeType::Velocity(idc, 1));
+    const Scalar uvi = ux * cix0 + uy * ciy0;
+    const Scalar aux = Scalar{ 2 } * uvi * (f[idc] - feqLocal[idc]);
+    L[0] += aux * cix0;
+    L[1] += aux * ciy0;
+  }
+
+  const Scalar invT = Scalar{ 1 } / temc;
+  LBMINI_UNROLL(9)
+  for (int idc = 0; idc < kQ; ++idc) {
+    const Scalar fOld = f[idc];
+    f[idc] = fOld + omegaL * (feqLocal[idc] - fOld);
+    const Scalar cidotL = L[0] * LatticeType::Cshift(idc, 0, ushiftX) + L[1] * LatticeType::Cshift(idc, 1, ushiftY);
+    const Scalar Wi = LatticeType::Weights(idc, temc);
+    const Scalar gDiff = Wi * cidotL * invT;
+    const Scalar gOld = g[idc];
+    g[idc] = gOld + omegaL * (geqLocal[idc] - gOld) + (omegaL - omegaT) * gDiff;
+  }
+}
+
+template<typename Scalar, typename LatticeType>
+void LbmTube<Scalar, LatticeType>::Init() {
+  // The buffers are only ever written by kernels, so a re-Init() simply
+  // restarts from the initial condition, in the current ping-pong buffer.
+  const Constants c = constants_;
+  const Index nx = nx_;
+  const Index ny = ny_;
+  const Index N = N_;
+  const Scalar densityL = kFluid_.densityL;
+  const Scalar pressureL = kFluid_.pressureL;
+  const Scalar densityR = kFluid_.densityR;
+  const Scalar pressureR = kFluid_.pressureR;
+  Scalar* __restrict__ pF = fCur_;
+  Scalar* __restrict__ pG = gCur_;
+  Scalar* __restrict__ pXi = xi_.data();
+  Scalar* __restrict__ pRho = rho_.data();
+  Scalar* __restrict__ pP = p_.data();
+  Scalar* __restrict__ pT = tem_.data();
+  Scalar* __restrict__ pU = u_.data();
+
+  // Same `schedule(static)` row partition as `step()`: NUMA first touch.
+  #pragma omp parallel for schedule(static)
+  for (Index i = 0; i < nx; ++i) {
+    // Sod-like left/right state (reference `Init()`).
+    const bool left = i < nx / 2;
+    const Scalar rho0 = left ? densityL : densityR;
+    const Scalar p0 = left ? pressureL : pressureR;
+    const Scalar tem0 = LatticeType::Cs2 * p0 / (rho0 * c.rgas);
+    const Scalar ux0 = Scalar{ 0 };
+    const Scalar uy0 = Scalar{ 0 };
+
+    for (Index j = 0; j < ny; ++j) {
+      const Index cell = i * ny + j;
+
+      // seedEquilibria(): f = feq, g = Wi(T)-normalised geq (xi == 0).
+      Scalar f[kQ];
+      Scalar g[kQ];
+      Feq(rho0, ux0, uy0, tem0, c, f);
+      const Scalar u2 = ux0 * ux0 + uy0 * uy0;
+      const Scalar E = c.cv * tem0 + Scalar{ 0.5 } * u2;
+      const Scalar targetE = Scalar{ 2 } * rho0 * E;
+      Scalar sumW = Scalar{ 0 };
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc)
+        sumW += LatticeType::Weights(idc, tem0);
+      const Scalar sc = (sumW > kTiny_) ? targetE / sumW : targetE / Scalar(kQ);
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc) {
+        const Scalar wi = (sumW > kTiny_) ? LatticeType::Weights(idc, tem0) : Scalar{ 1 };
+        g[idc] = wi * sc;
+      }
+
+      // computeMacroscopic(): the state every getter sees after Init().
+      Scalar rho;
+      Scalar ux;
+      Scalar uy;
+      Scalar tem;
+      Scalar pres;
+      Macroscopic(f, g, c, rho, ux, uy, tem, pres);
+      pRho[cell] = rho;
+      pP[cell] = pres;
+      pT[cell] = tem;
+      pU[0 * N + cell] = ux;
+      pU[1 * N + cell] = uy;
+
+      // First collision, cold Newton start.
+      Scalar xi[kD] = { Scalar{ 0 }, Scalar{ 0 } };
+      Collide(c, rho, ux, uy, tem, f, g, xi);
+
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc) {
+        pF[idc * N + cell] = f[idc];
+        pG[idc * N + cell] = g[idc];
+      }
+      pXi[0 * N + cell] = xi[0];
+      pXi[1 * N + cell] = xi[1];
+    }
+  }
 }
 
 template<typename Scalar, typename LatticeType>
@@ -333,666 +751,172 @@ void LbmTube<Scalar, LatticeType>::Step(const bool save) {
 
 template<typename Scalar, typename LatticeType>
 void LbmTube<Scalar, LatticeType>::Run(const Index steps, bool /*save*/) {
+  if (steps <= 0)
+    return;
+
   #pragma omp parallel default(shared)
   {
+    // Thread-private ping-pong roles, swapped identically by every thread:
+    // the implicit barrier of each step's `omp for` is the only
+    // synchronisation. The members are read here, before that first barrier,
+    // and written back after the last one.
+    Scalar* fIn = fCur_;
+    Scalar* fOut = fAlt_;
+    Scalar* gIn = gCur_;
+    Scalar* gOut = gAlt_;
     for (Index t = 0; t < steps; ++t) {
-      collisionAndEquilibria();
-      streamAndMacroscopic();
-      #pragma omp single
-      {
-        std::swap(fCur_, fAlt_);
-        std::swap(gCur_, gAlt_);
-      }
-      // implicit barrier after `single` synchronises all threads before the
-      // next collisionAndEquilibria reads the freshly swapped fCur_/gCur_.
+      if (t + 1 < steps)
+        step<false>(fIn, gIn, fOut, gOut);
+      else
+        step<true>(fIn, gIn, fOut, gOut);
+      std::swap(fIn, fOut);
+      std::swap(gIn, gOut);
+    }
+    #pragma omp single nowait
+    {
+      fCur_ = fIn;
+      fAlt_ = fOut;
+      gCur_ = gIn;
+      gAlt_ = gOut;
     }
   }
 }
 
 template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::computeMacroscopic() {
-  const Scalar Ushift[2] = { kControl_.U(0), kControl_.U(1) };
-  const Scalar invCv = Scalar{ 1 } / kFluid_.specificHeatCv;
-  const Scalar Rgas = kFluid_.constant;
-  const Scalar* __restrict__ pF = fCur_;
-  const Scalar* __restrict__ pG = gCur_;
+template<bool kStoreMacro>
+void LbmTube<Scalar, LatticeType>::step(
+  const Scalar* const fInPtr,
+  const Scalar* const gInPtr,
+  Scalar* const fOutPtr,
+  Scalar* const gOutPtr
+) {
+  const Scalar* __restrict__ fIn = fInPtr;
+  const Scalar* __restrict__ gIn = gInPtr;
+  Scalar* __restrict__ fOut = fOutPtr;
+  Scalar* __restrict__ gOut = gOutPtr;
+  Scalar* __restrict__ pXi = xi_.data();
   Scalar* __restrict__ pRho = rho_.data();
   Scalar* __restrict__ pP = p_.data();
   Scalar* __restrict__ pT = tem_.data();
   Scalar* __restrict__ pU = u_.data();
 
-  // `for simd` (not `parallel for`): callable from inside a hoisted parallel
-  // region without nested parallelism. The caller (`Run()`) provides the
-  // surrounding `#pragma omp parallel`.
-  // No `nowait`: the implicit barrier at the end of `omp for` protects the
-  // downstream kernel (next time-step's collisionAndEquilibria) from reading
-  // rho_/u_/tem_ before all threads have finished writing them.
-  #pragma omp for simd schedule(static)
-  for (Index cell = 0; cell < N_; ++cell) {
-    Scalar rho = Scalar{ 0 };
-    Scalar nrg = Scalar{ 0 };
-    Scalar mom[kDim_] = { Scalar{ 0 }, Scalar{ 0 } };
-
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      const Scalar fi = pF[idc * N_ + cell];
-      const Scalar gi = pG[idc * N_ + cell];
-      rho += fi;
-      nrg += gi;
-      mom[0] += LatticeType::Cshift(idc, 0, Ushift[0]) * fi;
-      mom[1] += LatticeType::Cshift(idc, 1, Ushift[1]) * fi;
-    }
-
-    pRho[cell] = rho;
-
-    const Scalar invRho = Scalar{ 1 } / rho;
-    const Scalar ux = mom[0] * invRho;
-    const Scalar uy = mom[1] * invRho;
-    pU[0 * N_ + cell] = ux;
-    pU[1 * N_ + cell] = uy;
-
-    const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
-    const Scalar T = (Scalar{ 0.5 } * nrg * invRho - kin) * invCv;
-    pT[cell] = T;
-    pP[cell] = Rgas * rho * T;
+  // Thread-local copies: nothing below can alias them, so they stay in
+  // registers / on the stack across the stores of the cell loop.
+  const Constants c = constants_;
+  const Index nx = nx_;
+  const Index ny = ny_;
+  const Index N = N_;
+  const Index jLo = jLo_;
+  const Index jHi = jHi_;
+  const lbmini::DirectionStencil<Scalar, kQ> st = stencil_;
+  Index sy0[kQ];
+  Index sy1[kQ];
+  for (int idc = 0; idc < kQ; ++idc) {
+    sy0[idc] = sy0_[idc];
+    sy1[idc] = sy1_[idc];
   }
-}
 
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::seedEquilibria() {
-  // Compute feq / geq directly from (rho, u, T) and write into f_ / g_ .
-  // Used only from Init() where u == 0, so NR solution is trivial (xi == 0)
-  // and geq_i = Wi(T) * (2*rho*E) / sum(Wi). Called outside the hoisted
-  // `Run()` parallel region, so we fork our own.
-  const Scalar Ushift[2] = { kControl_.U(0), kControl_.U(1) };
-  Scalar* __restrict__ pF = f_.data();
-  Scalar* __restrict__ pG = g_.data();
-  const Scalar* __restrict__ pRho = rho_.data();
-  const Scalar* __restrict__ pT = tem_.data();
-  const Scalar* __restrict__ pU = u_.data();
+  auto clampX = [nx](const Index x) -> Index { return (x < 0) ? Index{ 0 } : ((x >= nx) ? nx - 1 : x); };
 
-  #pragma omp parallel for simd schedule(static)
-  for (Index cell = 0; cell < N_; ++cell) {
-    const Scalar rho = pRho[cell];
-    const Scalar T = pT[cell];
-    const Scalar ux = pU[0 * N_ + cell];
-    const Scalar uy = pU[1 * N_ + cell];
-    const Scalar u2 = ux * ux + uy * uy;
-
-    // Feq (product form).
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      Scalar phi = rho;
-      for (Index d = 0; d < kDim_; ++d) {
-        const int vi = LatticeType::Velocity(idc, d);
-        const Scalar uia = (d == 0 ? ux : uy) - Ushift[d];
-        const Scalar uia2t = uia * uia + T;
-        const Scalar pf = (vi == 0)   ? (Scalar{ 1 } - uia2t)
-                          : (vi == 1) ? (Scalar{ 0.5 } * (uia + uia2t))
-                                      : (Scalar{ 0.5 } * (-uia + uia2t));
-        phi *= pf;
-      }
-      pF[idc * N_ + cell] = phi;
-    }
-
-    // Geq: normalized-Wi distribution (xi == 0 -> e_i = Wi).
-    const Scalar E = kFluid_.specificHeatCv * T + Scalar{ 0.5 } * u2;
-    const Scalar targetE = Scalar{ 2 } * rho * E;
-    Scalar sumW = Scalar{ 0 };
-    for (Index idc = 0; idc < kQ_; ++idc)
-      sumW += LatticeType::Weights(idc, T);
-    const Scalar sc = (sumW > kTiny_) ? targetE / sumW : targetE / Scalar(kQ_);
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      const Scalar wi = (sumW > kTiny_) ? LatticeType::Weights(idc, T) : Scalar{ 1 };
-      pG[idc * N_ + cell] = wi * sc;
-    }
-  }
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::collisionAndEquilibria() {
-  static_assert(kDim_ == 2, "The tiled collision kernel is written for two-dimensional lattices.");
-
-  // `for` (not `parallel for`): see `computeMacroscopic()`. The caller owns
-  // the parallel region; we just schedule the tiles.
-  //
-  // Cells are processed in tiles of `kTile_`. Every stage below is a flat
-  // `omp simd` loop over the lanes of one tile, with the `kQ_` directions
-  // outermost. A single per-cell loop holding the nested direction and
-  // Newton-Raphson loops is not vectorized by GCC at all, so its `exp`/`log`
-  // stay scalar; here each of them sits in a plain loop that the compiler maps
-  // onto the SIMD math library (libmvec under `-ffast-math`). The per-cell
-  // arithmetic and its evaluation order are unchanged.
-  const Scalar Ushift[2] = { kControl_.U(0), kControl_.U(1) };
-  const Scalar cv = kFluid_.specificHeatCv;
-  const Scalar cp = kFluid_.specificHeatCp;
-  const Scalar mu = kFluid_.viscosity;
-  const Scalar lambda = kFluid_.conductivity;
-  constexpr Index maxIter = 3;
-
-  Scalar* __restrict__ pF = fCur_;
-  Scalar* __restrict__ pG = gCur_;
-  Scalar* __restrict__ pLastGx = lastGx_.data();
-  const Scalar* __restrict__ pRho = rho_.data();
-  const Scalar* __restrict__ pT = tem_.data();
-  const Scalar* __restrict__ pU = u_.data();
-
-  // Precompute cshift table once (runtime constant).
-  Scalar cshift[kQ_][kDim_];
-  for (Index idc = 0; idc < kQ_; ++idc)
-    for (Index d = 0; d < kDim_; ++d)
-      cshift[idc][d] = LatticeType::Cshift(idc, d, Ushift[d]);
-
-  using std::exp;
-  using std::log;
-  using std::fabs;
-
-  // Factorized product form of the equilibrium, one lattice component.
-  const auto eqFactor = [](const Index vi, const Scalar uia, const Scalar T) {
-    const Scalar uia2t = uia * uia + T;
-    return (vi == 0)   ? (Scalar{ 1 } - uia2t)
-           : (vi == 1) ? (Scalar{ 0.5 } * (uia + uia2t))
-                       : (Scalar{ 0.5 } * (-uia + uia2t)); // vi == -1
-  };
-
-  const Index nTiles = (N_ + kTile_ - 1) / kTile_;
-
-  // No `nowait`: downstream `stream()` reads the freshly relaxed f_/g_ and
-  // requires them fully written by all threads first.
   #pragma omp for schedule(static)
-  for (Index tile = 0; tile < nTiles; ++tile) {
-    const Index base = tile * kTile_;
-    const Index n = std::min<Index>(kTile_, N_ - base);
-    const Scalar* rho = pRho + base;
-    const Scalar* tem = pT + base;
-    const Scalar* ux = pU + base;
-    const Scalar* uy = pU + N_ + base;
-
-    Scalar feq[kQ_][kTile_];
-    Scalar wgt[kQ_][kTile_];
-    Scalar ew[kQ_][kTile_]; // weighted exponentials, then geq
-    Scalar si[kQ_][kTile_];
-    Scalar tE[kTile_], tM0[kTile_], tM1[kTile_];
-    Scalar xi0[kTile_], xi1[kTile_];
-    Scalar smax[kTile_], Z[kTile_];
-    Scalar S1x[kTile_], S1y[kTile_], S2xx[kTile_], S2xy[kTile_], S2yy[kTile_];
-    Scalar ok[kTile_]; // solverOk as 1/0: once degenerate, stays degenerate
-    Scalar sumW[kTile_];
-
-    // Targets and warm start.
-    #pragma omp simd
-    for (Index l = 0; l < n; ++l) {
-      const Scalar r = rho[l];
-      const Scalar T = tem[l];
-      const Scalar vx = ux[l];
-      const Scalar vy = uy[l];
-      const Scalar u2 = vx * vx + vy * vy;
-      const Scalar E = cv * T + Scalar{ 0.5 } * u2;
-      const Scalar targetE = Scalar{ 2 } * r * E;
-      tE[l] = targetE;
-      tM0[l] = Scalar{ 2 } * r * vx * (E + T) / targetE;
-      tM1[l] = Scalar{ 2 } * r * vy * (E + T) / targetE;
-      ok[l] = Scalar{ 1 };
-      sumW[l] = Scalar{ 0 };
-    }
-    // Strided in the cell index, so kept out of the simd loops.
-    for (Index l = 0; l < n; ++l) {
-      xi0[l] = pLastGx[(base + l) * (kDim_ + 1) + 1];
-      xi1[l] = pLastGx[(base + l) * (kDim_ + 1) + 2];
+  for (Index i = 0; i < nx; ++i) {
+    // Flat offsets of the two (clamped) source columns of every direction.
+    Index rowA[kQ];
+    Index rowB[kQ];
+    LBMINI_UNROLL(9)
+    for (int idc = 0; idc < kQ; ++idc) {
+      const Index xa = i + st.ox[idc];
+      rowA[idc] = idc * N + clampX(xa) * ny;
+      rowB[idc] = idc * N + clampX(xa + 1) * ny;
     }
 
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        const Scalar w = LatticeType::Weights(idc, tem[l]);
-        wgt[idc][l] = w;
-        sumW[l] += w;
-      }
-    }
-
-    // Feq (Eq. factorized product form)
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      const Index vx = LatticeType::Velocity(idc, 0);
-      const Index vy = LatticeType::Velocity(idc, 1);
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l)
-        feq[idc][l] = rho[l] * eqFactor(vx, ux[l] - Ushift[0], tem[l])
-                      * eqFactor(vy, uy[l] - Ushift[1], tem[l]);
-    }
-
-    // Geq via Newton-Raphson on normalized energy flux.
-    // Fixed-iteration Newton-Raphson: no early exit, no data-dependent branch
-    // on Z or detJ. Z and detJ are clamped to `kTiny_` magnitude to keep the
-    // reciprocals finite; `ok` records whether any iteration degenerated and
-    // drives the fallback selection at geq assembly time. Evaluated on exit
-    // (no mid-loop break) so control flow is uniform across a warp / SIMD lane
-    // set — the GPU-critical property.
-    Scalar alpha = Scalar{ 1 };
-    for (Index iter = 0; iter < maxIter; ++iter) {
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        smax[l] = -kMaxExp_;
-        Z[l] = Scalar{ 0 };
-        S1x[l] = Scalar{ 0 };
-        S1y[l] = Scalar{ 0 };
-        S2xx[l] = Scalar{ 0 };
-        S2xy[l] = Scalar{ 0 };
-        S2yy[l] = Scalar{ 0 };
+    // Shared tail of both gathers: macroscopics, collision, stores.
+    auto relax = [&](const Index cell, Scalar (&f)[kQ], Scalar (&g)[kQ]) LBMINI_OMP_CPU_LAMBDA_INLINE {
+      Scalar rho;
+      Scalar ux;
+      Scalar uy;
+      Scalar tem;
+      Scalar pres;
+      Macroscopic(f, g, c, rho, ux, uy, tem, pres);
+      if constexpr (kStoreMacro) {
+        pRho[cell] = rho;
+        pP[cell] = pres;
+        pT[cell] = tem;
+        pU[0 * N + cell] = ux;
+        pU[1 * N + cell] = uy;
       }
 
-      for (Index idc = 0; idc < kQ_; ++idc) {
-        const Scalar cx = cshift[idc][0];
-        const Scalar cy = cshift[idc][1];
-        #pragma omp simd
-        for (Index l = 0; l < n; ++l) {
-          Scalar s = Scalar{ 0 };
-          s += xi0[l] * cx;
-          s += xi1[l] * cy;
-          si[idc][l] = s;
-          smax[l] = (s > smax[l]) ? s : smax[l];
+      Scalar xi[kD] = { pXi[0 * N + cell], pXi[1 * N + cell] };
+      Collide(c, rho, ux, uy, tem, f, g, xi);
+
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc) {
+        fOut[idc * N + cell] = f[idc];
+        gOut[idc * N + cell] = g[idc];
+      }
+      pXi[0 * N + cell] = xi[0];
+      pXi[1 * N + cell] = xi[1];
+    };
+
+    // Generic gather (`lbmini::GatherSources`): periodic wrap of the rows and
+    // the nearest-node fallback; only the peeled edge columns take it.
+    auto generic = [&](const Index j) {
+      Scalar f[kQ];
+      Scalar g[kQ];
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc) {
+        if (st.nearest[idc]) {
+          const auto xN = static_cast<Index>(std::round(static_cast<Scalar>(i) - st.cix[idc]));
+          const auto yN = static_cast<Index>(std::round(static_cast<Scalar>(j) - st.ciy[idc]));
+          Index yW = yN % ny;
+          yW += (yW < 0) ? ny : 0;
+          const Index src = idc * N + ((xN < 0 || xN >= nx) ? i * ny + j : xN * ny + yW);
+          f[idc] = fIn[src];
+          g[idc] = gIn[src];
+        } else {
+          Index ya = j + st.oy0[idc];
+          ya -= (ya >= ny) ? ny : 0;
+          Index yb = j + st.oy1[idc];
+          yb -= (yb >= ny) ? ny : 0;
+          const Scalar w0 = st.w[idc][0];
+          const Scalar w1 = st.w[idc][1];
+          const Scalar w2 = st.w[idc][2];
+          const Scalar w3 = st.w[idc][3];
+          const Index a = rowA[idc];
+          const Index b = rowB[idc];
+          f[idc] = w0 * fIn[a + ya] + w1 * fIn[b + ya] + w2 * fIn[a + yb] + w3 * fIn[b + yb];
+          g[idc] = w0 * gIn[a + ya] + w1 * gIn[b + ya] + w2 * gIn[a + yb] + w3 * gIn[b + yb];
         }
       }
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l)
-        smax[l] = (smax[l] < kMaxExp_) ? smax[l] : kMaxExp_;
+      relax(i * ny + j, f, g);
+    };
 
-      for (Index idc = 0; idc < kQ_; ++idc) {
-        const Scalar cx = cshift[idc][0];
-        const Scalar cy = cshift[idc][1];
-        const Scalar cxx = cx * cx;
-        const Scalar cxy = cx * cy;
-        const Scalar cyy = cy * cy;
-        #pragma omp simd
-        for (Index l = 0; l < n; ++l) {
-          Scalar expo = si[idc][l] - smax[l];
-          expo = (expo < kMaxExp_) ? expo : kMaxExp_;
-          expo = (expo > -kMaxExp_) ? expo : -kMaxExp_;
-          const Scalar wev = wgt[idc][l] * exp(expo);
-          Z[l] += wev;
-          S1x[l] += cx * wev;
-          S1y[l] += cy * wev;
-          S2xx[l] += cxx * wev;
-          S2xy[l] += cxy * wev;
-          S2yy[l] += cyy * wev;
-        }
+    for (Index j = 0; j < jLo; ++j)
+      generic(j);
+
+    // Interior: four contiguous runs per direction, no index arithmetic.
+    for (Index j = jLo; j < jHi; ++j) {
+      Scalar f[kQ];
+      Scalar g[kQ];
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc) {
+        const Index a0 = rowA[idc] + sy0[idc] + j;
+        const Index b0 = rowB[idc] + sy0[idc] + j;
+        const Index a1 = rowA[idc] + sy1[idc] + j;
+        const Index b1 = rowB[idc] + sy1[idc] + j;
+        const Scalar w0 = st.w[idc][0];
+        const Scalar w1 = st.w[idc][1];
+        const Scalar w2 = st.w[idc][2];
+        const Scalar w3 = st.w[idc][3];
+        f[idc] = w0 * fIn[a0] + w1 * fIn[b0] + w2 * fIn[a1] + w3 * fIn[b1];
+        g[idc] = w0 * gIn[a0] + w1 * gIn[b0] + w2 * gIn[a1] + w3 * gIn[b1];
       }
-
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        // Clamp Z magnitude (branchless) -> safe reciprocal.
-        const Scalar Zl = Z[l];
-        const Scalar Zsafe = (Zl > kTiny_) ? Zl : kTiny_;
-        bool good = (ok[l] > Scalar{ 0 }) && (Zl > kTiny_);
-        const Scalar invZ = Scalar{ 1 } / Zsafe;
-
-        // J is symmetric: S2 and S1 (x) S1 are.
-        // Branchless ridge on the diagonal (was: if (... <= kTiny_) {...}).
-        const Scalar J00 = (S2xx[l] - S1x[l] * S1x[l] * invZ) * invZ + kTiny_;
-        const Scalar J01 = (S2xy[l] - S1x[l] * S1y[l] * invZ) * invZ;
-        const Scalar J11 = (S2yy[l] - S1y[l] * S1y[l] * invZ) * invZ + kTiny_;
-
-        const Scalar detJ = J00 * J11 - J01 * J01;
-        // Clamp |detJ| magnitude -> safe reciprocal, preserving sign.
-        const Scalar absDet = fabs(detJ);
-        const Scalar detSafe = (absDet > kTiny_)
-                                 ? detJ
-                                 : ((detJ >= Scalar{ 0 }) ? kTiny_ : -kTiny_);
-        good = good && (absDet > kTiny_);
-        ok[l] = good ? Scalar{ 1 } : Scalar{ 0 };
-        const Scalar invDet = Scalar{ 1 } / detSafe;
-
-        const Scalar r0 = S1x[l] * invZ - tM0[l];
-        const Scalar r1 = S1y[l] * invZ - tM1[l];
-        xi0[l] -= alpha * (J11 * r0 - J01 * r1) * invDet;
-        xi1[l] -= alpha * (-J01 * r0 + J00 * r1) * invDet;
-      }
-      alpha *= Scalar{ 0.5 };
-    }
-    // Final equilibrium. Both candidates are evaluated for every cell and one
-    // of them is selected, so the tile loops have no data-dependent branch and
-    // map onto SIMD lanes: the Newton-Raphson result while the solver stayed
-    // healthy, the normalized-Wi distribution (uniform if the weights vanish)
-    // otherwise, with the warm start reset in the latter case.
-    #pragma omp simd
-    for (Index l = 0; l < n; ++l) {
-      smax[l] = -kMaxExp_;
-      Z[l] = Scalar{ 0 };
-    }
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      const Scalar cx = cshift[idc][0];
-      const Scalar cy = cshift[idc][1];
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        Scalar s = Scalar{ 0 };
-        s += xi0[l] * cx;
-        s += xi1[l] * cy;
-        si[idc][l] = s;
-        smax[l] = (s > smax[l]) ? s : smax[l];
-      }
-    }
-    #pragma omp simd
-    for (Index l = 0; l < n; ++l)
-      smax[l] = (smax[l] < kMaxExp_) ? smax[l] : kMaxExp_;
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        Scalar expo = si[idc][l] - smax[l];
-        expo = (expo < kMaxExp_) ? expo : kMaxExp_;
-        expo = (expo > -kMaxExp_) ? expo : -kMaxExp_;
-        const Scalar wev = wgt[idc][l] * exp(expo);
-        ew[idc][l] = wev;
-        Z[l] += wev;
-      }
+      relax(i * ny + j, f, g);
     }
 
-    Scalar scale[kTile_], sc[kTile_], uni[kTile_], vanish[kTile_], chi[kTile_];
-    #pragma omp simd
-    for (Index l = 0; l < n; ++l) {
-      scale[l] = tE[l] / Z[l];
-      const bool weightsVanish = sumW[l] <= kTiny_;
-      sc[l] = tE[l] / (weightsVanish ? Scalar{ 1 } : sumW[l]);
-      uni[l] = tE[l] / Scalar(kQ_);
-      vanish[l] = weightsVanish ? Scalar{ 1 } : Scalar{ 0 };
-      chi[l] = log(scale[l] / rho[l]) - smax[l];
-    }
-
-    // geq, overwriting the weighted exponentials in place.
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        const Scalar fallback = (vanish[l] > Scalar{ 0 }) ? uni[l] : wgt[idc][l] * sc[l];
-        ew[idc][l] = (ok[l] > Scalar{ 0 }) ? scale[l] * ew[idc][l] : fallback;
-      }
-    }
-
-    // Strided in the cell index, so kept out of the simd loops.
-    for (Index l = 0; l < n; ++l) {
-      const bool good = ok[l] > Scalar{ 0 };
-      Scalar* gx = pLastGx + (base + l) * (kDim_ + 1);
-      gx[0] = good ? chi[l] : Scalar{ 0 };
-      gx[1] = good ? xi0[l] : Scalar{ 0 };
-      gx[2] = good ? xi1[l] : Scalar{ 0 };
-    }
-
-    // Collision (BGK + Knudsen sensor + thermal-relaxation correction)
-    Scalar epsAcc[kTile_], L0[kTile_], L1[kTile_];
-    Scalar omegaL[kTile_], omegaT[kTile_], invT[kTile_];
-    #pragma omp simd
-    for (Index l = 0; l < n; ++l) {
-      epsAcc[l] = Scalar{ 0 };
-      L0[l] = Scalar{ 0 };
-      L1[l] = Scalar{ 0 };
-    }
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      const Scalar cix0 = static_cast<Scalar>(LatticeType::Velocity(idc, 0));
-      const Scalar ciy0 = static_cast<Scalar>(LatticeType::Velocity(idc, 1));
-      const Scalar* fRow = pF + idc * N_ + base;
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        const Scalar d = fRow[l] - feq[idc][l];
-        const Scalar den = (feq[idc][l] > kTiny_) ? feq[idc][l] : kTiny_;
-        epsAcc[l] += fabs(d) / den;
-
-        // L[a] = sum_i 2 * (u . c_i) * c_i_a * (f - feq)   (c_i unshifted)
-        const Scalar uvi = ux[l] * cix0 + uy[l] * ciy0;
-        const Scalar aux = Scalar{ 2 } * uvi * d;
-        L0[l] += aux * cix0;
-        L1[l] += aux * ciy0;
-      }
-    }
-
-    #pragma omp simd
-    for (Index l = 0; l < n; ++l) {
-      const Scalar r = rho[l];
-      const Scalar T = tem[l];
-      const Scalar tau = mu / (r * T) + Scalar{ 0.5 };
-      const Scalar omega = Scalar{ 1 } / tau;
-      const Scalar diffusivity = lambda / (r * cp);
-      const Scalar tauT = diffusivity / T + Scalar{ 0.5 };
-      Scalar oT = Scalar{ 1 } / tauT;
-
-      const Scalar eps = epsAcc[l] / Scalar(kQ_);
-      const Scalar sigma = (eps >= Scalar{ 1 })      ? omega
-                           : (eps >= Scalar{ 0.1 })  ? Scalar{ 1.35 }
-                           : (eps >= Scalar{ 0.01 }) ? Scalar{ 1.05 }
-                                                     : Scalar{ 1 };
-
-      Scalar oL = omega / sigma;
-      oL = (oL > Scalar{ 1 }) ? oL : Scalar{ 1 };
-      oL = (oL < (Scalar{ 2 } - Scalar{ 1e-7 })) ? oL : (Scalar{ 2 } - Scalar{ 1e-7 });
-      oT = (oT > Scalar{ 1 }) ? oT : Scalar{ 1 };
-      oT = (oT < (Scalar{ 2 } - Scalar{ 1e-7 })) ? oT : (Scalar{ 2 } - Scalar{ 1e-7 });
-      omegaL[l] = oL;
-      omegaT[l] = oT;
-      invT[l] = Scalar{ 1 } / T;
-    }
-
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      const Scalar cx = cshift[idc][0];
-      const Scalar cy = cshift[idc][1];
-      Scalar* fRow = pF + idc * N_ + base;
-      Scalar* gRow = pG + idc * N_ + base;
-      #pragma omp simd
-      for (Index l = 0; l < n; ++l) {
-        const Scalar fOld = fRow[l];
-        fRow[l] = fOld + omegaL[l] * (feq[idc][l] - fOld);
-        const Scalar cidotL = L0[l] * cx + L1[l] * cy;
-        const Scalar gDiff = wgt[idc][l] * cidotL * invT[l];
-        const Scalar gOld = gRow[l];
-        gRow[l] = gOld + omegaL[l] * (ew[idc][l] - gOld) + (omegaL[l] - omegaT[l]) * gDiff;
-      }
-    }
+    for (Index j = jHi; j < ny; ++j)
+      generic(j);
   }
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::streamAndMacroscopic() {
-  // Stream fCur_/gCur_ into fAlt_/gAlt_ via precomputed IDW tables.
-  stream();
-
-  // Compute macroscopic from the just-streamed fAlt_/gAlt_.
-  const Scalar Ushift[2] = { kControl_.U(0), kControl_.U(1) };
-  const Scalar invCv = Scalar{ 1 } / kFluid_.specificHeatCv;
-  const Scalar Rgas = kFluid_.constant;
-  const Scalar* __restrict__ pF = fAlt_;
-  const Scalar* __restrict__ pG = gAlt_;
-  Scalar* __restrict__ pRho = rho_.data();
-  Scalar* __restrict__ pP = p_.data();
-  Scalar* __restrict__ pT = tem_.data();
-  Scalar* __restrict__ pU = u_.data();
-
-  #pragma omp for simd schedule(static)
-  for (Index cell = 0; cell < N_; ++cell) {
-    Scalar rho = Scalar{ 0 };
-    Scalar nrg = Scalar{ 0 };
-    Scalar mom[kDim_] = { Scalar{ 0 }, Scalar{ 0 } };
-
-    for (Index idc = 0; idc < kQ_; ++idc) {
-      const Scalar fi = pF[idc * N_ + cell];
-      const Scalar gi = pG[idc * N_ + cell];
-      rho += fi;
-      nrg += gi;
-      mom[0] += LatticeType::Cshift(idc, 0, Ushift[0]) * fi;
-      mom[1] += LatticeType::Cshift(idc, 1, Ushift[1]) * fi;
-    }
-
-    const Scalar invRho = Scalar{ 1 } / rho;
-    const Scalar ux = mom[0] * invRho;
-    const Scalar uy = mom[1] * invRho;
-    pU[0 * N_ + cell] = ux;
-    pU[1 * N_ + cell] = uy;
-    const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
-    const Scalar T = (Scalar{ 0.5 } * nrg * invRho - kin) * invCv;
-    pRho[cell] = rho;
-    pT[cell] = T;
-    pP[cell] = Rgas * rho * T;
-  }
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::buildStreamingTables() {
-  streamIdx_.assign(distSize_ * 4, 0);
-  streamW_.assign(distSize_ * 4, Scalar{ 0 });
-
-  auto clampX = [&](const Index x) -> Index {
-    if (x < 0)
-      return 0;
-    if (x >= nx_)
-      return nx_ - 1;
-    return x;
-  };
-  auto wrapY = [&](Index y) -> Index {
-    y = y % ny_;
-    if (y < 0)
-      y += ny_;
-    return y;
-  };
-
-  // One-off per-simulation cost — parallelise over the (idc, i) plane.
-  #pragma omp parallel for collapse(2) schedule(static)
-  for (Index idc = 0; idc < kQ_; ++idc) {
-    for (Index i = 0; i < nx_; ++i) {
-      const Scalar cix = LatticeType::Cshift(idc, 0, kControl_.U(0));
-      const Scalar ciy = LatticeType::Cshift(idc, 1, kControl_.U(1));
-      for (Index j = 0; j < ny_; ++j) {
-        const Index cell = cellIndex(i, j);
-        const Index base = (idc * N_ + cell) * 4;
-        const Scalar xSrc = static_cast<Scalar>(i) - cix;
-        const Scalar ySrc = static_cast<Scalar>(j) - ciy;
-
-        const Index x0 = static_cast<Index>(std::floor(xSrc));
-        const Index y0 = static_cast<Index>(std::floor(ySrc));
-        const Index x1 = x0 + 1;
-        const Index y1 = y0 + 1;
-        const Index cx0 = clampX(x0), cx1 = clampX(x1);
-        const Index wy0 = wrapY(y0), wy1 = wrapY(y1);
-
-        const Index c00 = cx0 * ny_ + wy0;
-        const Index c10 = cx1 * ny_ + wy0;
-        const Index c01 = cx0 * ny_ + wy1;
-        const Index c11 = cx1 * ny_ + wy1;
-
-
-        // General bilinear-ish IDW gather (original semantic preserved).
-        const Scalar dx00 = xSrc - static_cast<Scalar>(x0);
-        const Scalar dy00 = ySrc - static_cast<Scalar>(y0);
-        const Scalar dx10 = xSrc - static_cast<Scalar>(x1);
-        const Scalar dy10 = dy00;
-        const Scalar dx01 = dx00;
-        const Scalar dy01 = ySrc - static_cast<Scalar>(y1);
-        const Scalar dx11 = dx10;
-        const Scalar dy11 = dy01;
-        const Scalar d00 = std::sqrt(dx00 * dx00 + dy00 * dy00);
-        const Scalar d10 = std::sqrt(dx10 * dx10 + dy10 * dy10);
-        const Scalar d01 = std::sqrt(dx01 * dx01 + dy01 * dy01);
-        const Scalar d11 = std::sqrt(dx11 * dx11 + dy11 * dy11);
-
-        auto snap = [&](Scalar d, Index cAny) -> bool {
-          if (d >= kTiny_)
-            return false;
-          streamIdx_[base + 0] = static_cast<std::int32_t>(cAny);
-          streamIdx_[base + 1] = streamIdx_[base + 2] = streamIdx_[base + 3] = static_cast<std::int32_t>(cAny);
-          streamW_[base + 0] = Scalar{ 1 };
-          streamW_[base + 1] = streamW_[base + 2] = streamW_[base + 3] = Scalar{ 0 };
-          return true;
-        };
-        if (snap(d00, c00))
-          continue;
-        if (snap(d10, c10))
-          continue;
-        if (snap(d01, c01))
-          continue;
-        if (snap(d11, c11))
-          continue;
-
-        const Scalar idw = kControl_.idw;
-        const Scalar w00 = Scalar{ 1 } / std::pow(d00, idw);
-        const Scalar w10 = Scalar{ 1 } / std::pow(d10, idw);
-        const Scalar w01 = Scalar{ 1 } / std::pow(d01, idw);
-        const Scalar w11 = Scalar{ 1 } / std::pow(d11, idw);
-        const Scalar wsum = w00 + w10 + w01 + w11;
-
-        if (!IsFinite(wsum) || wsum < kTiny_) {
-          // Degenerate fallback: nearest neighbor, bounce-back on x out-of-range.
-          Index xN = static_cast<Index>(std::round(xSrc));
-          Index yN = static_cast<Index>(std::round(ySrc));
-          Index cell2;
-          if (xN < 0 || xN >= nx_) {
-            // Bounce back: use *own* cell but opposite direction; streaming
-            // kernel can't re-read opposite idc without a branch, so we fall
-            // back to exact self-copy of the current cell.
-            cell2 = cell;
-          } else {
-            cell2 = xN * ny_ + wrapY(yN);
-          }
-          streamIdx_[base + 0] = static_cast<std::int32_t>(cell2);
-          streamIdx_[base + 1] = streamIdx_[base + 2] = streamIdx_[base + 3] = static_cast<std::int32_t>(cell2);
-          streamW_[base + 0] = Scalar{ 1 };
-          streamW_[base + 1] = streamW_[base + 2] = streamW_[base + 3] = Scalar{ 0 };
-          continue;
-        }
-        const Scalar invSum = Scalar{ 1 } / wsum;
-        streamIdx_[base + 0] = static_cast<std::int32_t>(c00);
-        streamIdx_[base + 1] = static_cast<std::int32_t>(c10);
-        streamIdx_[base + 2] = static_cast<std::int32_t>(c01);
-        streamIdx_[base + 3] = static_cast<std::int32_t>(c11);
-        streamW_[base + 0] = w00 * invSum;
-        streamW_[base + 1] = w10 * invSum;
-        streamW_[base + 2] = w01 * invSum;
-        streamW_[base + 3] = w11 * invSum;
-      }
-    }
-  }
-
-  // One-off proof that the gather table only addresses existing cells. This is
-  // what licenses `stream()` to dereference `streamIdx_` with no bounds check
-  // whatsoever: the cost is a single linear pass at construction, against
-  // thousands of time steps of unguarded, full-speed gathering.
-  VerifyIndexTable(streamIdx_, N_, "openmp::cpu::LbmTube");
-}
-
-template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::stream() {
-  // Pure streaming: branch-free 4-way IDW gather from f_/g_ into faux_/gaux_.
-  // Intentionally NOT fused with the macroscopic reduction — see the class
-  // `stream()` docstring for the kernel-fission rationale (GPU occupancy).
-  // `for simd` (not `parallel for`): the caller (`Run()`) owns the hoisted
-  // parallel region. Every thread walks the planes in the same order and the
-  // cells of each plane are shared out in contiguous, vectorised chunks.
-  const Scalar* __restrict__ pF = fCur_;
-  const Scalar* __restrict__ pG = gCur_;
-  Scalar* __restrict__ pFaux = fAlt_;
-  Scalar* __restrict__ pGaux = gAlt_;
-  const std::int32_t* __restrict__ pSI = streamIdx_.data();
-  const Scalar* __restrict__ pSW = streamW_.data();
-
-  for (Index idc = 0; idc < kQ_; ++idc) {
-    const Scalar* __restrict__ fplane = pF + idc * N_;
-    const Scalar* __restrict__ gplane = pG + idc * N_;
-    Scalar* __restrict__ fOut = pFaux + idc * N_;
-    Scalar* __restrict__ gOut = pGaux + idc * N_;
-    const std::int32_t* __restrict__ idxPlane = pSI + idc * N_ * 4;
-    const Scalar* __restrict__ wPlane = pSW + idc * N_ * 4;
-
-    // `nowait`: the planes are independent, so a thread moves on to the next
-    // one without waiting for the others.
-    #pragma omp for simd schedule(static) nowait
-    for (Index cell = 0; cell < N_; ++cell) {
-      const std::int32_t i0 = idxPlane[cell * 4 + 0];
-      const std::int32_t i1 = idxPlane[cell * 4 + 1];
-      const std::int32_t i2 = idxPlane[cell * 4 + 2];
-      const std::int32_t i3 = idxPlane[cell * 4 + 3];
-      const Scalar w0 = wPlane[cell * 4 + 0];
-      const Scalar w1 = wPlane[cell * 4 + 1];
-      const Scalar w2 = wPlane[cell * 4 + 2];
-      const Scalar w3 = wPlane[cell * 4 + 3];
-      fOut[cell] = w0 * fplane[i0] + w1 * fplane[i1] + w2 * fplane[i2] + w3 * fplane[i3];
-      gOut[cell] = w0 * gplane[i0] + w1 * gplane[i1] + w2 * gplane[i2] + w3 * gplane[i3];
-    }
-  }
-
-  // The macroscopic reduction that follows reads the `kQ_` planes of a cell,
-  // which other threads may have written (OpenMP does not guarantee the same
-  // iteration-to-thread assignment for SIMD loops), hence the barrier.
-  #pragma omp barrier
 }
 } // namespace lbmini::openmp::cpu
 

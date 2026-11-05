@@ -147,9 +147,11 @@ def main():
 
     # Implementações por tecnologia
     cont_top = ilbm_t[1] - 0.8
-    chip_w, chip_h, gap = 1.85, 0.72, 0.25
+    chip_h, gap = 0.72, 0.25
     pad_x = 0.15
-    cont_w = 4 * chip_w + 3 * gap + 2 * pad_x
+    n_cols = 5
+    cont_w = 8.45
+    chip_w = (cont_w - 2 * pad_x - (n_cols - 1) * gap) / n_cols
     cont_x = (W - cont_w) / 2
     label_h = 0.42
     cont_h = label_h + 2 * chip_h + 0.15 + 0.2
@@ -160,10 +162,10 @@ def main():
             ha='center', va='center', fontsize=FS, style='italic', zorder=4)
     impls = [
         ('Plain', 'CPU'), ('OpenMP', 'CPU · GPU'), ('OpenACC', 'CPU · GPU'), ('OpenCL', 'CPU · GPU'),
-        ('CUDA', 'GPU'), ('MPI', 'CPU'), ('Kokkos', 'CPU · GPU'), ('RAJA', 'CPU · GPU'),
+        ('CUDA', 'GPU'), ('MPI', 'CPU'), ('Kokkos', 'CPU · GPU'), ('RAJA', 'CPU · GPU'), ('Alpaka', 'CPU · GPU'),
     ]
     for k, (name, target) in enumerate(impls):
-        r, c = divmod(k, 4)
+        r, c = divmod(k, n_cols)
         cx = cont_x + pad_x + c * (chip_w + gap)
         cy_top = cont_top - label_h - r * (chip_h + 0.15)
         ax.add_patch(Rectangle((cx, cy_top - chip_h), chip_w, chip_h, facecolor=FILL_IMPL, edgecolor=EDGE,

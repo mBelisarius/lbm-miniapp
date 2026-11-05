@@ -22,6 +22,10 @@ A análise de complexidade do código (Seção~\ref{sec:analise-de-complexidade-
 A validação precede as medições de desempenho por uma razão metodológica: conforme o critério estabelecido na Seção~\ref{sec:delineamento-da-pesquisa}, nenhuma implementação paralela é admitida na campanha de medições antes de reproduzir os campos macroscópicos da versão sequencial de referência, dentro da tolerância numérica estipulada.
 Tendo em vista que a comparação entre tecnologias perderia o sentido sem essa condição, os resultados de desempenho referem-se a versões numericamente equivalentes entre si.
 
+Os resultados de desempenho e de complexidade deste capítulo referem-se às implementações da campanha de medições, isto é, às versões do miniaplicativo anteriores à adoção dos núcleos fundidos com o estêncil compacto de propagação (\texttt{DirectionStencil}) e à integração do Alpaka, ambos descritos no Capítulo~\ref{ch:implementacao-computacional}.
+Em particular, o OpenMP em CPU medido é a variante com a colisão reorganizada em blocos de células percorridos por laços \texttt{simd} planos, que o código atual substituiu por um núcleo fundido sem vetorização explícita (Seção~\ref{sec:implementacao-computacional-utilizando-openmp}).
+Os núcleos fundidos atuais e o Alpaka tiveram sua equivalência numérica com a versão \textit{Plain} verificada, dentro de uma tolerância relativa de \(10^{-9}\), mas não foram objeto de novas medições de MLUPS, de aceleração ou de eficiência, nem de nova contagem de linhas de código, de modo que as conclusões deste capítulo sobre o desempenho não se estendem a eles.
+
 %---------------------------------------------------------------------------------------
 
 \section{Validação com o Tubo de Choque de Sod}\label{sec:validacao-tubo-de-choque-de-sod}
@@ -323,6 +327,7 @@ Incluem-se o OpenACC e o OpenCL nessa comparação porque ambos, embora frequent
 No OpenACC, o compilador da NVIDIA traduz as diretivas para fluxos de execução de CPU quando o alvo de compilação é o processador multinúcleo, enquanto, no OpenCL, os \textit{kernels} são submetidos a um dispositivo de CPU exposto pelo \textit{runtime} POCL (Seções~\ref{sec:implementacao-computacional-utilizando-openacc} e~\ref{sec:implementacao-computacional-utilizando-opencl}).
 O miniaplicativo mantém, nas versões por diretivas e em OpenCL, códigos-fonte distintos para CPU e para GPU, de modo que a comparação desta seção emprega exclusivamente as variantes voltadas ao processador, e as versões de acelerador são retomadas na Seção~\ref{sec:comparacao-de-tecnologias-em-gpu}.
 Essa inclusão permite avaliar o custo de portabilidade em sua forma mais direta, isto é, mensurar a perda de desempenho ao executar em CPU um código escrito com tecnologias concebidas primariamente para aceleradores.
+O OpenMP avaliado nesta seção é a variante da campanha, com a colisão vetorizada em blocos de células, e as demais tecnologias são igualmente as versões da campanha, sem a arquitetura fundida atual, que não foi medida.
 
 O protocolo experimental fixa o uso dos doze núcleos físicos do processador, com um fluxo de execução por núcleo (ou um processo, no caso do MPI).
 Para cada tecnologia, executa-se a simulação do tubo de choque de Sod para os mesmos tamanhos de malha da análise de escalabilidade, \(N_x = 100\), \(1000\), \(10000\) e \(30000\), com o objetivo de identificar o regime de saturação de cada implementação.
@@ -480,6 +485,7 @@ Complementando a análise de desempenho, avaliou-se a complexidade de implementa
 Essa métrica, embora não capture integralmente aspectos qualitativos como a legibilidade ou a curva de aprendizado, fornece uma indicação objetiva do esforço de desenvolvimento e de manutenção associado a cada tecnologia.
 A contagem abrange todos os arquivos de código-fonte do diretório de cada tecnologia, incluindo os arquivos de \textit{kernels} do CUDA e do OpenCL, e desconsidera linhas em branco e linhas iniciadas por comentário.
 Nas tecnologias que mantêm versões distintas para CPU e para GPU, ambas são contabilizadas.
+A contagem refere-se aos módulos das versões da campanha, e não ao código atual com estêncil compacto, cujos arquivos compartilhados (como o \texttt{Stencil.hpp}) e cujas reorganizações não foram recontados, nem ao Alpaka, que não consta da tabela.
 
 A implementação sequencial de referência (\textit{Plain}) soma 628 linhas efetivas e serve de linha de base para o cálculo do acréscimo relativo de código introduzido por cada tecnologia.
 As versões para CPU baseadas em diretivas apresentam acréscimos de 8\% no OpenACC (681 linhas) e de 19\% no OpenMP (746 linhas).
@@ -546,6 +552,7 @@ Em CPU, as camadas de abstração não se aproximaram do desempenho do OpenMP na
 Em GPU, ao contrário, Kokkos e RAJA superaram as versões nativas por fatores próximos de dois, por manterem as tabelas de propagação no dispositivo, configuração à qual o modelo \textit{roofline} atribui teto superior (Seção~\ref{sec:comparacao-de-tecnologias-em-gpu}).
 Os dois resultados indicam que a portabilidade de desempenho enunciada na Seção~\ref{sec:tecnologias-de-paralelizacao} depende tanto das decisões de projeto do \textit{kernel} de cálculo quanto da tecnologia empregada.
 A base única preservou o desempenho em GPU, em que a decisão de projeto lhe era favorável, mas não em CPU, em que o \textit{kernel} nativo dispunha de uma vetorização explícita da colisão que as camadas de abstração não incorporam.
+O Alpaka, integrado em etapa posterior, segue a mesma proposta de base única em C++20, mas sua contagem de linhas e suas medições não integram a presente campanha.
 
 O custo dessa portabilidade, contudo, não é integralmente captado pela contagem de linhas.
 Ele se manifesta nos atributos qualitativos já relatados: tempos de compilação mais longos, diagnósticos de erro extensos decorrentes da instanciação de \textit{templates} e a necessidade de obter e compilar a própria biblioteca como parte do sistema de compilação.
@@ -583,3 +590,6 @@ Para cobrir CPU e GPU, as camadas de abstração, com uma única base de código
 As tecnologias que exigem uma versão por alvo apresentam, em contraste, contagens superiores ao dobro da versão sequencial.
 Esse compromisso estende-se à experiência de desenvolvimento, na qual pesam a qualidade das mensagens do compilador, a disponibilidade de depuradores para o acelerador e o tempo de compilação.
 O confronto com o desempenho mostrou que a base única das camadas de abstração preservou o desempenho em GPU, com os maiores valores medidos, mas ficou aquém do OpenMP em CPU, o que indica que a portabilidade de desempenho depende das decisões de projeto do \textit{kernel} de cálculo.
+
+Cumpre ressaltar que essa síntese se refere às implementações da campanha de medições.
+As observações sobre o papel da vetorização explícita da colisão no OpenMP em CPU e sobre o uso das tabelas de propagação em GPU descrevem essas versões, e não os núcleos fundidos com estêncil compacto que as substituíram no código atual, nem o Alpaka, os quais tiveram apenas a equivalência numérica com a versão sequencial verificada, sem medições de desempenho.

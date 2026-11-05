@@ -22,6 +22,8 @@ option(ENABLE_KOKKOS "Enable the Kokkos backend" ON)
 option(ENABLE_KOKKOS_CUDA "Build Kokkos with its CUDA device backend" OFF)
 option(ENABLE_RAJA "Enable the RAJA backend" ON)
 option(ENABLE_RAJA_CUDA "Build RAJA with its CUDA device backend" OFF)
+option(ENABLE_ALPAKA "Enable the Alpaka3 backend (deps/alpaka3)" ON)
+option(ENABLE_ALPAKA_CUDA "Build the Alpaka3 backend with its CUDA device flavour" OFF)
 
 # RAJA and its BLT dependencies also use broad ENABLE_* cache names. Preserve
 # the application choice before configuring dependencies so they cannot turn a
@@ -43,10 +45,11 @@ option(ENABLE_TEST_OPENMP_BACKEND "Include the OpenMP CPU backend in the test bi
 option(ENABLE_TEST_DEVICE_BACKENDS "Include the GPU-targeted Kokkos/RAJA solvers in the test binary" OFF)
 
 # Builds the project's own code (not the fetched dependencies) with -ffast-math
-# in the Release and RelWithDebInfo configurations. The point is SIMD exp/log:
-# glibc only declares the libmvec vector variants (_ZGVdN4v_exp, ...) when
-# __FAST_MATH__ is defined, so without it every `exp`/`log` in the collision
-# kernel stays a scalar libm call and blocks vectorization of the cell loop.
+# in the Release and RelWithDebInfo configurations. It lets the compiler emit
+# SIMD exp/log in loops it vectorizes: glibc only declares the libmvec vector
+# variants (_ZGVdN4v_exp, ...) when __FAST_MATH__ is defined. The fused per-cell
+# kernels of the CPU backends are not vectorized by GCC, so there `exp`/`log`
+# stay scalar libm calls.
 # Results differ from a strict-IEEE build in the last bits (see docs).
 option(LBMINI_FAST_MATH "Compile the LBM code with -ffast-math (SIMD exp/log through libmvec)" ON)
 
@@ -107,7 +110,11 @@ if (ENABLE_CUDA)
         endif ()
     endif ()
     include(CheckLanguage)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --allow-unsupported-compiler")
+    # nvcc-only switch; clang (-DCMAKE_CUDA_COMPILER=clang++) compiles CUDA
+    # itself and rejects it.
+    if (NOT CMAKE_CUDA_COMPILER MATCHES "clang")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --allow-unsupported-compiler")
+    endif ()
     check_language(CUDA)
     if (CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
@@ -116,8 +123,8 @@ if (ENABLE_CUDA)
         set(CMAKE_CUDA_SEPARABLE_COMPILATION OFF)
         set(CMAKE_CUDA_RUNTIME_LIBRARY Static)
         add_compile_options(
-            $<$<COMPILE_LANGUAGE:CUDA>:--allow-unsupported-compiler>
-            $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+            $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--allow-unsupported-compiler>
+            $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--expt-relaxed-constexpr>
         )
         message(STATUS "CUDA language enabled with compiler: ${CMAKE_CUDA_COMPILER}")
     else ()
@@ -136,6 +143,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
     message(STATUS "Configuring for NVIDIA HPC SDK")
     set(ARCH_FLAG "$<$<COMPILE_LANGUAGE:CXX>:-tp=native>")
     set(DEBUG_OPT_FLAG "-g")
+    # nvc++ never defines __OPTIMIZE__, so libstdc++ >= 15 enables
+    # _GLIBCXX_ASSERTIONS even at -O3; its assert hook has no device version and
+    # fails the nvlink step of every -mp=gpu / -acc=gpu binary.
+    add_compile_definitions($<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CONFIG:DEBUG>>>:_GLIBCXX_NO_ASSERTIONS>)
     file(GLOB NVHPC_CMAKE_DIRS "/opt/nvidia/hpc_sdk/Linux_x86_64/*/cmake")
     if(NVHPC_CMAKE_DIRS)
         list(APPEND CMAKE_PREFIX_PATH ${NVHPC_CMAKE_DIRS})
@@ -157,7 +168,8 @@ endif()
 
 add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
-        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unknown-pragmas>
+        # nvc++ rejects the switch ("Unknown switch") and does not warn anyway.
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CXX_COMPILER_ID:NVHPC>>>:-Wno-unknown-pragmas>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-error>
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:RELEASE>>:-O3>
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:RELEASE>>:-DNDEBUG>
@@ -559,6 +571,68 @@ if (LBMINI_RAJA_REQUESTED)
 endif ()
 
 # =========================================================
+# Alpaka3
+
+# The Alpaka backend is single-source as well, but alpaka is header-only and
+# insists that every translation unit including it belongs to a target passed
+# through alpaka_finalize(), which - for the CUDA flavour - compiles all of the
+# target's C++ sources as CUDA. The backend is therefore split into two small
+# libraries with one source file each (host: OpenMP, device: CUDA), behind a
+# header that does not include alpaka, so Executor.cpp and the test binary
+# stay plain C++. The CUDA flavour is opt-in (-DENABLE_ALPAKA_CUDA=ON) like
+# the Kokkos and RAJA device backends; it uses the project's CUDA compiler
+# (nvcc, or clang++ via -DCMAKE_CUDA_COMPILER=clang++).
+set(LBMINI_ALPAKA_DIR "${CMAKE_SOURCE_DIR}/deps/alpaka3")
+set(LBMINI_ALPAKA_CUDA OFF)
+if (ENABLE_ALPAKA AND NOT EXISTS "${LBMINI_ALPAKA_DIR}/CMakeLists.txt")
+    message(WARNING "deps/alpaka3 not found; the Alpaka backend will not be built.")
+elseif (ENABLE_ALPAKA AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 12)
+    # alpaka3 is tested with GCC >= 12, Clang >= 17 (deps/alpaka3/script/job_generator).
+    message(WARNING "Alpaka3 needs GCC >= 12 (found ${CMAKE_CXX_COMPILER_VERSION}); the Alpaka backend "
+            "will not be built. On Rocky/RHEL use a gcc-toolset (e.g. CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++).")
+elseif (ENABLE_ALPAKA AND CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
+    message(WARNING "Alpaka3 does not support nvc++ as the C++ compiler; the Alpaka backend will not be built.")
+elseif (ENABLE_ALPAKA)
+    if (ENABLE_ALPAKA_CUDA)
+        if (CMAKE_CUDA_COMPILER)
+            set(LBMINI_ALPAKA_CUDA ON)
+        else ()
+            message(WARNING "ENABLE_ALPAKA_CUDA=ON but no CUDA compiler is enabled; "
+                    "building the Alpaka CPU flavour only.")
+        endif ()
+    endif ()
+
+    set(alpaka_DEP_OMP ON CACHE BOOL "" FORCE)
+    set(alpaka_DEP_CUDA ${LBMINI_ALPAKA_CUDA} CACHE BOOL "" FORCE)
+    # The solver uses no alpaka SIMD types. Emulation avoids probing
+    # <simd>/<experimental/simd>, whose availability differs between the host
+    # compiler and the CUDA compiler's host pass.
+    set(alpaka_SIMD "EMULATION" CACHE STRING "")
+    # Affinity is the job of OMP_PLACES / OMP_PROC_BIND (see Executor.cpp), as
+    # for every other CPU backend; hwloc is only needed for deviceKind::numaCpu.
+    set(alpaka_DEP_HWLOC "OFF" CACHE STRING "")
+
+    add_subdirectory("${LBMINI_ALPAKA_DIR}" "${CMAKE_BINARY_DIR}/_deps/alpaka3-build" EXCLUDE_FROM_ALL)
+
+    if (LBMINI_ALPAKA_CUDA AND NOT TARGET alpaka::cuda)
+        message(WARNING "alpaka did not provide alpaka::cuda; building the Alpaka CPU flavour only.")
+        set(LBMINI_ALPAKA_CUDA OFF)
+    endif ()
+
+    # alpaka derives the CUDA host compiler from CMAKE_CXX_COMPILER_ID and, for
+    # GNU, adds the GCC-only -fconcepts-diagnostics-depth to *CUDA* compiles.
+    # That is right for nvcc + g++ but breaks clang-CUDA (g++ for C++, clang++
+    # for CUDA), which rejects the flag. It is a diagnostics option only.
+    if (LBMINI_ALPAKA_CUDA AND CMAKE_CUDA_COMPILER_ID STREQUAL "Clang")
+        get_target_property(_alpaka_cuda_options alpaka_target_cuda INTERFACE_COMPILE_OPTIONS)
+        if (_alpaka_cuda_options)
+            list(FILTER _alpaka_cuda_options EXCLUDE REGEX "concepts-diagnostics-depth")
+            set_property(TARGET alpaka_target_cuda PROPERTY INTERFACE_COMPILE_OPTIONS "${_alpaka_cuda_options}")
+        endif ()
+    endif ()
+endif ()
+
+# =========================================================
 # Targets
 
 # --- Common
@@ -623,6 +697,14 @@ target_link_libraries("${ProjectName}-common"
         PUBLIC yaml-cpp::yaml-cpp
 )
 
+# Executor.cpp owns the process-wide OpenMP setup (omp_set_num_threads from
+# Performance.cores) and the OpenMP backend dispatch, both behind `_OPENMP`.
+# Without this they were only compiled in when another dependency (Kokkos)
+# happened to propagate -fopenmp.
+if(TARGET OpenMP::OpenMP_CXX)
+    target_link_libraries("${ProjectName}-common" PUBLIC OpenMP::OpenMP_CXX)
+endif()
+
 # Executor.cpp instantiates every backend, so the Kokkos headers and the
 # USE_KOKKOS switch have to be visible to the common target as well.
 if(ENABLE_KOKKOS AND TARGET Kokkos::kokkos)
@@ -635,6 +717,15 @@ endif()
 if(LBMINI_RAJA_REQUESTED AND TARGET RAJA)
     target_compile_definitions("${ProjectName}-common" PUBLIC USE_RAJA)
     target_link_libraries("${ProjectName}-common" PUBLIC RAJA)
+endif()
+
+# Alpaka: only the switches. Executor.cpp includes the alpaka-free solver
+# header; the definitions come from the -lbm-alpaka-* libraries below.
+if(ENABLE_ALPAKA AND TARGET alpaka::host)
+    target_compile_definitions("${ProjectName}-common" PUBLIC USE_ALPAKA)
+    if(LBMINI_ALPAKA_CUDA)
+        target_compile_definitions("${ProjectName}-common" PUBLIC USE_ALPAKA_GPU)
+    endif()
 endif()
 
 
@@ -664,6 +755,10 @@ target_compile_definitions("${ProjectName}-lbm-openmp" PRIVATE PROJECT_NAMESPACE
 target_link_libraries("${ProjectName}-lbm-openmp" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
+    # The global find_package(OpenMP) is skipped for NVHPC; without the
+    # imported target the test binary would not instantiate the OpenMP
+    # backends at all. `-mp` from FindOpenMP does not cancel `-mp=gpu`.
+    find_package(OpenMP)
     target_compile_options("${ProjectName}-lbm-openmp" PUBLIC
             $<$<COMPILE_LANGUAGE:CXX>:-mp>
             $<$<COMPILE_LANGUAGE:CXX>:-acc>
@@ -673,14 +768,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
             $<$<LINK_LANGUAGE:CXX>:-mp> 
             $<$<LINK_LANGUAGE:CXX>:-acc>
     )
-    if(ENABLE_CUDA)
-        target_compile_options("${ProjectName}-lbm-openmp" PUBLIC
-                $<$<COMPILE_LANGUAGE:CXX>:-mp=gpu>
-        )
-        target_link_options("${ProjectName}-lbm-openmp" INTERFACE 
-                $<$<LINK_LANGUAGE:CXX>:-mp=gpu>
-        )
-    endif()
+    # `openmp::gpu` offloads through the nvc++ OpenMP target runtime, which
+    # needs no CUDA toolchain from the project: independent of ENABLE_CUDA.
+    target_compile_options("${ProjectName}-lbm-openmp" PUBLIC
+            $<$<COMPILE_LANGUAGE:CXX>:-mp=gpu>
+    )
+    target_link_options("${ProjectName}-lbm-openmp" INTERFACE 
+            $<$<LINK_LANGUAGE:CXX>:-mp=gpu>
+    )
 endif()
 
 if(TARGET OpenMP::OpenMP_CXX)
@@ -724,6 +819,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
     )
     target_link_options("${ProjectName}-lbm-openacc-gpu" INTERFACE
             "-acc=gpu"
+    )
+    # Executor.cpp (in -common) instantiates the OpenACC and OpenMP-target
+    # solvers; the backend libraries are header-only and cannot hand it their
+    # flags. `-acc=multicore -acc=gpu` builds both OpenACC flavours into one
+    # object, selected at run time by acc_set_device_type().
+    target_compile_options("${ProjectName}-common" PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-acc=multicore>
+            $<$<COMPILE_LANGUAGE:CXX>:-acc=gpu>
+            $<$<COMPILE_LANGUAGE:CXX>:-mp=gpu>
     )
 endif()
 
@@ -899,6 +1003,55 @@ if(LBMINI_RAJA_REQUESTED AND TARGET RAJA)
     )
 endif()
 
+# --- Lbm Alpaka
+
+if(ENABLE_ALPAKA AND TARGET alpaka::host)
+    set(LBMINI_ALPAKA_HEADERS
+            lbmini/Lbm/Alpaka/LatticeD2Q9.hpp
+            lbmini/Lbm/Alpaka/LbmTube.hpp
+            lbmini/Lbm/Alpaka/LbmTubeImpl.hpp
+            lbmini/Lbm/Alpaka/Cpu/LatticeD2Q9.hpp
+            lbmini/Lbm/Alpaka/Cpu/LbmTube.hpp
+            lbmini/Lbm/Alpaka/Gpu/LatticeD2Q9.hpp
+            lbmini/Lbm/Alpaka/Gpu/LbmTube.hpp
+    )
+
+    # Host flavour: api::host + exec::cpuOmpBlocks, compiled as C++.
+    add_library("${ProjectName}-lbm-alpaka-cpu" STATIC
+            ${LBMINI_ALPAKA_HEADERS}
+            lbmini/Lbm/Alpaka/Cpu/LbmTube.cpp
+    )
+    target_include_directories("${ProjectName}-lbm-alpaka-cpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+    target_compile_definitions("${ProjectName}-lbm-alpaka-cpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+    target_link_libraries("${ProjectName}-lbm-alpaka-cpu"
+            PUBLIC Eigen3::Eigen
+            PUBLIC "${ProjectName}-common"
+            PRIVATE alpaka::host
+    )
+    alpaka_finalize("${ProjectName}-lbm-alpaka-cpu")
+
+    # Device flavour: api::cuda + exec::gpuCuda; alpaka_finalize() switches the
+    # source to the CUDA language.
+    if(LBMINI_ALPAKA_CUDA)
+        add_library("${ProjectName}-lbm-alpaka-gpu" STATIC
+                ${LBMINI_ALPAKA_HEADERS}
+                lbmini/Lbm/Alpaka/Gpu/LbmTube.cpp
+        )
+        target_include_directories("${ProjectName}-lbm-alpaka-gpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
+        set_target_properties("${ProjectName}-lbm-alpaka-gpu" PROPERTIES
+                CUDA_SEPARABLE_COMPILATION OFF
+                CUDA_RUNTIME_LIBRARY Static
+        )
+        target_compile_definitions("${ProjectName}-lbm-alpaka-gpu" PRIVATE PROJECT_NAMESPACE=${ProjectNamespace})
+        target_link_libraries("${ProjectName}-lbm-alpaka-gpu"
+                PUBLIC Eigen3::Eigen
+                PUBLIC "${ProjectName}-common"
+                PRIVATE alpaka::cuda
+        )
+        alpaka_finalize("${ProjectName}-lbm-alpaka-gpu")
+    endif()
+endif()
+
 # --- Main
 
 add_executable("${ProjectName}-main" lbmini/main.cpp)
@@ -941,9 +1094,37 @@ if(TARGET "${ProjectName}-lbm-raja")
     target_link_libraries("${ProjectName}-main" PUBLIC "${ProjectName}-lbm-raja")
 endif()
 
+foreach(_alpaka_lib alpaka-cpu alpaka-gpu)
+    if(TARGET "${ProjectName}-lbm-${_alpaka_lib}")
+        target_link_libraries("${ProjectName}-main" PUBLIC "${ProjectName}-lbm-${_alpaka_lib}")
+    endif()
+endforeach()
+
 # --- GTest
 
 enable_testing()
+
+if(ENABLE_MPI AND MPI_CXX_FOUND)
+    if(NOT MPIEXEC_EXECUTABLE)
+        find_program(MPIEXEC_EXECUTABLE NAMES mpiexec mpirun)
+    endif()
+    if(NOT MPIEXEC_NUMPROC_FLAG)
+        set(MPIEXEC_NUMPROC_FLAG "-n")
+    endif()
+endif()
+if(ENABLE_MPI AND MPI_CXX_FOUND AND MPIEXEC_EXECUTABLE)
+    add_executable("${ProjectName}-mpi-equivalence-test" test/mpi_equivalence_test.cpp)
+    target_link_libraries("${ProjectName}-mpi-equivalence-test" PRIVATE
+            "${ProjectName}-lbm-mpi" "${ProjectName}-lbm-plain")
+    if(TARGET OpenMP::OpenMP_CXX)
+        target_link_libraries("${ProjectName}-mpi-equivalence-test" PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    add_test(NAME mpi-equivalence
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                    $<TARGET_FILE:${ProjectName}-mpi-equivalence-test> ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(mpi-equivalence PROPERTIES TIMEOUT 20
+            ENVIRONMENT "OMPI_ALLOW_RUN_AS_ROOT=1;OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1;OMPI_MCA_coll_hcoll_enable=0;OMP_NUM_THREADS=2")
+endif()
 
 set(TestSources
         test/sanity_test.cpp
@@ -954,6 +1135,7 @@ set(TestSources
         test/MemorySafetyHarness.hpp
         test/memory_safety_test.cpp
         test/streaming_table_test.cpp
+        test/backend_equivalence_test.cpp
 )
 
 add_executable("${ProjectName}-test" ${TestSources})
@@ -1015,6 +1197,15 @@ if(TARGET "${ProjectName}-lbm-raja")
     target_link_libraries("${ProjectName}-test" PUBLIC "${ProjectName}-lbm-raja")
 endif()
 
+if(TARGET "${ProjectName}-lbm-alpaka-cpu")
+    target_compile_definitions("${ProjectName}-test" PRIVATE LBMINI_TEST_ALPAKA)
+    target_link_libraries("${ProjectName}-test" PUBLIC "${ProjectName}-lbm-alpaka-cpu")
+endif()
+
+if(TARGET "${ProjectName}-lbm-alpaka-gpu")
+    target_link_libraries("${ProjectName}-test" PUBLIC "${ProjectName}-lbm-alpaka-gpu")
+endif()
+
 if(ENABLE_CUDA AND TARGET "${ProjectName}-lbm-cuda")
     target_compile_definitions("${ProjectName}-test" PRIVATE LBMINI_TEST_CUDA)
     target_link_libraries("${ProjectName}-test" PUBLIC "${ProjectName}-lbm-cuda")
@@ -1034,7 +1225,7 @@ gtest_discover_tests("${ProjectName}-test" DISCOVERY_MODE PRE_TEST)
 # Valgrind slowdown for.
 add_custom_target("${ProjectName}-memory-check"
         COMMAND "$<TARGET_FILE:${ProjectName}-test>"
-        --gtest_filter=BackendMemorySafety*:StreamingTableBounds*
+        --gtest_filter=BackendMemorySafety*:StreamingTableBounds*:DirectionStencil*
         DEPENDS "${ProjectName}-test"
         COMMENT "Running the LBM memory-safety suite (see docs/memory-safety.md)"
         USES_TERMINAL

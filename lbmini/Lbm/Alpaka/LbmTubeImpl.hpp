@@ -1,0 +1,905 @@
+#ifndef LBMINI_ALPAKA_LBMTUBEIMPL_HPP_
+#define LBMINI_ALPAKA_LBMTUBEIMPL_HPP_
+
+/**
+ * @file LbmTubeImpl.hpp
+ * @brief alpaka3 implementation behind `lbmini::alpaka::LbmTube` (`detail::Engine`).
+ *
+ * Only included by the two explicit-instantiation translation units
+ * (`Cpu/LbmTube.cpp`, `Gpu/LbmTube.cpp`), which belong to `alpaka_finalize()`d
+ * CMake targets. Never include it from code that is not compiled through
+ * alpaka.
+ *
+ * ### Data layout and memory traffic
+ *
+ * All per-cell state lives in device buffers in structure-of-arrays form:
+ *
+ * | buffer       | size     | layout                  | role                              |
+ * | :----------- | :------- | :---------------------- | :-------------------------------- |
+ * | `fA/fB`      | `Q * N`  | `f[idc * N + cell]`     | post-collision density (ping-pong) |
+ * | `gA/gB`      | `Q * N`  | `g[idc * N + cell]`     | post-collision energy (ping-pong)  |
+ * | `xi`         | `D * N`  | `xi[d * N + cell]`      | Newton-Raphson warm start          |
+ * | `rho/p/tem`  | `N`      | `x[cell]`               | macroscopic output                 |
+ * | `u`          | `D * N`  | `u[d * N + cell]`       | macroscopic output                 |
+ *
+ * `cell = i * ny + j` (row-major, `j` fastest), so a direction plane is
+ * contiguous: consecutive GPU threads / consecutive iterations of a CPU thread
+ * touch consecutive addresses for every load and store.
+ *
+ * One time step is a single kernel (`StepKernel`) that *pulls* the
+ * post-collision populations of the previous step from the four IDW source
+ * cells of each direction, reduces them to the macroscopic fields, evaluates
+ * the equilibria and the Newton-Raphson energy closure and relaxes — all in
+ * registers — and writes the new post-collision populations to the other
+ * ping-pong buffer. Per cell and step that is 2 x 9 x 8 B of streamed reads
+ * (the neighbour reuse is served by the caches), 2 x 9 x 8 B of writes and
+ * 2 x 2 x 8 B for the warm start: ~320 B, against ~700 B for the classic
+ * collide / stream+macroscopic pair plus 432 B of streaming tables.
+ *
+ * The state of the solver after `n` steps is therefore kept as *post*-collision
+ * populations: `Init()` runs the first collision itself, and every step's
+ * collision prepares the next one. The observable state — the macroscopic
+ * fields after the n-th streaming — is identical to the reference
+ * collide-then-stream sequence; only the internal warm start is one collision
+ * ahead, which is exactly the value the next collision would read anyway.
+ *
+ * ### Streaming stencil
+ *
+ * The reference solver precomputes, for every `(cell, idc)`, four source
+ * indices and four inverse-distance weights. With a uniform lattice shift `U`
+ * those are the same for every cell up to a clamp in x and a wrap in y, so the
+ * kernel reads the shared per-direction `lbmini::DirectionStencil`
+ * (`Lbm/Stencil.hpp`) instead. Indices are in range by construction (clamp /
+ * wrap / explicit range test), so there is no table to verify and nothing to
+ * read per cell.
+ */
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+#include <alpaka/alpaka.hpp>
+
+#include "Guards.hpp"
+#include "Lbm/Alpaka/LbmTube.hpp"
+#include "Lbm/Stencil.hpp"
+
+/// Unroll a short, fixed-trip loop (directions / dimensions). Fully unrolled
+/// loops turn every lattice lookup into an immediate and keep the per-cell
+/// arrays in registers instead of GPU local memory.
+#if defined(__CUDACC__) || defined(__HIPCC__) || defined(__clang__)
+#define LBMINI_ALPAKA_UNROLL _Pragma("unroll")
+#elif defined(__GNUC__)
+#define LBMINI_ALPAKA_UNROLL _Pragma("GCC unroll 16")
+#else
+#define LBMINI_ALPAKA_UNROLL
+#endif
+
+namespace lbmini::alpaka::detail {
+/**
+ * @brief Maps a solver target onto an alpaka device, executor and queue.
+ *
+ * Each specialisation exists only where alpaka can provide it, so the CPU
+ * translation unit never needs CUDA and the device pass of the GPU one never
+ * needs OpenMP.
+ */
+template<TargetEnum Target>
+struct TargetTraits;
+
+#if ALPAKA_OMP
+template<>
+struct TargetTraits<TargetEnum::CPU> {
+  static constexpr const char* kName = "alpaka::cpu";
+  static constexpr auto kApi = ::alpaka::api::host;
+  static constexpr auto kDeviceKind = ::alpaka::deviceKind::cpu;
+  static constexpr auto kExecutor = ::alpaka::exec::cpuOmpBlocks;
+  // Blocking: the kernel runs on the calling thread, so its OpenMP team obeys
+  // the thread count `Executor` set with `omp_set_num_threads()` (an ICV of the
+  // calling thread, which a non-blocking queue's worker thread would not
+  // inherit) and `OMP_PLACES` / `OMP_PROC_BIND` pin it as for every other CPU
+  // backend.
+  static constexpr auto kQueueKind = ::alpaka::queueKind::blocking;
+
+  /// alpaka's default host blocking: blocks of 512 cells handed out to the
+  /// OpenMP team in a static schedule, i.e. one contiguous slab per thread.
+  static auto FrameSpec(const auto& device, const std::int32_t cells) {
+    return ::alpaka::onHost::getFrameSpec(device, kExecutor, ::alpaka::Vec{ cells });
+  }
+};
+#endif
+
+#if ALPAKA_LANG_CUDA
+template<>
+struct TargetTraits<TargetEnum::GPU> {
+  static constexpr const char* kName = "alpaka::gpu";
+  static constexpr auto kApi = ::alpaka::api::cuda;
+  static constexpr auto kDeviceKind = ::alpaka::deviceKind::nvidiaGpu;
+  static constexpr auto kExecutor = ::alpaka::exec::gpuCuda;
+  // Kernels and copies are enqueued asynchronously; `Run()` waits once at the
+  // end so the benchmark timer measures finished device work.
+  static constexpr auto kQueueKind = ::alpaka::queueKind::nonBlocking;
+
+  /// One thread per cell. 256 threads per block always fit the register file
+  /// (65536 / 256 = 255 registers per thread, the hardware maximum), which the
+  /// register-heavy fused kernel needs; alpaka's generic default of 512 would
+  /// not be launchable above 128 registers per thread.
+  static constexpr std::int32_t kBlockSize = 256;
+
+  static auto FrameSpec(const auto& /*device*/, const std::int32_t cells) {
+    const std::int32_t blocks = (cells + kBlockSize - 1) / kBlockSize;
+    return ::alpaka::onHost::FrameSpec{ ::alpaka::Vec{ blocks }, ::alpaka::Vec{ kBlockSize }, kExecutor };
+  }
+};
+#endif
+
+/// Everything a kernel needs besides the buffers; trivially copyable, passed
+/// by value (CUDA: kernel parameter space, served by the constant cache).
+template<typename Scalar, int Q>
+struct Params {
+  std::int32_t nx;
+  std::int32_t ny;
+  std::int32_t cells;
+
+  Scalar ushiftX;
+  Scalar ushiftY;
+
+  Scalar cv;
+  Scalar cp;
+  Scalar invCv;
+  Scalar rgas;
+  Scalar viscosity;
+  Scalar conductivity;
+
+  Scalar densityL;
+  Scalar pressureL;
+  Scalar densityR;
+  Scalar pressureR;
+
+  DirectionStencil<Scalar, Q> stencil;
+};
+
+/**
+ * @brief Per-cell LBM physics, shared by the kernels.
+ *
+ * Every function operates on register arrays of one cell and reproduces the
+ * arithmetic of `lbmini::kokkos::LbmTube` (and therefore of the plain
+ * reference) operation for operation and in the same order.
+ */
+template<typename Scalar, typename LatticeType>
+struct Physics {
+  static constexpr int kQ = static_cast<int>(LatticeType::Speeds());
+  static constexpr int kD = static_cast<int>(LatticeType::Dim());
+  static constexpr Scalar kTiny = Scalar{ 1.0e-12 };
+  static constexpr Scalar kMaxExp = Scalar{ 700.0 };
+  static constexpr int kMaxIter = 3;
+
+  static_assert(kD == 2, "the alpaka backend implements the 2-D closure");
+
+  /// Density equilibrium, factorised product form.
+  ALPAKA_FN_HOST_ACC static void Feq(
+    const Scalar rhoc,
+    const Scalar ux,
+    const Scalar uy,
+    const Scalar temc,
+    const Scalar ushiftX,
+    const Scalar ushiftY,
+    Scalar (&feq)[kQ]
+  ) {
+    LBMINI_ALPAKA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc) {
+      Scalar phi = rhoc;
+      LBMINI_ALPAKA_UNROLL
+      for (int d = 0; d < kD; ++d) {
+        const int vi = LatticeType::Velocity(idc, d);
+        const Scalar uia = (d == 0 ? ux : uy) - (d == 0 ? ushiftX : ushiftY);
+        const Scalar uia2t = uia * uia + temc;
+        Scalar pf;
+        if (vi == 0)
+          pf = Scalar{ 1 } - uia2t;
+        else if (vi == 1)
+          pf = Scalar{ 0.5 } * (uia + uia2t);
+        else
+          pf = Scalar{ 0.5 } * (-uia + uia2t);
+        phi *= pf;
+      }
+      feq[idc] = phi;
+    }
+  }
+
+  /// rho, u, T, p from one cell's populations.
+  ALPAKA_FN_HOST_ACC static void Macroscopic(
+    const Scalar (&f)[kQ],
+    const Scalar (&g)[kQ],
+    const Params<Scalar, kQ>& p,
+    Scalar& rho,
+    Scalar& ux,
+    Scalar& uy,
+    Scalar& tem,
+    Scalar& pres
+  ) {
+    Scalar rhoSum = Scalar{ 0 };
+    Scalar nrg = Scalar{ 0 };
+    Scalar momX = Scalar{ 0 };
+    Scalar momY = Scalar{ 0 };
+    LBMINI_ALPAKA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc) {
+      rhoSum += f[idc];
+      nrg += g[idc];
+      momX += LatticeType::Cshift(idc, 0, p.ushiftX) * f[idc];
+      momY += LatticeType::Cshift(idc, 1, p.ushiftY) * f[idc];
+    }
+    const Scalar invRho = Scalar{ 1 } / rhoSum;
+    ux = momX * invRho;
+    uy = momY * invRho;
+    const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
+    tem = (Scalar{ 0.5 } * nrg * invRho - kin) * p.invCv;
+    rho = rhoSum;
+    pres = p.rgas * rhoSum * tem;
+  }
+
+  /**
+   * @brief Equilibria + Newton-Raphson energy closure + BGK collision, in place.
+   *
+   * `f`/`g` enter as the pre-collision populations of the cell and leave as the
+   * post-collision ones; `xi` is the Newton warm start (read and updated). The
+   * Newton loop runs a fixed number of iterations with clamped reciprocals and
+   * a sticky `solverOk` predicate: control flow stays uniform across a warp.
+   */
+  ALPAKA_FN_HOST_ACC static void Collide(
+    const Params<Scalar, kQ>& p,
+    const Scalar rhoc,
+    const Scalar ux,
+    const Scalar uy,
+    const Scalar temc,
+    Scalar (&f)[kQ],
+    Scalar (&g)[kQ],
+    Scalar (&xi)[kD]
+  ) {
+    const Scalar ushiftX = p.ushiftX;
+    const Scalar ushiftY = p.ushiftY;
+    const Scalar u2 = ux * ux + uy * uy;
+
+    Scalar feqLocal[kQ];
+    Feq(rhoc, ux, uy, temc, ushiftX, ushiftY, feqLocal);
+
+    // Geq via Newton-Raphson on the normalised energy flux.
+    const Scalar E = p.cv * temc + Scalar{ 0.5 } * u2;
+    const Scalar targetE = Scalar{ 2 } * rhoc * E;
+    Scalar targetM[kD];
+    LBMINI_ALPAKA_UNROLL
+    for (int d = 0; d < kD; ++d)
+      targetM[d] = Scalar{ 2 } * rhoc * (d == 0 ? ux : uy) * (E + temc) / targetE;
+
+    Scalar alpha = Scalar{ 1 };
+    Scalar si[kQ];
+    Scalar e[kQ];
+    Scalar Z = Scalar{ 0 };
+    Scalar smax = Scalar{ 0 };
+    bool solverOk = true;
+
+    for (int iter = 0; iter < kMaxIter; ++iter) {
+      smax = -kMaxExp;
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        Scalar s = Scalar{ 0 };
+        LBMINI_ALPAKA_UNROLL
+        for (int d = 0; d < kD; ++d)
+          s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
+        si[idc] = s;
+        smax = (s > smax) ? s : smax;
+      }
+      smax = (smax < kMaxExp) ? smax : kMaxExp;
+
+      Scalar S1[kD] = { Scalar{ 0 }, Scalar{ 0 } };
+      Scalar S2[kD][kD] = { { Scalar{ 0 }, Scalar{ 0 } }, { Scalar{ 0 }, Scalar{ 0 } } };
+      Z = Scalar{ 0 };
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        Scalar expo = si[idc] - smax;
+        expo = (expo < kMaxExp) ? expo : kMaxExp;
+        expo = (expo > -kMaxExp) ? expo : -kMaxExp;
+        const Scalar wev = LatticeType::Weights(idc, temc) * ::alpaka::math::exp(expo);
+        e[idc] = wev;
+        Z += wev;
+        LBMINI_ALPAKA_UNROLL
+        for (int a = 0; a < kD; ++a) {
+          const Scalar cia = LatticeType::Cshift(idc, a, (a == 0 ? ushiftX : ushiftY));
+          S1[a] += cia * wev;
+          LBMINI_ALPAKA_UNROLL
+          for (int b = 0; b < kD; ++b)
+            S2[a][b] += cia * LatticeType::Cshift(idc, b, (b == 0 ? ushiftX : ushiftY)) * wev;
+        }
+      }
+
+      const Scalar Zsafe = (Z > kTiny) ? Z : kTiny;
+      solverOk = solverOk && (Z > kTiny);
+      const Scalar invZ = Scalar{ 1 } / Zsafe;
+
+      Scalar J[kD][kD];
+      LBMINI_ALPAKA_UNROLL
+      for (int a = 0; a < kD; ++a)
+        LBMINI_ALPAKA_UNROLL
+        for (int b = 0; b < kD; ++b)
+          J[a][b] = (S2[a][b] - S1[a] * S1[b] * invZ) * invZ;
+      J[0][0] += kTiny;
+      J[1][1] += kTiny;
+
+      const Scalar detJ = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+      const Scalar absDet = ::alpaka::math::abs(detJ);
+      const Scalar detSafe = (absDet > kTiny) ? detJ : ((detJ >= Scalar{ 0 }) ? kTiny : -kTiny);
+      solverOk = solverOk && (absDet > kTiny);
+      const Scalar invDet = Scalar{ 1 } / detSafe;
+
+      const Scalar r0 = S1[0] * invZ - targetM[0];
+      const Scalar r1 = S1[1] * invZ - targetM[1];
+      xi[0] -= alpha * (J[1][1] * r0 - J[0][1] * r1) * invDet;
+      xi[1] -= alpha * (-J[1][0] * r0 + J[0][0] * r1) * invDet;
+      alpha *= Scalar{ 0.5 };
+    }
+
+    Scalar geqLocal[kQ];
+    if (solverOk) {
+      // Recompute e[], Z with the final xi.
+      smax = -kMaxExp;
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        Scalar s = Scalar{ 0 };
+        LBMINI_ALPAKA_UNROLL
+        for (int d = 0; d < kD; ++d)
+          s += xi[d] * LatticeType::Cshift(idc, d, (d == 0 ? ushiftX : ushiftY));
+        si[idc] = s;
+        smax = (s > smax) ? s : smax;
+      }
+      smax = (smax < kMaxExp) ? smax : kMaxExp;
+      Z = Scalar{ 0 };
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        Scalar expo = si[idc] - smax;
+        expo = (expo < kMaxExp) ? expo : kMaxExp;
+        expo = (expo > -kMaxExp) ? expo : -kMaxExp;
+        e[idc] = LatticeType::Weights(idc, temc) * ::alpaka::math::exp(expo);
+        Z += e[idc];
+      }
+      const Scalar scale = targetE / Z;
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc)
+        geqLocal[idc] = scale * e[idc];
+      // The reference also stores `log(scale / rho) - smax` as warm-start
+      // component 0; nothing ever reads it, so it is neither computed nor stored.
+    } else {
+      // Fallback: normalised-Wi distribution, cold restart of the warm start.
+      xi[0] = Scalar{ 0 };
+      xi[1] = Scalar{ 0 };
+      Scalar sumW = Scalar{ 0 };
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc)
+        sumW += LatticeType::Weights(idc, temc);
+      if (sumW <= kTiny) {
+        const Scalar uni = targetE / Scalar(kQ);
+        LBMINI_ALPAKA_UNROLL
+        for (int idc = 0; idc < kQ; ++idc)
+          geqLocal[idc] = uni;
+      } else {
+        const Scalar sc = targetE / sumW;
+        LBMINI_ALPAKA_UNROLL
+        for (int idc = 0; idc < kQ; ++idc)
+          geqLocal[idc] = LatticeType::Weights(idc, temc) * sc;
+      }
+    }
+
+    // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
+    const Scalar tau = p.viscosity / (rhoc * temc) + Scalar{ 0.5 };
+    const Scalar omega = Scalar{ 1 } / tau;
+    const Scalar diffusivity = p.conductivity / (rhoc * p.cp);
+    const Scalar tauT = diffusivity / temc + Scalar{ 0.5 };
+    Scalar omegaT = Scalar{ 1 } / tauT;
+
+    Scalar eps = Scalar{ 0 };
+    LBMINI_ALPAKA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc) {
+      const Scalar diff = f[idc] - feqLocal[idc];
+      const Scalar den = (feqLocal[idc] > kTiny) ? feqLocal[idc] : kTiny;
+      eps += ::alpaka::math::abs(diff) / den;
+    }
+    eps /= Scalar(kQ);
+    Scalar sigma = Scalar{ 1 };
+    if (eps >= Scalar{ 1 })
+      sigma = omega;
+    else if (eps >= Scalar{ 0.1 })
+      sigma = Scalar{ 1.35 };
+    else if (eps >= Scalar{ 0.01 })
+      sigma = Scalar{ 1.05 };
+
+    Scalar omegaL = omega / sigma;
+    omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };
+    omegaL = (omegaL < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaL : (Scalar{ 2 } - Scalar{ 1e-7 });
+    omegaT = (omegaT > Scalar{ 1 }) ? omegaT : Scalar{ 1 };
+    omegaT = (omegaT < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaT : (Scalar{ 2 } - Scalar{ 1e-7 });
+
+    // L[a] = sum_i 2 * (u . c_i) * c_i_a * (f - feq)   (c_i unshifted)
+    Scalar L[kD] = { Scalar{ 0 }, Scalar{ 0 } };
+    LBMINI_ALPAKA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc) {
+      const Scalar cix0 = static_cast<Scalar>(LatticeType::Velocity(idc, 0));
+      const Scalar ciy0 = static_cast<Scalar>(LatticeType::Velocity(idc, 1));
+      const Scalar uvi = ux * cix0 + uy * ciy0;
+      const Scalar aux = Scalar{ 2 } * uvi * (f[idc] - feqLocal[idc]);
+      L[0] += aux * cix0;
+      L[1] += aux * ciy0;
+    }
+
+    const Scalar invT = Scalar{ 1 } / temc;
+    LBMINI_ALPAKA_UNROLL
+    for (int idc = 0; idc < kQ; ++idc) {
+      const Scalar fOld = f[idc];
+      f[idc] = fOld + omegaL * (feqLocal[idc] - fOld);
+      const Scalar cidotL = L[0] * LatticeType::Cshift(idc, 0, ushiftX)
+        + L[1] * LatticeType::Cshift(idc, 1, ushiftY);
+      const Scalar Wi = LatticeType::Weights(idc, temc);
+      const Scalar gDiff = Wi * cidotL * invT;
+      const Scalar gOld = g[idc];
+      g[idc] = gOld + omegaL * (geqLocal[idc] - gOld) + (omegaL - omegaT) * gDiff;
+    }
+  }
+};
+
+/**
+ * @brief Initial state: Sod left/right macroscopics, equilibrium seeding, the
+ *        macroscopic recovery of the reference `Init()`, and the first
+ *        collision — one pass, nothing transferred from the host.
+ *
+ * Writing every buffer from the compute device also places the pages
+ * (first touch) next to the threads that will use them on a CPU.
+ */
+template<typename Scalar, typename LatticeType>
+struct InitKernel {
+  using Phys = Physics<Scalar, LatticeType>;
+  static constexpr int kQ = Phys::kQ;
+  static constexpr int kD = Phys::kD;
+
+  ALPAKA_FN_ACC void operator()(
+    ::alpaka::onAcc::concepts::Acc auto const& acc,
+    const Params<Scalar, kQ>* __restrict__ params,
+    Scalar* __restrict__ fOut,
+    Scalar* __restrict__ gOut,
+    Scalar* __restrict__ xiOut,
+    Scalar* __restrict__ rhoOut,
+    Scalar* __restrict__ pOut,
+    Scalar* __restrict__ temOut,
+    Scalar* __restrict__ uOut
+  ) const {
+    const Params<Scalar, kQ>& p = *params;
+    const std::ptrdiff_t N = p.cells;
+    for (auto [cell] : ::alpaka::onAcc::makeIdxMap(
+           acc,
+           ::alpaka::onAcc::worker::threadsInGrid,
+           ::alpaka::IdxRange{ ::alpaka::Vec{ p.cells } }
+         )) {
+      const std::int32_t i = cell / p.ny;
+
+      // Sod-like left/right state (reference `Init()` host loop).
+      const bool left = i < p.nx / 2;
+      const Scalar rho0 = left ? p.densityL : p.densityR;
+      const Scalar p0 = left ? p.pressureL : p.pressureR;
+      const Scalar tem0 = LatticeType::Cs2 * p0 / (rho0 * p.rgas);
+      const Scalar ux0 = Scalar{ 0 };
+      const Scalar uy0 = Scalar{ 0 };
+
+      // seedEquilibria(): f = feq, g = Wi(T)-normalised geq (xi == 0).
+      Scalar f[kQ];
+      Scalar g[kQ];
+      Phys::Feq(rho0, ux0, uy0, tem0, p.ushiftX, p.ushiftY, f);
+      const Scalar u2 = ux0 * ux0 + uy0 * uy0;
+      const Scalar E = p.cv * tem0 + Scalar{ 0.5 } * u2;
+      const Scalar targetE = Scalar{ 2 } * rho0 * E;
+      Scalar sumW = Scalar{ 0 };
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc)
+        sumW += LatticeType::Weights(idc, tem0);
+      const Scalar sc = (sumW > Phys::kTiny) ? targetE / sumW : targetE / Scalar(kQ);
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        const Scalar wi = (sumW > Phys::kTiny) ? LatticeType::Weights(idc, tem0) : Scalar{ 1 };
+        g[idc] = wi * sc;
+      }
+
+      // computeMacroscopic(): the state every getter sees after Init().
+      Scalar rho;
+      Scalar ux;
+      Scalar uy;
+      Scalar tem;
+      Scalar pres;
+      Phys::Macroscopic(f, g, p, rho, ux, uy, tem, pres);
+      rhoOut[cell] = rho;
+      pOut[cell] = pres;
+      temOut[cell] = tem;
+      uOut[0 * N + cell] = ux;
+      uOut[1 * N + cell] = uy;
+
+      // First collision, cold Newton start.
+      Scalar xi[kD] = { Scalar{ 0 }, Scalar{ 0 } };
+      Phys::Collide(p, rho, ux, uy, tem, f, g, xi);
+
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        fOut[idc * N + cell] = f[idc];
+        gOut[idc * N + cell] = g[idc];
+      }
+      LBMINI_ALPAKA_UNROLL
+      for (int d = 0; d < kD; ++d)
+        xiOut[d * N + cell] = xi[d];
+    }
+  }
+};
+
+/**
+ * @brief One full time step: pull streaming + macroscopics + collision.
+ *
+ * @tparam kStoreMacro write `rho`, `p`, `T`, `u` (only needed on the last step
+ *         of a `Run()`, the only point where a getter can observe them).
+ */
+template<typename Scalar, typename LatticeType, bool kStoreMacro>
+struct StepKernel {
+  using Phys = Physics<Scalar, LatticeType>;
+  static constexpr int kQ = Phys::kQ;
+  static constexpr int kD = Phys::kD;
+
+  ALPAKA_FN_ACC void operator()(
+    ::alpaka::onAcc::concepts::Acc auto const& acc,
+    const Params<Scalar, kQ>* __restrict__ params,
+    const Scalar* __restrict__ fIn,
+    const Scalar* __restrict__ gIn,
+    Scalar* __restrict__ fOut,
+    Scalar* __restrict__ gOut,
+    Scalar* __restrict__ xiIo,
+    Scalar* __restrict__ rhoOut,
+    Scalar* __restrict__ pOut,
+    Scalar* __restrict__ temOut,
+    Scalar* __restrict__ uOut
+  ) const {
+    const Params<Scalar, kQ>& p = *params;
+    const std::ptrdiff_t N = p.cells;
+    const std::int32_t nx = p.nx;
+    const std::int32_t ny = p.ny;
+    const auto& st = p.stencil;
+
+    for (auto [cell] : ::alpaka::onAcc::makeIdxMap(
+           acc,
+           ::alpaka::onAcc::worker::threadsInGrid,
+           ::alpaka::IdxRange{ ::alpaka::Vec{ p.cells } }
+         )) {
+      const std::int32_t i = cell / ny;
+      const std::int32_t j = cell - i * ny;
+
+      // Pull the post-collision populations of the previous step.
+      Scalar f[kQ];
+      Scalar g[kQ];
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        const Scalar* __restrict__ fp = fIn + idc * N;
+        const Scalar* __restrict__ gp = gIn + idc * N;
+        if (st.nearest[idc]) {
+          // Degenerate-weight fallback of the reference table (uniform branch:
+          // `nearest` depends on the direction only).
+          const auto xN = static_cast<std::int32_t>(
+            ::alpaka::math::round(static_cast<Scalar>(i) - st.cix[idc]));
+          const auto yN = static_cast<std::int32_t>(
+            ::alpaka::math::round(static_cast<Scalar>(j) - st.ciy[idc]));
+          std::int32_t yW = yN % ny;
+          yW += (yW < 0) ? ny : 0;
+          const std::int32_t src = (xN < 0 || xN >= nx) ? cell : xN * ny + yW;
+          f[idc] = fp[src];
+          g[idc] = gp[src];
+        } else {
+          const std::int32_t xa = i + st.ox[idc];
+          const std::int32_t rowA = ((xa < 0) ? 0 : ((xa >= nx) ? nx - 1 : xa)) * ny;
+          const std::int32_t xb = xa + 1;
+          const std::int32_t rowB = ((xb < 0) ? 0 : ((xb >= nx) ? nx - 1 : xb)) * ny;
+          std::int32_t ya = j + st.oy0[idc];
+          ya -= (ya >= ny) ? ny : 0;
+          std::int32_t yb = j + st.oy1[idc];
+          yb -= (yb >= ny) ? ny : 0;
+
+          const Scalar w0 = st.w[idc][0];
+          const Scalar w1 = st.w[idc][1];
+          const Scalar w2 = st.w[idc][2];
+          const Scalar w3 = st.w[idc][3];
+          f[idc] = w0 * fp[rowA + ya] + w1 * fp[rowB + ya] + w2 * fp[rowA + yb] + w3 * fp[rowB + yb];
+          g[idc] = w0 * gp[rowA + ya] + w1 * gp[rowB + ya] + w2 * gp[rowA + yb] + w3 * gp[rowB + yb];
+        }
+      }
+
+      Scalar rho;
+      Scalar ux;
+      Scalar uy;
+      Scalar tem;
+      Scalar pres;
+      Phys::Macroscopic(f, g, p, rho, ux, uy, tem, pres);
+      if constexpr (kStoreMacro) {
+        rhoOut[cell] = rho;
+        pOut[cell] = pres;
+        temOut[cell] = tem;
+        uOut[0 * N + cell] = ux;
+        uOut[1 * N + cell] = uy;
+      }
+
+      Scalar xi[kD];
+      LBMINI_ALPAKA_UNROLL
+      for (int d = 0; d < kD; ++d)
+        xi[d] = xiIo[d * N + cell];
+
+      Phys::Collide(p, rho, ux, uy, tem, f, g, xi);
+
+      LBMINI_ALPAKA_UNROLL
+      for (int idc = 0; idc < kQ; ++idc) {
+        fOut[idc * N + cell] = f[idc];
+        gOut[idc * N + cell] = g[idc];
+      }
+      LBMINI_ALPAKA_UNROLL
+      for (int d = 0; d < kD; ++d)
+        xiIo[d * N + cell] = xi[d];
+    }
+  }
+};
+} // namespace lbmini::alpaka::detail
+
+namespace lbmini::alpaka::detail {
+/// All alpaka state of one solver: device, queue, launch shape and buffers.
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+struct Engine<Scalar, LatticeType, Target>::State {
+  using Index = Eigen::Index;
+  using Traits = TargetTraits<Target>;
+  using Phys = Physics<Scalar, LatticeType>;
+  static constexpr int kQ = Phys::kQ;
+  static constexpr int kD = Phys::kD;
+  using ParamsT = Params<Scalar, kQ>;
+  using Extent = ::alpaka::Vec<Index, 1>;
+
+  using Device = decltype(::alpaka::onHost::makeDeviceSelector(Traits::kApi, Traits::kDeviceKind).makeDevice(0));
+  using Queue = decltype(std::declval<Device&>().makeQueue(Traits::kQueueKind));
+  using Buffer = decltype(::alpaka::onHost::alloc<Scalar>(std::declval<Device&>(), Extent{}));
+  using HostBuffer = decltype(::alpaka::onHost::allocHost<Scalar>(Extent{}));
+  using ParamsBuffer = decltype(::alpaka::onHost::alloc<ParamsT>(std::declval<Device&>(), Extent{}));
+  using FrameSpecT = decltype(Traits::FrameSpec(std::declval<const Device&>(), std::int32_t{}));
+
+  State(
+    const FluidData<Scalar>& fluid,
+    const MeshData<Scalar, kD>& mesh,
+    const ControlData<Scalar>& control
+  )
+    : params_(MakeParams(fluid, mesh, control)),
+      nx_(mesh.size[0]),
+      ny_(mesh.size[1]),
+      N_(nx_ * ny_),
+      device_(MakeDevice()),
+      queue_(device_.makeQueue(Traits::kQueueKind)),
+      frameSpec_(Traits::FrameSpec(device_, params_.cells)),
+      fA_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ * kQ })),
+      fB_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ * kQ })),
+      gA_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ * kQ })),
+      gB_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ * kQ })),
+      xi_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ * kD })),
+      rho_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ })),
+      p_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ })),
+      tem_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ })),
+      u_(::alpaka::onHost::alloc<Scalar>(device_, Extent{ N_ * kD })),
+      uHost_(::alpaka::onHost::allocHost<Scalar>(Extent{ N_ * kD })),
+      paramsDev_(::alpaka::onHost::alloc<ParamsT>(device_, Extent{ 1 })),
+      fCur_(::alpaka::onHost::data(fA_)),
+      fNext_(::alpaka::onHost::data(fB_)),
+      gCur_(::alpaka::onHost::data(gA_)),
+      gNext_(::alpaka::onHost::data(gB_)) {
+    // The parameters travel once to device memory and are passed by pointer:
+    // every thread reads the same addresses (one broadcast load per warp, then
+    // L1). As a by-value kernel argument the ~0.6 kB block would be copied
+    // into every thread's stack frame by clang-CUDA, since the kernel binds it
+    // by reference.
+    auto hostView = ::alpaka::makeView(::alpaka::api::host, &params_, Extent{ 1 });
+    ::alpaka::onHost::memcpy(queue_, paramsDev_, hostView);
+    ::alpaka::onHost::wait(queue_);
+  }
+
+  State(const State&) = delete;
+
+  State& operator=(const State&) = delete;
+
+  State(State&&) = delete;
+
+  State& operator=(State&&) = delete;
+
+  ~State() {
+    // Nothing may still be reading or writing a buffer when it is released.
+    ::alpaka::onHost::wait(queue_);
+  }
+
+  void Init() {
+    // The buffers are only ever written by kernels, so there is no stale state
+    // to clear: a re-Init() simply restarts from the initial condition.
+    fCur_ = ::alpaka::onHost::data(fA_);
+    fNext_ = ::alpaka::onHost::data(fB_);
+    gCur_ = ::alpaka::onHost::data(gA_);
+    gNext_ = ::alpaka::onHost::data(gB_);
+    queue_.enqueue(
+      frameSpec_,
+      ::alpaka::KernelBundle{
+        InitKernel<Scalar, LatticeType>{},
+        static_cast<const ParamsT*>(::alpaka::onHost::data(paramsDev_)),
+        fCur_,
+        gCur_,
+        ::alpaka::onHost::data(xi_),
+        ::alpaka::onHost::data(rho_),
+        ::alpaka::onHost::data(p_),
+        ::alpaka::onHost::data(tem_),
+        ::alpaka::onHost::data(u_)
+      }
+    );
+    ::alpaka::onHost::wait(queue_);
+  }
+
+  void Run(const Index steps) {
+    for (Index t = 0; t < steps; ++t) {
+      if (t + 1 == steps)
+        enqueueStep<true>();
+      else
+        enqueueStep<false>();
+      std::swap(fCur_, fNext_);
+      std::swap(gCur_, gNext_);
+    }
+    // Asynchronous on the GPU: wait so the caller's wall clock covers the
+    // device work, not just the enqueue (a no-op on the blocking CPU queue).
+    ::alpaka::onHost::wait(queue_);
+  }
+
+  /// Copy a scalar field straight into caller-owned host memory (`N` values).
+  void CopyOut(const Buffer& field, Scalar* dst) const {
+    auto view = ::alpaka::makeView(::alpaka::api::host, dst, Extent{ N_ });
+    ::alpaka::onHost::memcpy(queue_, view, field);
+    ::alpaka::onHost::wait(queue_);
+  }
+
+  void CopyU(Scalar* dst) const {
+    ::alpaka::onHost::memcpy(queue_, uHost_, u_);
+    ::alpaka::onHost::wait(queue_);
+    // SoA d-major -> AoS [cell][d] (RowMajor [i][j][d]).
+    const Scalar* src = ::alpaka::onHost::data(uHost_);
+    for (Index cell = 0; cell < N_; ++cell)
+      for (Index d = 0; d < kD; ++d)
+        dst[cell * kD + d] = src[d * N_ + cell];
+  }
+
+  const Buffer& Rho() const { return rho_; }
+
+  const Buffer& P() const { return p_; }
+
+  const Buffer& T() const { return tem_; }
+
+private:
+  template<bool kStoreMacro>
+  void enqueueStep() {
+    queue_.enqueue(
+      frameSpec_,
+      ::alpaka::KernelBundle{
+        StepKernel<Scalar, LatticeType, kStoreMacro>{},
+        static_cast<const ParamsT*>(::alpaka::onHost::data(paramsDev_)),
+        static_cast<const Scalar*>(fCur_),
+        static_cast<const Scalar*>(gCur_),
+        fNext_,
+        gNext_,
+        ::alpaka::onHost::data(xi_),
+        ::alpaka::onHost::data(rho_),
+        ::alpaka::onHost::data(p_),
+        ::alpaka::onHost::data(tem_),
+        ::alpaka::onHost::data(u_)
+      }
+    );
+  }
+
+  static Device MakeDevice() {
+    auto selector = ::alpaka::onHost::makeDeviceSelector(Traits::kApi, Traits::kDeviceKind);
+    if (!selector.isAvailable())
+      throw std::runtime_error(std::string(Traits::kName) + ": no alpaka device available for this target.");
+    return selector.makeDevice(0);
+  }
+
+  static ParamsT MakeParams(
+    const FluidData<Scalar>& fluid,
+    const MeshData<Scalar, kD>& mesh,
+    const ControlData<Scalar>& control
+  ) {
+    ParamsT p{};
+    p.nx = static_cast<std::int32_t>(mesh.size[0]);
+    p.ny = static_cast<std::int32_t>(mesh.size[1]);
+    p.cells = static_cast<std::int32_t>(mesh.size[0] * mesh.size[1]);
+    p.ushiftX = control.U(0);
+    p.ushiftY = control.U(1);
+    p.cv = fluid.specificHeatCv;
+    p.cp = fluid.specificHeatCp;
+    p.invCv = Scalar{ 1 } / fluid.specificHeatCv;
+    p.rgas = fluid.constant;
+    p.viscosity = fluid.viscosity;
+    p.conductivity = fluid.conductivity;
+    p.densityL = fluid.densityL;
+    p.pressureL = fluid.pressureL;
+    p.densityR = fluid.densityR;
+    p.pressureR = fluid.pressureR;
+    p.stencil = BuildDirectionStencil<LatticeType>(p.ny, control.U(0), control.U(1), control.idw);
+    return p;
+  }
+
+  ParamsT params_;
+  Index nx_;
+  Index ny_;
+  Index N_;
+
+  // Declaration order is construction order: the device and its queue outlive
+  // every buffer allocated from them.
+  Device device_;
+  mutable Queue queue_;
+  FrameSpecT frameSpec_;
+
+  Buffer fA_;
+  Buffer fB_;
+  Buffer gA_;
+  Buffer gB_;
+  Buffer xi_;
+  Buffer rho_;
+  Buffer p_;
+  Buffer tem_;
+  Buffer u_;
+  mutable HostBuffer uHost_;
+  ParamsBuffer paramsDev_;
+
+  // Ping-pong roles of the distribution buffers (swapped, never copied).
+  Scalar* fCur_;
+  Scalar* fNext_;
+  Scalar* gCur_;
+  Scalar* gNext_;
+};
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+Engine<Scalar, LatticeType, Target>::Engine(
+  const FluidData<Scalar>& fluid,
+  const MeshData<Scalar, LatticeType::Dim()>& mesh,
+  const ControlData<Scalar>& control
+)
+  : state_(std::make_unique<State>(fluid, mesh, control)) {}
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+Engine<Scalar, LatticeType, Target>::~Engine() = default;
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+void Engine<Scalar, LatticeType, Target>::Init() {
+  state_->Init();
+}
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+void Engine<Scalar, LatticeType, Target>::Run(const Index steps) {
+  state_->Run(steps);
+}
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+void Engine<Scalar, LatticeType, Target>::CopyRho(Scalar* dst) const {
+  state_->CopyOut(state_->Rho(), dst);
+}
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+void Engine<Scalar, LatticeType, Target>::CopyP(Scalar* dst) const {
+  state_->CopyOut(state_->P(), dst);
+}
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+void Engine<Scalar, LatticeType, Target>::CopyT(Scalar* dst) const {
+  state_->CopyOut(state_->T(), dst);
+}
+
+template<typename Scalar, typename LatticeType, TargetEnum Target>
+void Engine<Scalar, LatticeType, Target>::CopyU(Scalar* dst) const {
+  state_->CopyU(dst);
+}
+} // namespace lbmini::alpaka::detail
+
+#endif // LBMINI_ALPAKA_LBMTUBEIMPL_HPP_

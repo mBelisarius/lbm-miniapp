@@ -27,17 +27,20 @@
  *    (a convex combination — otherwise mass is created or destroyed);
  *  - `nx * ny` still fits into the `std::int32_t` the table is made of.
  *
- * Covers the two backends that keep the table in host memory with the
- * `(idc * N + cell) * 4 + k` layout. The GPU-oriented backends mirror the same
- * host-side construction into device storage (Kokkos/RAJA use
- * `(idc * 4 + k) * N + cell`); validating those requires a device copy-back and
- * is covered instead by running the suite under `compute-sanitizer`, see
- * `docs/memory-safety.md`.
+ * Only the serial reference (`plain::LbmTube`) still builds that table. Every
+ * optimised backend streams through the shared per-direction
+ * `lbmini::DirectionStencil` (`Lbm/Stencil.hpp`) instead, resolving the four
+ * source cells in the kernel with a clamp in x and a wrap in y. The second
+ * suite below proves, exhaustively for every `(cell, idc)` of every mesh shape
+ * and shift, that this resolution (`lbmini::GatherSources`, the host copy of
+ * the kernels' logic) stays inside the domain and is the *same* gather as the
+ * reference table: identical source cells carrying identical weights.
  */
 
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -47,16 +50,7 @@
 
 #include "Lbm/Plain/LatticeD2Q9.hpp"
 #include "Lbm/Plain/LbmTube.hpp"
-
-#ifdef LBMINI_TEST_OPENMP_CPU
-#include "Lbm/OpenMp/Cpu/LatticeD2Q9.hpp"
-#include "Lbm/OpenMp/Cpu/LbmTube.hpp"
-#endif
-
-#if defined(LBMINI_TEST_OPENACC_CPU) && defined(_OPENACC)
-#include "Lbm/OpenAcc/Cpu/LatticeD2Q9.hpp"
-#include "Lbm/OpenAcc/Cpu/LbmTube.hpp"
-#endif
+#include "Lbm/Stencil.hpp"
 
 namespace {
 using lbmini_test::Index;
@@ -71,7 +65,7 @@ constexpr Scalar kShiftsX[] = { Scalar{ 0 }, Scalar{ 0.25 }, Scalar{ 0.5 }, Scal
 constexpr Scalar kShiftsY[] = { Scalar{ 0 }, Scalar{ 0.25 } };
 
 /**
- * @brief Test-only accessor for the gather tables of a host backend.
+ * @brief Test-only accessor for the gather tables of the reference backend.
  *
  * The members are `protected` in the solvers precisely so this probe can read
  * them without any cast or `friend` trickery.
@@ -97,37 +91,7 @@ struct PlainTables {
   static const char* Name() { return "plain"; }
 };
 
-#ifdef LBMINI_TEST_OPENMP_CPU
-struct OpenMpCpuTables {
-  using Lattice = lbmini::openmp::cpu::LatticeD2Q9<Scalar>;
-  using Tube = lbmini::openmp::cpu::LbmTube<Scalar, Lattice>;
-  static lbmini::PerformanceData Performance() {
-    return lbmini_test::MakePerformance(lbmini::BackendEnum::OpenMP, lbmini::TargetEnum::CPU);
-  }
-  static const char* Name() { return "openmp_cpu"; }
-};
-#endif
-
-#if defined(LBMINI_TEST_OPENACC_CPU) && defined(_OPENACC)
-struct OpenAccCpuTables {
-  using Lattice = lbmini::openacc::cpu::LatticeD2Q9<Scalar>;
-  using Tube = lbmini::openacc::cpu::LbmTube<Scalar, Lattice>;
-  static lbmini::PerformanceData Performance() {
-    return lbmini_test::MakePerformance(lbmini::BackendEnum::OpenACC, lbmini::TargetEnum::CPU);
-  }
-  static const char* Name() { return "openacc_cpu"; }
-};
-#endif
-
-using TableBackends = ::testing::Types<
-  PlainTables
-#ifdef LBMINI_TEST_OPENMP_CPU
-  , OpenMpCpuTables
-#endif
-#if defined(LBMINI_TEST_OPENACC_CPU) && defined(_OPENACC)
-  , OpenAccCpuTables
-#endif
->;
+using TableBackends = ::testing::Types<PlainTables>;
 
 class TableBackendNames {
 public:
@@ -202,6 +166,81 @@ TYPED_TEST(StreamingTableBounds, EveryGatherIndexIsInsideTheDomain) {
             if (std::fabs(weightSum - Scalar{ 1 }) > Scalar{ 1.0e-12 }) {
               FAIL() << "gather weights do not sum to one (" << weightSum << ") at idc "
                      << idc << ", cell " << cell;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+using PlainProbe = TableProbe<PlainTables::Tube>;
+
+/**
+ * @brief The shared per-direction stencil is the reference gather, cell by cell.
+ *
+ * For every `(cell, idc)` the four `GatherSources()` indices must lie in
+ * `[0, nx * ny)`, the weights must form a convex combination, and the weight
+ * landing on each distinct source cell must equal the one of the reference
+ * table (corners may be listed in a different order or merged by the clamp,
+ * so the comparison is per source cell, not per corner slot).
+ */
+TEST(DirectionStencil, MatchesTheReferenceTableForEveryCell) {
+  using Lattice = PlainTables::Lattice;
+  constexpr int kQ = static_cast<int>(PlainTables::Tube::kQ_);
+
+  for (const auto& shape : lbmini_test::MeshShapes()) {
+    for (const Scalar ux : kShiftsX) {
+      for (const Scalar uy : kShiftsY) {
+        const std::string where = "mesh " + shape.Name() + " shift (" + std::to_string(ux) + ", " +
+          std::to_string(uy) + ")";
+        SCOPED_TRACE(where);
+
+        const auto control = lbmini_test::MakeControl(ux, uy);
+        const auto probe = std::make_unique<PlainProbe>(
+          lbmini_test::MakeFluid(),
+          lbmini_test::MakeMesh(shape.nx, shape.ny),
+          control,
+          PlainTables::Performance()
+        );
+        const auto stencil = lbmini::BuildDirectionStencil<Lattice>(shape.ny, control.U(0), control.U(1), control.idw);
+        const Index cells = shape.Cells();
+
+        for (int idc = 0; idc < kQ; ++idc) {
+          for (Index i = 0; i < shape.nx; ++i) {
+            for (Index j = 0; j < shape.ny; ++j) {
+              const Index cell = i * shape.ny + j;
+              std::int64_t src[4];
+              Scalar w[4];
+              lbmini::GatherSources(stencil, idc, i, j, shape.nx, shape.ny, src, w);
+
+              std::map<Index, Scalar> fused;
+              std::map<Index, Scalar> reference;
+              Scalar weightSum = Scalar{ 0 };
+              for (int k = 0; k < 4; ++k) {
+                ASSERT_GE(src[k], Index{ 0 }) << "negative source at idc " << idc << ", cell " << cell;
+                ASSERT_LT(src[k], cells) << "out-of-bounds source at idc " << idc << ", cell " << cell;
+                ASSERT_TRUE(lbmini::IsFinite(w[k])) << "non-finite weight at idc " << idc << ", cell " << cell;
+                EXPECT_GE(w[k], Scalar{ 0 }) << "negative weight at idc " << idc << ", cell " << cell;
+                weightSum += w[k];
+                fused[src[k]] += w[k];
+
+                const Index base = (idc * cells + cell) * 4;
+                reference[probe->streamIdx_[base + k]] += probe->streamW_[base + k];
+              }
+              ASSERT_NEAR(weightSum, Scalar{ 1 }, Scalar{ 1.0e-12 }) << "idc " << idc << ", cell " << cell;
+
+              for (const auto& [source, weight] : reference) {
+                const Scalar got = fused.count(source) != 0 ? fused[source] : Scalar{ 0 };
+                ASSERT_NEAR(got, weight, Scalar{ 1.0e-12 })
+                  << "weight on source " << source << " differs at idc " << idc << ", cell " << cell;
+              }
+              for (const auto& [source, weight] : fused) {
+                if (reference.count(source) == 0) {
+                  ASSERT_NEAR(weight, Scalar{ 0 }, Scalar{ 1.0e-12 })
+                    << "stencil reads source " << source << " the reference ignores, idc " << idc
+                    << ", cell " << cell;
+                }
+              }
             }
           }
         }

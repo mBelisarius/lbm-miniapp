@@ -20,9 +20,9 @@ corruption stops being latent.
 
 | Bug class | Where it lives in this code base |
 |---|---|
-| Out-of-bounds read | `stream()` gathers `f[i0..i3]` through the precomputed `streamIdx_` table with no bounds check, in every backend |
+| Out-of-bounds read | The streaming gather reads four source cells per direction with no bounds check: through the precomputed `streamIdx_` table in the `Plain` reference, and through the shared per-direction `lbmini::DirectionStencil` (`lbmini/Lbm/Stencil.hpp`, clamp in x, wrap in y) in every optimised backend |
 | Out-of-bounds write | Buffers sized from `nx * ny` while kernels index `i * ny + j`, `d * N + cell`, `idc * N + cell`; zero/negative extents and overflowing products break the assumptions, while one-cell and odd extents exercise boundary paths |
-| Integer overflow into a wild address | The streaming tables are `std::int32_t`; `nx * ny > 2^31` wraps to a negative index. `cellIndex()` casts extents to `int` in some backends |
+| Integer overflow into a wild address | The reference streaming table and the device kernels' cell indices are `std::int32_t`; `nx * ny > 2^31` wraps to a negative index. `cellIndex()` casts extents to `int` in some backends |
 | Use-after-free | Global runtimes must outlive every solver allocation; cached `fCur_`/`fAlt_` pointers must never outlive their owning object |
 | Double free | Raw `cudaMalloc` / `omp_target_alloc` / command-buffer handles must have exclusive ownership and non-copyable owners |
 | Reading uninitialised / stale memory | Device buffers read back on the host without a fence / `deep_copy` / `enqueueReadBuffer` |
@@ -291,7 +291,7 @@ test/run-tests.sh all
 ## 7. Rules for new or modified backend code
 
 1. Every buffer's size is derived from a single named expression (`N_`, `uSize_`, `distSize_`), never open-coded at the allocation site.
-2. Any indirect index (streaming tables, halo maps, rank neighbours) must be provably inside its target buffer, and that proof must be a test — see `test/streaming_table_test.cpp`.
+2. Any indirect index (streaming tables and stencils, halo maps, rank neighbours) must be provably inside its target buffer, and that proof must be a test — see `test/streaming_table_test.cpp`, which checks the reference table and, for every cell, that the shared `DirectionStencil` gather stays in the domain and reproduces that table.
 3. Ownership is RAII or explicitly deleted: a class that owns a raw handle deletes its copy and move operations, or implements them.
 4. Global runtimes (Kokkos, MPI, CUDA/OpenCL contexts) are initialised and finalised **once per process**, outside the solver lifetime.
 5. Getters return owning copies. Never hand out a pointer or a view into solver storage — the memory-safety suite asserts this.

@@ -90,6 +90,15 @@
 #endif
 #endif
 
+#ifdef LBMINI_TEST_ALPAKA
+#include "Lbm/Alpaka/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/Alpaka/Cpu/LbmTube.hpp"
+#if defined(LBMINI_TEST_DEVICE_BACKENDS) && defined(USE_ALPAKA_GPU)
+#include "Lbm/Alpaka/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/Alpaka/Gpu/LbmTube.hpp"
+#endif
+#endif
+
 #ifdef LBMINI_TEST_MPI
 #include <mpi.h>
 #include "Lbm/Mpi/Cpu/LatticeD2Q9.hpp"
@@ -397,6 +406,54 @@ TEST(BackendPresenceTest, RajaGpuBackendPresenceAndExecution) {
   );
 
   VerifySolverExecution(solver, kPresenceShape, "RAJA GPU");
+}
+#endif
+#endif
+
+#ifdef LBMINI_TEST_ALPAKA
+TEST(BackendPresenceTest, AlpakaCpuBackendIsPresentAndExecutes) {
+  using Tube = lbmini::alpaka::cpu::LbmTube<Scalar, lbmini::alpaka::cpu::LatticeD2Q9<Scalar>>;
+  Tube solver(
+    lbmini_test::MakeFluid(),
+    lbmini_test::MakeMesh(kPresenceShape.nx, kPresenceShape.ny),
+    lbmini_test::MakeControl(),
+    lbmini_test::MakePerformance(lbmini::BackendEnum::Alpaka, lbmini::TargetEnum::CPU)
+  );
+
+  VerifySolverExecution(solver, kPresenceShape, "Alpaka CPU");
+}
+
+#ifndef USE_ALPAKA_GPU
+TEST(BackendPresenceTest, AlpakaGpuTargetIsRefusedWithoutDeviceFlavour) {
+  lbmini::Executor<Scalar>::Reset();
+  EXPECT_THROW({
+    auto* exec = lbmini::Executor<Scalar>::GetExecutor(
+      lbmini_test::MakeFluid(),
+      lbmini_test::MakeMesh(kPresenceShape.nx, kPresenceShape.ny),
+      lbmini_test::MakeControl(),
+      lbmini_test::MakePerformance(lbmini::BackendEnum::Alpaka, lbmini::TargetEnum::GPU)
+    );
+    (void)exec;
+  }, std::runtime_error);
+  lbmini::Executor<Scalar>::Reset();
+}
+#endif
+
+#if defined(LBMINI_TEST_DEVICE_BACKENDS) && defined(USE_ALPAKA_GPU)
+TEST(BackendPresenceTest, AlpakaGpuBackendPresenceAndExecution) {
+  if (lbmini::alpaka::gpu::DeviceCount() <= 0) {
+    GTEST_SKIP() << "No CUDA device visible to alpaka.";
+  }
+
+  using Tube = lbmini::alpaka::gpu::LbmTube<Scalar, lbmini::alpaka::gpu::LatticeD2Q9<Scalar>>;
+  Tube solver(
+    lbmini_test::MakeFluid(),
+    lbmini_test::MakeMesh(kPresenceShape.nx, kPresenceShape.ny),
+    lbmini_test::MakeControl(),
+    lbmini_test::MakePerformance(lbmini::BackendEnum::Alpaka, lbmini::TargetEnum::GPU)
+  );
+
+  VerifySolverExecution(solver, kPresenceShape, "Alpaka GPU");
 }
 #endif
 #endif

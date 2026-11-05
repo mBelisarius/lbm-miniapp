@@ -11,7 +11,7 @@ The backend and the target device are selected in `config.yaml`:
 ```yaml
 Performance:
     target: CPU     # Target device (CPU; GPU)
-    backend: Plain  # Backend to use (Plain; OpenMP; OpenACC; CUDA; OpenCL; Kokkos; RAJA; MPI)
+    backend: Plain  # Backend to use (Plain; OpenMP; OpenACC; CUDA; OpenCL; Kokkos; RAJA; MPI; Alpaka)
 ```
 
 | Backend   | CPU | GPU |
@@ -24,6 +24,7 @@ Performance:
 | `Kokkos`  | yes | yes |
 | `RAJA`    | yes | yes |
 | `MPI`     | yes | no  |
+| `Alpaka`  | yes | yes |
 
 ## Building
 
@@ -54,15 +55,30 @@ lambdas require the whole translation unit to be compiled by `nvcc`:
 ./cmake-build.sh Release -DENABLE_RAJA=OFF                  # skip RAJA entirely
 ```
 
+Alpaka3 is used from the clone in `deps/alpaka3` (no download) and is enabled by default; it
+needs GCC >= 12 or Clang >= 17 and is skipped with a warning otherwise. Its CPU target uses
+`api::host` + `exec::cpuOmpBlocks` (OpenMP), its GPU target `api::cuda` + `exec::gpuCuda`,
+from one implementation (`lbmini/Lbm/Alpaka/LbmTubeImpl.hpp`) that runs each time step as a
+single fused pull kernel (streaming + macroscopics + collision, no streaming tables). Because
+alpaka compiles every source of a CUDA target as CUDA, the GPU flavour lives in its own
+library and is opt-in. It works with `nvcc` or with `clang++` as CUDA compiler (the latter
+is the way to go when the host GCC is newer than `nvcc` supports):
+
+```bash
+./cmake-build.sh Release -DENABLE_ALPAKA_CUDA=ON            # Alpaka with CUDA (nvcc)
+./cmake-build.sh Release -DENABLE_ALPAKA_CUDA=ON -DCMAKE_CUDA_COMPILER=clang++ \
+    -DCMAKE_CUDA_ARCHITECTURES=89 "-DCMAKE_CUDA_FLAGS=--cuda-path=$CUDA_HOME"  # ... clang-CUDA
+./cmake-build.sh Release -DENABLE_ALPAKA=OFF                # skip Alpaka entirely
+```
+
 The project's own code (not the fetched dependencies) is compiled with `-ffast-math` in the
-`Release` and `RelWithDebInfo` configurations (GCC/Clang), so `exp`/`log` can be vectorized
-through glibc's libmvec (`_ZGVdN4v_exp`, ...), which is only declared when `__FAST_MATH__` is
-defined. Results then differ from a strict-IEEE build in the last bits. Pass
+`Release` and `RelWithDebInfo` configurations (GCC/Clang), which lets the compiler call
+glibc's libmvec (`_ZGVdN4v_exp`, ...) for `exp`/`log` in loops it vectorizes; those variants
+are only declared when `__FAST_MATH__` is defined. The fused per-cell kernels of the CPU
+backends are not vectorized by GCC, so there `exp`/`log` stay scalar (check with
+`-fopt-info-vec`). Results differ from a strict-IEEE build in the last bits. Pass
 `-DLBMINI_FAST_MATH=OFF` to disable it. Note that fast-math folds `std::isfinite` to `true`;
-use `lbmini::IsFinite` (`lbmini/Utils.hpp`) for every NaN/Inf check. The flag only pays off in
-loops the compiler can vectorize: the OpenMP CPU collision kernel is therefore tiled into flat
-`omp simd` loops so its `exp`/`log` become `_ZGV*` calls (check with `-fopt-info-vec`). The
-other CPU backends keep per-cell loops, where GCC leaves `exp`/`log` scalar.
+use `lbmini::IsFinite` (`lbmini/Utils.hpp`) for every NaN/Inf check.
 
 ## Testing & Verification
 

@@ -62,7 +62,7 @@ fi
 
 # Under Valgrind / TSan only the memory-safety suite is worth the slowdown; the
 # ASan stage above runs the whole ctest set, agreement tests included.
-MEMORY_FILTER='BackendMemorySafety*:StreamingTableBounds*'
+MEMORY_FILTER='BackendMemorySafety*:StreamingTableBounds*:DirectionStencil*'
 
 # This gate covers the host backends only (every tree below is configured with
 # -DENABLE_CUDA=OFF). Hiding the GPUs makes that explicit: no stage here may

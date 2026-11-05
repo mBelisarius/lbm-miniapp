@@ -326,7 +326,7 @@ run_gpu() {
     # in test/memory-check.sh. The case still runs uninstrumented above, and
     # under memcheck, initcheck and synccheck below.
     local RACECHECK_FILTER="${CUDA_DEVICE_FILTER}:*MultiThreadedConcurrentExecutionIsSafe*"
-    if printf '%s\n' "${test_listing}" | grep -Eqi "(cuda|kokkos|raja|openacc|openmp)_gpu\."; then
+    if printf '%s\n' "${test_listing}" | grep -Eqi "(cuda|kokkos|raja|openacc|openmp|alpaka)_gpu\."; then
         run_sanitizer_step memcheck --leak-check full "${TEST_BIN}" --gtest_filter="${CUDA_DEVICE_FILTER}"
         run_sanitizer_step initcheck "${TEST_BIN}" --gtest_filter="${CUDA_DEVICE_FILTER}"
         run_sanitizer_step racecheck "${TEST_BIN}" --gtest_filter="${RACECHECK_FILTER}"
@@ -373,7 +373,7 @@ run_gpu() {
         local GPU_OUT="/tmp/lbm_miniapp_gpu_out"
         local GPU_ERR="/tmp/lbm_miniapp_gpu_err.log"
         local GPU_STDOUT="/tmp/lbm_miniapp_gpu_out.log"
-        for gpu_backend in CUDA Kokkos RAJA OpenACC OpenMP OpenCL; do
+        for gpu_backend in CUDA Kokkos RAJA Alpaka OpenACC OpenMP OpenCL; do
             cat << EOF > "${GPU_CONFIG}"
 Fluid:
     densityL:     1.0

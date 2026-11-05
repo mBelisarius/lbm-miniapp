@@ -57,6 +57,13 @@
 #include "Lbm/Raja/Gpu/LbmTube.hpp"
 #endif
 
+#ifdef USE_ALPAKA
+#include "Lbm/Alpaka/Cpu/LatticeD2Q9.hpp"
+#include "Lbm/Alpaka/Cpu/LbmTube.hpp"
+#include "Lbm/Alpaka/Gpu/LatticeD2Q9.hpp"
+#include "Lbm/Alpaka/Gpu/LbmTube.hpp"
+#endif
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -364,6 +371,39 @@ Executor<Scalar>::Executor(
       }
       #else
       throw std::runtime_error("RAJA backend not enabled.");
+      #endif
+      break;
+    }
+    case lbmini::BackendEnum::Alpaka: {
+      #ifdef USE_ALPAKA
+      switch (performance.target) {
+        case lbmini::TargetEnum::CPU: {
+          using LbmLattice = lbmini::alpaka::cpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::alpaka::cpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
+          break;
+        }
+        case lbmini::TargetEnum::GPU: {
+          // The device flavour is a separate CUDA library; without it there is
+          // no accelerator code at all, so a "GPU" run is refused rather than
+          // silently measured on the host.
+          #ifdef USE_ALPAKA_GPU
+          using LbmLattice = lbmini::alpaka::gpu::LatticeD2Q9<Scalar>;
+          using LbmTube = lbmini::alpaka::gpu::LbmTube<Scalar, LbmLattice>;
+          lbmTube_.reset(new LbmTube(fluid, mesh, control, performance));
+          #else
+          throw std::runtime_error(
+            "Alpaka GPU target is unavailable: the Alpaka backend was built without its "
+            "CUDA flavour. Rebuild with -DENABLE_ALPAKA_CUDA=ON or select the CPU target."
+          );
+          #endif
+          break;
+        }
+        default:
+          throw std::runtime_error("Invalid target for Alpaka backend.");
+      }
+      #else
+      throw std::runtime_error("Alpaka backend not enabled.");
       #endif
       break;
     }

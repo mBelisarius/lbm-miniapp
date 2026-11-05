@@ -13,6 +13,15 @@
 #endif
 
 namespace lbmini::cuda::gpu {
+/**
+ * @brief D2Q9 lattice of the CUDA backend.
+ *
+ * Same velocity ordering and weight formula as `lbmini::plain::LatticeD2Q9`.
+ * The velocity set is expressed arithmetically instead of through a static
+ * table, so every member is usable from device code under both nvcc and
+ * clang-CUDA (no host-only constexpr array is odr-used), and a fully unrolled
+ * direction loop folds each lookup into an immediate.
+ */
 template<typename Scalar>
 class LatticeD2Q9 : public ILattice<Scalar, 2, 9> {
 public:
@@ -22,12 +31,15 @@ public:
 
   static constexpr Scalar Cs2 = Scalar{ 1.0 } / Scalar{ 3.0 };
 
+  /// Ordering: rest, +x, -x, +y, -y, (+x,+y), (-x,-y), (+x,-y), (-x,+y).
   __host__ __device__ static constexpr Index Velocity(Index index, Index dir) {
-    return kVelocity_[index][dir];
+    if (dir == 0)
+      return (index == 1 || index == 5 || index == 7) ? 1 : ((index == 2 || index == 6 || index == 8) ? -1 : 0);
+    return (index == 3 || index == 5 || index == 8) ? 1 : ((index == 4 || index == 6 || index == 7) ? -1 : 0);
   }
 
   __host__ __device__ static constexpr Index Opposite(Index index) {
-    return kOpposite_[index];
+    return (index == 0) ? 0 : ((index % 2 != 0) ? index + 1 : index - 1);
   }
 
   __host__ __device__ static constexpr Scalar Weights(Index idc, Scalar tem) {
@@ -35,7 +47,7 @@ public:
     const Scalar wNonZero = Scalar{ 0.5 } * tem;
     Scalar w = Scalar{ 1.0 };
     for (Index d = 0; d < Lattice::Dim(); ++d) {
-      const Index vid = kVelocity_[idc][d];
+      const Index vid = Velocity(idc, d);
       const Scalar isNonZero = static_cast<Scalar>(vid * vid);
       w *= wZero + isNonZero * (wNonZero - wZero);
     }
@@ -43,33 +55,8 @@ public:
   }
 
   __host__ __device__ static constexpr Scalar Cshift(Index idc, Index dir, Scalar Ushift) {
-    return static_cast<Scalar>(kVelocity_[idc][dir]) + Ushift;
+    return static_cast<Scalar>(Velocity(idc, dir)) + Ushift;
   }
-
-private:
-  static constexpr Index kVelocity_[Lattice::Speeds()][Lattice::Dim()] = {
-    { 0, 0 },
-    { 1, 0 },
-    { -1, 0 },
-    { 0, 1 },
-    { 0, -1 },
-    { 1, 1 },
-    { -1, -1 },
-    { 1, -1 },
-    { -1, 1 },
-  };
-
-  static constexpr Index kOpposite_[Lattice::Speeds()] = {
-    0,
-    2,
-    1,
-    4,
-    3,
-    6,
-    5,
-    8,
-    7
-  };
 };
 } // namespace lbmini::cuda::gpu
 

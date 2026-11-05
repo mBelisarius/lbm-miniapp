@@ -20,6 +20,7 @@ enum class BackendEnum {
   Kokkos,
   RAJA,
   MPI,
+  Alpaka,
 };
 } // namespace lbmini
 
@@ -89,6 +90,9 @@ struct convert<lbmini::BackendEnum> {
       case lbmini::BackendEnum::MPI:
         node = "MPI";
         break;
+      case lbmini::BackendEnum::Alpaka:
+        node = "Alpaka";
+        break;
       default:
         throw std::runtime_error("Invalid BackendEnum value for encoding.");
     }
@@ -117,6 +121,8 @@ struct convert<lbmini::BackendEnum> {
       backend = lbmini::BackendEnum::RAJA;
     } else if (value == "MPI") {
       backend = lbmini::BackendEnum::MPI;
+    } else if (value == "Alpaka") {
+      backend = lbmini::BackendEnum::Alpaka;
     } else {
       return false; // Invalid value
     }

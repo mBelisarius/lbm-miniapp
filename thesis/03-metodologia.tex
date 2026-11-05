@@ -38,8 +38,9 @@ O trabalho foi conduzido em cinco etapas encadeadas, apresentadas na \autoref{fi
 Inicialmente, selecionou-se o modelo físico e numérico, o que resultou na adoção da formulação de dupla distribuição em redes deslocadas, apropriada a escoamentos compressíveis com ondas de choque.
 Em seguida, implementou-se o resolvedor sequencial de referência (\textit{Plain}), que estabelece o comportamento numérico esperado e serve de base para o cálculo da aceleração (\textit{speedup}) das demais versões.
 Essa versão foi então verificada e validada por meio da comparação dos campos calculados com a solução analítica do problema do tubo de choque de Sod.
-Somente após essa etapa o mesmo \textit{kernel} de colisão e propagação foi reimplementado em cada uma das sete tecnologias de paralelização avaliadas, preservando-se a disposição dos dados em memória e a sequência de operações.
-A etapa final compreendeu as campanhas de medição de desempenho, de escalabilidade e de complexidade de código, cujos resultados são discutidos no Capítulo~\ref{ch:resultados}.
+Somente após essa etapa o mesmo \textit{kernel} de colisão e propagação foi reimplementado em cada uma das tecnologias de paralelização contempladas pelo miniaplicativo (oito tecnologias paralelas, além do resolvedor sequencial de referência), preservando-se a disposição dos dados em memória e a sequência de operações.
+A etapa final compreendeu as campanhas de medição de desempenho, de escalabilidade e de complexidade de código sobre as sete tecnologias submetidas aos ensaios (OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA e MPI), cujos resultados são discutidos no Capítulo~\ref{ch:resultados}.
+A biblioteca Alpaka, incorporada em etapa posterior de desenvolvimento, com foco em portabilidade de desempenho sob C++20, é objeto de análise arquitetural e qualitativa, tendo sua equivalência numérica verificada em relação à implementação sequencial de referência.
 
 \begin{figure}[H]
     \centering
@@ -428,6 +429,7 @@ As versões das bibliotecas obtidas automaticamente durante a compilação estã
          & OpenCL & OpenCL 3.0 (\textit{driver} NVIDIA) e POCL (CPU) \\
          & Kokkos & 5.2.1 \\
          & RAJA & 2026.07.0 \\
+         & Alpaka* & 3.0.0 (\textit{commit} \texttt{b7d339d}) \\
          & MPI & Implementação incluída no NVIDIA HPC SDK 26.1 \\
         \midrule
         Bibliotecas & Eigen & 5.0.1 \\
@@ -435,6 +437,7 @@ As versões das bibliotecas obtidas automaticamente durante a compilação estã
         \bottomrule
     \end{tabular}
     \fonte{O autor (2026).}
+    \nota{*A biblioteca Alpaka foi integrada em etapa posterior à campanha experimental e não fez parte das medições de desempenho; sua versão é a registrada no submódulo do repositório, e ela exige GCC 12 ou superior, ou Clang 17 ou superior, como compilador C++.}
 \end{table}
 
 O processador empregado possui doze núcleos físicos idênticos, distribuídos em dois complexos de seis núcleos (\textit{Core Complex Dies}, CCDs), cada qual com seu próprio \textit{cache} de último nível.
@@ -446,22 +449,36 @@ A fixação é obtida pelas variáveis de ambiente \texttt{OMP\_PLACES=cores} e 
 Nas execuções com MPI, o mesmo efeito é obtido pela vinculação de cada processo a um núcleo.
 Além disso, todas as compilações utilizam o mesmo nível de otimização e a mesma precisão de ponto flutuante, condição sem a qual a comparação entre tecnologias perderia sentido.
 
+No caso do \textit{backend} Alpaka, a implementação apoia-se na biblioteca moderna \texttt{alpaka3} (versão 3.0.0, instantâneo de desenvolvimento \texttt{b7d339d}), que utiliza conceitos e recursos avançados de C++20 \parencite{Zenker2016, Matthes2017, AlpakaContributors2026}.
+Essa biblioteca requer GCC 12 ou superior ou Clang 17 ou superior; como o Alpaka 3 não oferece suporte ao compilador \texttt{nvc++} como compilador C++, o sistema de construção do projeto desativa esse \textit{backend} quando o \texttt{nvc++} é selecionado.
+Em ambientes de contêiner baseados em distribuições corporativas como o Rocky Linux 9 (imagem base do NVIDIA HPC SDK), o compilador padrão do sistema é o GCC 11.5; em decorrência disso, a compilação do Alpaka é desativada por padrão na configuração com a imagem básica, exigindo a habilitação explícita de conjuntos de ferramentas mais recentes (como o \texttt{gcc-toolset-13}) por meio das variáveis \texttt{CMAKE\_CXX\_COMPILER} e \texttt{CMAKE\_CUDA\_HOST\_COMPILER}.
+Adicionalmente, no Alpaka, o suporte ao acelerador GPU via CUDA (\texttt{ENABLE\_ALPAKA\_CUDA=ON}, correspondente ao executor \texttt{exec::gpuCuda}) opera como uma opção de compilação condicional, enquanto o executor para CPU via OpenMP (\texttt{exec::cpuOmpBlocks}) é habilitado sempre que os requisitos de compilador são satisfeitos.
+
+A consistência da arquitetura alvo também afeta a reprodutibilidade dos ensaios em aceleradores gráficos.
+No \texttt{CMakeLists.txt}, a variável \texttt{CMAKE\_CUDA\_ARCHITECTURES} (cujo valor padrão é definido como 80) constitui a configuração central para o ecossistema NVIDIA, da qual são derivadas a opção \texttt{Kokkos\_ARCH\_<NOME>} do Kokkos e a definição \texttt{CUDA\_ARCH=sm\_<nn>} do RAJA/BLT.
+As receitas de contêiner (\textit{Docker} e \textit{Apptainer}) expõem o argumento de construção \texttt{CUDA\_ARCHITECTURES} (com valor padrão 89 para a microarquitetura Ada Lovelace) e o repassam a essa variável do CMake, assegurando coerência entre os diferentes \textit{backends} de acelerador.
+Binários compilados para uma determinada capacidade computacional contêm código de máquina nativo (SASS) compatível com revisões posteriores da mesma família (por exemplo, código gerado para \texttt{sm\_80} executa diretamente em dispositivos de capacidade 8.9 sem necessidade de compilação JIT), embora possam não usufruir de recursos específicos introduzidos na microarquitetura mais recente.
+A compilação JIT (\textit{Just-In-Time}) pelo \textit{driver} da NVIDIA ocorre apenas quando não há código nativo compatível no binário e código intermediário PTX foi incorporado, situação que introduz sobrecarga temporal durante a fase de inicialização.
+Adicionalmente, camadas como o Kokkos realizam verificações próprias e emitem alertas em tempo de execução caso a arquitetura de compilação divirja da arquitetura física detectada no dispositivo.
+
 %---------------------------------------------------------------------------------------
 
 \section{Tecnologias de Paralelização e Portabilidade de Desempenho}\label{sec:tecnologias-de-paralelizacao}
 
-A seleção das sete tecnologias avaliadas combinou três critérios.
-O primeiro foi a representatividade das categorias de programação paralela identificadas na Seção~\ref{sec:tecnologias-de-computacao-de-alto-desempenho}.
-Para o paralelismo no interior de um nó, contemplaram-se dois modelos por diretivas de compilador (OpenMP e OpenACC), dois de baixo nível (CUDA e OpenCL) e duas camadas de abstração em C++ (Kokkos e RAJA).
+A seleção das tecnologias paralelas contempladas no miniaplicativo combinou três critérios.
+O projeto implementa oito tecnologias de paralelização, além da versão sequencial de referência (\textit{Plain}), das quais sete foram submetidas à campanha experimental relatada no Capítulo~\ref{ch:resultados}; a biblioteca Alpaka foi integrada em etapa posterior, com foco na portabilidade de desempenho baseada em C++20 \parencite{Zenker2016, Matthes2017, AlpakaContributors2026}.
+O primeiro critério foi a representatividade das categorias de programação paralela identificadas na Seção~\ref{sec:tecnologias-de-computacao-de-alto-desempenho}.
+Para o paralelismo no interior de um nó, contemplaram-se dois modelos por diretivas de compilador (OpenMP e OpenACC), dois de baixo nível (CUDA e OpenCL) e três camadas de abstração em C++ (Kokkos, RAJA e Alpaka).
 O conjunto foi completado com o padrão de referência para memória distribuída (MPI).
 Pesaram também a maturidade e a adoção efetiva pela comunidade de HPC, verificadas pela presença em códigos de produção de grandes centros de computação e pela existência de especificação estável.
 Por fim, considerou-se a disponibilidade de compiladores e de bibliotecas para o ambiente de ensaio descrito na Seção~\ref{subsec:ambiente-computacional}.
 Esse requisito excluiu do escopo o HIP e o SYCL, cuja avaliação representativa demandaria aceleradores de outros fabricantes, uma vez que, em GPUs NVIDIA, ambos recorrem à infraestrutura do próprio CUDA.
-A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} apresenta uma síntese comparativa das tecnologias avaliadas, que serve de referência para a discussão de implementação do Capítulo~\ref{ch:implementacao-computacional} e para a análise de complexidade do Capítulo~\ref{ch:resultados}.
+A inclusão posterior do Alpaka fundamentou-se em ferramental atualizado com suporte a C++20.
+A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} apresenta uma síntese comparativa das tecnologias contempladas, que serve de referência para a discussão de implementação do Capítulo~\ref{ch:implementacao-computacional} e para a análise de complexidade do Capítulo~\ref{ch:resultados}.
 
 \begin{sidewaystable}
     \centering
-    \par\caption{Comparativo técnico entre as tecnologias de programação paralela avaliadas}
+    \par\caption{Comparativo técnico entre as tecnologias de programação paralela contempladas}
     \label{tab:comparativo-entre-tecnologias-de-programacao-paralela}
     \begin{tabular}{
         |>{\raggedright\arraybackslash}m{3.0cm}
@@ -518,6 +535,13 @@ A \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela} apresenta 
             C++ com políticas de execução & 
             Média & 
             Alta, independente de fabricante e com múltiplas tecnologias
+            \\
+        \midrule
+            Alpaka & 
+            CPU (x86, ARM)\newline GPU (NVIDIA, AMD, Intel) & 
+            C++20 com abstrações por \textit{templates} e pacotes de núcleo (\textit{KernelBundle}) & 
+            Média a alta & 
+            Alta, independente de fabricante e com múltiplos \textit{backends} de execução
             \\
         \midrule
             MPI & 
