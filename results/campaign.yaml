@@ -131,13 +131,19 @@ report:
 # Source trees counted for the code complexity table.
 complexity:
     baseline: Plain
+    # Each technology is charged with the shared headers it includes (directly or through
+    # another header): Stencil.hpp (the DirectionStencil of every fused kernel),
+    # OpenAcc/CellPhysics.hpp (the per-cell physics of the OpenACC and OpenMP GPU paths) and,
+    # for the CPU solvers, the vector kernel they all drive (Simd.hpp + HostKernel.hpp, which
+    # OpenACC's CPU path uses for its geometry and partition only).
     sources:
         Plain: [lbmini/Lbm/Plain]
-        OpenMP: [lbmini/Lbm/OpenMp]
-        OpenACC: [lbmini/Lbm/OpenAcc]
-        OpenCL: [lbmini/Lbm/OpenCl]
-        CUDA: [lbmini/Lbm/Cuda]
-        Kokkos: [lbmini/Lbm/Kokkos]
-        RAJA: [lbmini/Lbm/Raja]
-        MPI: [lbmini/Lbm/Mpi]
+        OpenMP: [lbmini/Lbm/OpenMp, lbmini/Lbm/OpenAcc/CellPhysics.hpp, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        OpenACC: [lbmini/Lbm/OpenAcc, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        OpenCL: [lbmini/Lbm/OpenCl, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        CUDA: [lbmini/Lbm/Cuda, lbmini/Lbm/Stencil.hpp]
+        Kokkos: [lbmini/Lbm/Kokkos, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        RAJA: [lbmini/Lbm/Raja, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        Alpaka: [lbmini/Lbm/Alpaka, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        MPI: [lbmini/Lbm/Mpi, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
     extensions: ['.hpp', '.cpp', '.cl', '.cu']

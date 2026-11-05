@@ -15,9 +15,11 @@
  * ping-pong buffers per field, plus the Newton warm start `xi[d * N + cell]`.
  * One time step is one kernel: pull streaming from the four IDW source cells,
  * macroscopic sums, equilibria, Newton-Raphson energy closure and BGK/Knudsen
- * collision, all in registers. The arithmetic reproduces
- * `lbmini::plain::LbmTube` operation for operation (only FMA contraction may
- * differ); the program is never built with relaxed-math options.
+ * collision, all in registers. The arithmetic is that of
+ * `lbmini::plain::LbmTube`, except for the factorised energy closure (see
+ * `AxisExp`: 2 exponentials per evaluation, two scalar Newton steps, shared
+ * divisions), which agrees with it to rounding error; the program is never
+ * built with relaxed-math options.
  *
  * Optional host macros:
  *  - `LBM_2D`: 2-D NDRange, dimension 0 = `j` (fastest), dimension 1 = `i`;
@@ -90,11 +92,12 @@ inline void Feq(const real rho, const real ux, const real uy, const real tem, re
   }
 }
 
-/// rho, u, T, p of one cell.
+/// rho, 1 / rho, u, T, p of one cell.
 inline void Macroscopic(
   const real f[LBM_Q],
   const real g[LBM_Q],
   real* rho,
+  real* invRho,
   real* ux,
   real* uy,
   real* tem,
@@ -111,16 +114,62 @@ inline void Macroscopic(
     momX += CSX(q) * f[q];
     momY += CSY(q) * f[q];
   }
-  const real invRho = 1.0 / rhoSum;
-  const real vx = momX * invRho;
-  const real vy = momY * invRho;
+  const real rinv = 1.0 / rhoSum;
+  const real vx = momX * rinv;
+  const real vy = momY * rinv;
   const real kin = 0.5 * (vx * vx + vy * vy);
-  const real t = (0.5 * nrg * invRho - kin) * LBM_INV_CV;
+  const real t = (0.5 * nrg * rinv - kin) * LBM_INV_CV;
   *rho = rhoSum;
+  *invRho = rinv;
   *ux = vx;
   *uy = vy;
   *tem = t;
   *pres = LBM_RGAS * rhoSum * t;
+}
+
+/**
+ * `p[c + 1] = W_c * exp(xi * c - max_c' (xi * c'))` for `c = -1, 0, 1`: one axis
+ * of the energy closure.
+ *
+ * The D2Q9 weights and the exponents of the energy equilibrium are tensor
+ * products, `W_q = Wx(c_x) Wy(c_y)` and `s_q = xi_0 (c_x + Ux) + xi_1 (c_y + Uy)`,
+ * so `W_q exp(s_q - smax)` of the reference is `Px(c_x) Py(c_y)` with one factor
+ * per axis (the `U` shift and the common maximum cancel in the product). An axis
+ * needs a single exponential, `E = exp(-|xi|)`: the three exponents `xi c - max`
+ * are `0`, `-|xi|` and `-2 |xi|` in the order of the sign of `xi`, i.e. `1`, `E`
+ * and `E^2`. That is 2 exponentials per evaluation (8 per cell and step) instead
+ * of the 9 of the per-direction form (36 per cell and step), and the nine-term
+ * sums of the Newton step become three-term ones. Double precision is the
+ * bottleneck of a GPU, so the number of FP64 instructions is the cost.
+ *
+ * It equals the reference to rounding error while neither of its clamps
+ * (`|s - smax| <= 700`) is active; beyond that every omitted term is below
+ * `exp(-700)` relative to the largest one. A NaN `xi` takes the clamp.
+ */
+inline void AxisExp(const real xi, const real wn, const real wz, real p[3]) {
+  const real t = -fabs(xi);
+  const real e = exp((t > -LBM_MAX_EXP) ? t : -LBM_MAX_EXP);
+  const real e2 = e * e;
+  const bool pos = xi >= 0.0;
+  p[0] = wn * (pos ? e2 : 1.0);
+  p[1] = wz * e;
+  p[2] = wn * (pos ? 1.0 : e2);
+}
+
+/// Equilibrium energy populations from the Newton solution `xi`.
+inline void GeqFromXi(const real xi[2], const real wn, const real wz, const real targetE, real geq[LBM_Q]) {
+  real px[3];
+  real py[3];
+  AxisExp(xi[0], wn, wz, px);
+  AxisExp(xi[1], wn, wz, py);
+  const real scale = targetE / ((px[0] + px[1] + px[2]) * (py[0] + py[1] + py[2]));
+  real sx[3];
+#pragma unroll
+  for (int k = 0; k < 3; ++k)
+    sx[k] = scale * px[k];
+#pragma unroll
+  for (int q = 0; q < LBM_Q; ++q)
+    geq[q] = sx[kCx[q] + 1] * py[kCy[q] + 1];
 }
 
 /**
@@ -130,7 +179,16 @@ inline void Macroscopic(
  * warm start (read and updated). Fixed iteration count, clamped reciprocals
  * and a sticky `solverOk` predicate keep the control flow uniform.
  */
-inline void Collide(const real rhoc, const real ux, const real uy, const real temc, real f[LBM_Q], real g[LBM_Q], real xi[2]) {
+inline void Collide(
+  const real rhoc,
+  const real invRho,
+  const real ux,
+  const real uy,
+  const real temc,
+  real f[LBM_Q],
+  real g[LBM_Q],
+  real xi[2]
+) {
   const real u2 = ux * ux + uy * uy;
   real wz;
   real wn;
@@ -140,104 +198,57 @@ inline void Collide(const real rhoc, const real ux, const real uy, const real te
   Feq(rhoc, ux, uy, temc, feq);
 
   // Geq via Newton-Raphson on the normalised energy flux.
+  //
+  // The closure distribution `W_q exp(xi . (c_q + U))` is a product of an x and a
+  // y factor, so x and y are independent: the Jacobian of the reference is
+  // diagonal (its off-diagonal term is exactly `S2xy / Z - (S1x / Z) (S1y / Z) = 0`)
+  // and the iteration is two scalar Newton steps,
+  // `xi_a -= alpha (m1_a - target_a) / var_a`, each from three weighted
+  // exponentials of one axis (see `AxisExp`). A division costs about 8 FP64
+  // instructions, so the two axes share one reciprocal per stage.
   const real E = LBM_CV * temc + 0.5 * u2;
   const real targetE = 2.0 * rhoc * E;
-  const real targetMx = 2.0 * rhoc * ux * (E + temc) / targetE;
-  const real targetMy = 2.0 * rhoc * uy * (E + temc) / targetE;
+  const real invE = 1.0 / E;
+  const real targetMx = ux * (E + temc) * invE; // 2 rho u (E + T) / (2 rho E)
+  const real targetMy = uy * (E + temc) * invE;
 
   real alpha = 1.0;
-  real si[LBM_Q];
-  real e[LBM_Q];
-  real Z = 0.0;
-  real smax = 0.0;
   bool solverOk = true;
 
-#pragma unroll
+  // Three copies of the loop body would triple the code for no speed.
+#pragma nounroll
   for (int iter = 0; iter < LBM_MAX_ITER; ++iter) {
-    smax = -LBM_MAX_EXP;
-#pragma unroll
-    for (int q = 0; q < LBM_Q; ++q) {
-      real s = 0.0;
-      s += xi[0] * CSX(q);
-      s += xi[1] * CSY(q);
-      si[q] = s;
-      smax = (s > smax) ? s : smax;
-    }
-    smax = (smax < LBM_MAX_EXP) ? smax : LBM_MAX_EXP;
+    real px[3];
+    real py[3];
+    AxisExp(xi[0], wn, wz, px);
+    AxisExp(xi[1], wn, wz, py);
+    const real zx = px[0] + px[1] + px[2];
+    const real zy = py[0] + py[1] + py[2];
+    const real zxy = zx * zy;
+    solverOk = solverOk && (zxy > LBM_TINY);
+    const real rz = 1.0 / zxy;
+    const real invZx = zy * rz;
+    const real invZy = zx * rz;
 
-    real S1x = 0.0;
-    real S1y = 0.0;
-    real S2xx = 0.0;
-    real S2xy = 0.0;
-    real S2yx = 0.0;
-    real S2yy = 0.0;
-    Z = 0.0;
-#pragma unroll
-    for (int q = 0; q < LBM_Q; ++q) {
-      real expo = si[q] - smax;
-      expo = (expo < LBM_MAX_EXP) ? expo : LBM_MAX_EXP;
-      expo = (expo > -LBM_MAX_EXP) ? expo : -LBM_MAX_EXP;
-      const real wev = Weight(q, wz, wn) * exp(expo);
-      e[q] = wev;
-      Z += wev;
-      S1x += CSX(q) * wev;
-      S2xx += CSX(q) * CSX(q) * wev;
-      S2xy += CSX(q) * CSY(q) * wev;
-      S1y += CSY(q) * wev;
-      S2yx += CSY(q) * CSX(q) * wev;
-      S2yy += CSY(q) * CSY(q) * wev;
-    }
+    // Moments of the unshifted velocity; `c_a + U_a` shifts the mean only.
+    const real m1x = (px[2] - px[0]) * invZx;
+    const real m1y = (py[2] - py[0]) * invZy;
+    const real jxx = ((px[2] + px[0]) * invZx - m1x * m1x) + LBM_TINY;
+    const real jyy = ((py[2] + py[0]) * invZy - m1y * m1y) + LBM_TINY;
+    const real jxy = jxx * jyy;
+    solverOk = solverOk && (fabs(jxy) > LBM_TINY);
 
-    const real Zsafe = (Z > LBM_TINY) ? Z : LBM_TINY;
-    solverOk = solverOk && (Z > LBM_TINY);
-    const real invZ = 1.0 / Zsafe;
-
-    real J00 = (S2xx - S1x * S1x * invZ) * invZ;
-    const real J01 = (S2xy - S1x * S1y * invZ) * invZ;
-    const real J10 = (S2yx - S1y * S1x * invZ) * invZ;
-    real J11 = (S2yy - S1y * S1y * invZ) * invZ;
-    J00 += LBM_TINY;
-    J11 += LBM_TINY;
-
-    const real detJ = J00 * J11 - J01 * J10;
-    const real absDet = fabs(detJ);
-    const real detSafe = (absDet > LBM_TINY) ? detJ : ((detJ >= 0.0) ? LBM_TINY : -LBM_TINY);
-    solverOk = solverOk && (absDet > LBM_TINY);
-    const real invDet = 1.0 / detSafe;
-
-    const real r0 = S1x * invZ - targetMx;
-    const real r1 = S1y * invZ - targetMy;
-    xi[0] -= alpha * (J11 * r0 - J01 * r1) * invDet;
-    xi[1] -= alpha * (-J10 * r0 + J00 * r1) * invDet;
+    const real rj = alpha * (1.0 / jxy);
+    const real r0 = (m1x + LBM_USHIFT_X) - targetMx;
+    const real r1 = (m1y + LBM_USHIFT_Y) - targetMy;
+    xi[0] -= r0 * jyy * rj; // alpha r0 / jxx
+    xi[1] -= r1 * jxx * rj; // alpha r1 / jyy
     alpha *= 0.5;
   }
 
   real geq[LBM_Q];
   if (solverOk) {
-    // Recompute e[], Z with the final xi.
-    smax = -LBM_MAX_EXP;
-#pragma unroll
-    for (int q = 0; q < LBM_Q; ++q) {
-      real s = 0.0;
-      s += xi[0] * CSX(q);
-      s += xi[1] * CSY(q);
-      si[q] = s;
-      smax = (s > smax) ? s : smax;
-    }
-    smax = (smax < LBM_MAX_EXP) ? smax : LBM_MAX_EXP;
-    Z = 0.0;
-#pragma unroll
-    for (int q = 0; q < LBM_Q; ++q) {
-      real expo = si[q] - smax;
-      expo = (expo < LBM_MAX_EXP) ? expo : LBM_MAX_EXP;
-      expo = (expo > -LBM_MAX_EXP) ? expo : -LBM_MAX_EXP;
-      e[q] = Weight(q, wz, wn) * exp(expo);
-      Z += e[q];
-    }
-    const real scale = targetE / Z;
-#pragma unroll
-    for (int q = 0; q < LBM_Q; ++q)
-      geq[q] = scale * e[q];
+    GeqFromXi(xi, wn, wz, targetE, geq);
     // The reference also stores `log(scale / rho) - smax` as warm-start
     // component 0; nothing ever reads it, so it is neither computed nor stored.
   } else {
@@ -262,11 +273,13 @@ inline void Collide(const real rhoc, const real ux, const real uy, const real te
   }
 
   // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
-  const real tau = LBM_VISCOSITY / (rhoc * temc) + 0.5;
-  const real omega = 1.0 / tau;
-  const real diffusivity = LBM_CONDUCTIVITY / (rhoc * LBM_CP);
-  const real tauT = diffusivity / temc + 0.5;
-  real omegaT = 1.0 / tauT;
+  // `tau` and `tauT` share `1 / (rho T)`, `omega` and `omegaT` one division.
+  const real invT = 1.0 / temc;
+  const real tau = LBM_VISCOSITY * invRho * invT + 0.5;
+  const real tauT = LBM_COND_OVER_CP * invRho * invT + 0.5;
+  const real rTau = 1.0 / (tau * tauT);
+  const real omega = tauT * rTau;
+  real omegaT = tau * rTau;
 
   real eps = 0.0;
 #pragma unroll
@@ -275,16 +288,16 @@ inline void Collide(const real rhoc, const real ux, const real uy, const real te
     const real den = (feq[q] > LBM_TINY) ? feq[q] : LBM_TINY;
     eps += fabs(diff) / den;
   }
-  eps /= (real)LBM_Q;
-  real sigma = 1.0;
+  eps *= 1.0 / (real)LBM_Q;
+  // `omega / sigma` with `sigma` in {omega, 1.35, 1.05, 1}, without a division.
+  real omegaL = omega;
   if (eps >= 1.0)
-    sigma = omega;
+    omegaL = 1.0;
   else if (eps >= 0.1)
-    sigma = 1.35;
+    omegaL = omega * (1.0 / 1.35);
   else if (eps >= 0.01)
-    sigma = 1.05;
+    omegaL = omega * (1.0 / 1.05);
 
-  real omegaL = omega / sigma;
   omegaL = (omegaL > 1.0) ? omegaL : 1.0;
   omegaL = (omegaL < LBM_OMEGA_MAX) ? omegaL : LBM_OMEGA_MAX;
   omegaT = (omegaT > 1.0) ? omegaT : 1.0;
@@ -303,7 +316,7 @@ inline void Collide(const real rhoc, const real ux, const real uy, const real te
     Ly += aux * ciy0;
   }
 
-  const real invT = 1.0 / temc;
+  const real dOmega = omegaL - omegaT;
 #pragma unroll
   for (int q = 0; q < LBM_Q; ++q) {
     const real fOld = f[q];
@@ -311,7 +324,7 @@ inline void Collide(const real rhoc, const real ux, const real uy, const real te
     const real cidotL = Lx * CSX(q) + Ly * CSY(q);
     const real gDiff = Weight(q, wz, wn) * cidotL * invT;
     const real gOld = g[q];
-    g[q] = gOld + omegaL * (geq[q] - gOld) + (omegaL - omegaT) * gDiff;
+    g[q] = gOld + omegaL * (geq[q] - gOld) + dOmega * gDiff;
   }
 }
 
@@ -377,11 +390,12 @@ __kernel void initKernel(
     g[q] = ((sumW > LBM_TINY) ? Weight(q, wz, wn) : 1.0) * sc;
 
   real rho;
+  real invRho;
   real ux;
   real uy;
   real tem;
   real pres;
-  Macroscopic(f, g, &rho, &ux, &uy, &tem, &pres);
+  Macroscopic(f, g, &rho, &invRho, &ux, &uy, &tem, &pres);
   rhoOut[cell] = rho;
   pOut[cell] = pres;
   temOut[cell] = tem;
@@ -389,7 +403,7 @@ __kernel void initKernel(
   uOut[LBM_N + cell] = uy;
 
   real xi[2] = { 0.0, 0.0 };
-  Collide(rho, ux, uy, tem, f, g, xi);
+  Collide(rho, invRho, ux, uy, tem, f, g, xi);
 
 #pragma unroll
   for (int q = 0; q < LBM_Q; ++q) {
@@ -473,11 +487,12 @@ inline void StepCell(
   }
 
   real rho;
+  real invRho;
   real ux;
   real uy;
   real tem;
   real pres;
-  Macroscopic(f, g, &rho, &ux, &uy, &tem, &pres);
+  Macroscopic(f, g, &rho, &invRho, &ux, &uy, &tem, &pres);
   if (store) {
     rhoOut[cell] = rho;
     pOut[cell] = pres;
@@ -490,7 +505,7 @@ inline void StepCell(
   xi[0] = xiIo[cell];
   xi[1] = xiIo[LBM_N + cell];
 
-  Collide(rho, ux, uy, tem, f, g, xi);
+  Collide(rho, invRho, ux, uy, tem, f, g, xi);
 
 #pragma unroll
   for (int q = 0; q < LBM_Q; ++q) {

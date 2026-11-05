@@ -66,8 +66,7 @@ struct KernelParams {
   Scalar pressureR;
 
   Scalar cs[kD][kQ];  ///< `c_ia + U_a`
-  Scalar css[3][kQ];  ///< `(c_ia + U_a) * (c_ib + U_b)` for `ab` = xx, xy, yy
-  Scalar cbound;      ///< `1 + max(|U_x|, |U_y|)`, bounds `|c_ia + U_a|`
+  Scalar condOverCp;  ///< `conductivity / cp`: `kappa / (rho cp) = condOverCp / rho`
 
   DirectionStencil<Scalar, kQ> stencil;
 };
@@ -387,18 +386,11 @@ internal::KernelParams<Scalar> LbmTube<Scalar, LatticeType>::makeParams(
   p.pressureL = fluid.pressureL;
   p.densityR = fluid.densityR;
   p.pressureR = fluid.pressureR;
+  p.condOverCp = fluid.conductivity / fluid.specificHeatCp;
   for (Index idc = 0; idc < kQ_; ++idc) {
-    const Scalar cx = LatticeType::Cshift(idc, 0, control.U(0));
-    const Scalar cy = LatticeType::Cshift(idc, 1, control.U(1));
-    p.cs[0][idc] = cx;
-    p.cs[1][idc] = cy;
-    p.css[0][idc] = cx * cx;
-    p.css[1][idc] = cx * cy;
-    p.css[2][idc] = cy * cy;
+    p.cs[0][idc] = LatticeType::Cshift(idc, 0, control.U(0));
+    p.cs[1][idc] = LatticeType::Cshift(idc, 1, control.U(1));
   }
-  const Scalar absUx = (control.U(0) < Scalar{ 0 }) ? -control.U(0) : control.U(0);
-  const Scalar absUy = (control.U(1) < Scalar{ 0 }) ? -control.U(1) : control.U(1);
-  p.cbound = Scalar{ 1 } + ((absUx > absUy) ? absUx : absUy);
   p.stencil = BuildDirectionStencil<LatticeType>(p.ny, control.U(0), control.U(1), control.idw);
   return p;
 }

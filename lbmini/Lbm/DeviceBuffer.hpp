@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <limits>
 #include <new>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -104,6 +106,41 @@ inline bool operator==(const AlignedAllocator<T, A>&, const AlignedAllocator<U, 
 
 template<class T, class U, std::size_t A>
 inline bool operator!=(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) noexcept { return false; }
+
+/**
+ * @brief `AlignedAllocator` that default-initialises instead of zero-filling.
+ *
+ * `resize()` then only reserves address space: the first write to every page
+ * happens in the solver's `Init()` / first time step, from the thread that owns
+ * the page under the static work partition (NUMA first touch), instead of from
+ * the constructing thread. Only for buffers every element of which is written
+ * before it is read.
+ */
+template<typename T>
+struct FirstTouchAllocator : AlignedAllocator<T, 64> {
+  template<class U>
+  struct rebind {
+    using other = FirstTouchAllocator<U>;
+  };
+
+  FirstTouchAllocator() noexcept = default;
+
+  template<class U>
+  explicit FirstTouchAllocator(const FirstTouchAllocator<U>&) noexcept {}
+
+  template<class U>
+  void construct(U* p) noexcept(std::is_nothrow_default_constructible_v<U>) {
+    ::new (static_cast<void*>(p)) U;
+  }
+
+  template<class U, class... Args>
+  void construct(U* p, Args&&... args) {
+    ::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+  }
+};
+
+template<typename T>
+using FirstTouchBuffer = std::vector<T, FirstTouchAllocator<T>>;
 
 /**
  * @brief Storage abstraction used by `LbmTube` for every large flat array.

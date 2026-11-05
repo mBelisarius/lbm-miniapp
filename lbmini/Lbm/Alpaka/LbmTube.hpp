@@ -71,7 +71,7 @@ private:
  *
  * Numerically equivalent to `lbmini::plain::LbmTube` (same equilibria, same
  * Newton-Raphson energy closure, same BGK + Knudsen-sensor collision, same IDW
- * shifted-lattice streaming), written once against alpaka3 and compiled for
+ * shifted-lattice streaming), written against alpaka3 and compiled for
  * `TargetEnum::CPU` (alpaka `api::host` + `exec::cpuOmpBlocks`, i.e. OpenMP)
  * and `TargetEnum::GPU` (alpaka `api::cuda` + `exec::gpuCuda`).
  *
@@ -88,24 +88,34 @@ private:
  * `ILbmTubeNd` already costs one indirection per call, the engine adds a
  * second one per `Run()` — never per cell or per step.
  *
- * ### Performance design (see `LbmTubeImpl.hpp` for the details)
+ * ### Performance design (see `LbmTubeImpl.hpp` and `Cpu/LbmTubeImpl.hpp`)
  *
- * - **One fused kernel per time step.** Pull-scheme streaming, macroscopic
- *   reduction, equilibria, Newton-Raphson closure and collision run in a single
- *   pass. Each step reads the post-collision `f`/`g` once and writes them once
- *   (plus the two-component Newton warm start): about half the DRAM traffic of
- *   the two-kernel scheme of the Kokkos / RAJA / CUDA backends.
- * - **No streaming tables.** The lattice shift `U` is uniform, so the four IDW
- *   source offsets and weights of a direction are the same for every cell. They
- *   are evaluated once on the host and passed by value to the kernel (CUDA
- *   parameter / constant space); per cell only a clamp in `x` and a wrap in `y`
+ * The two targets share the numerics and the public interface, but not the
+ * kernel: a GPU wants one thread per cell, a CPU core wants whole SIMD vectors
+ * of neighbouring cells.
+ *
+ * - **CPU target: the shared SIMD host kernel.** The step is `host::Kernel` of
+ *   `Lbm/HostKernel.hpp`, vectorised over runs of cells of one row, on the
+ *   x-fastest padded layout (`cell = j * pitch + i`). alpaka allocates the
+ *   buffers and launches one block per OpenMP thread; the blocks balance
+ *   the row segments dynamically through a shared counter. The getters
+ *   transpose the layout into the row-major tensors of the interface.
+ * - **GPU target: one fused kernel per time step.** Pull-scheme streaming,
+ *   macroscopic reduction, equilibria, Newton-Raphson closure and collision run
+ *   in a single pass, one thread per cell. Each step reads the post-collision
+ *   `f`/`g` once and writes them once (plus the two-component Newton warm
+ *   start): about half the DRAM traffic of the two-kernel scheme of the Kokkos /
+ *   RAJA / CUDA backends. The distributions are SoA, direction-major
+ *   (`f[idc * N + cell]`, `cell = i * ny + j`), which coalesces the accesses.
+ * - **No streaming tables (both targets).** The lattice shift `U` is uniform, so
+ *   the four IDW source offsets and weights of a direction are the same for
+ *   every cell. They are evaluated once on the host and handed to the kernel as
+ *   plain data; per cell only a clamp in `x` and a wrap in `y`
  *   remain. This removes 432 bytes/cell of table reads per step.
- * - **Macroscopic fields are only stored when observable**, i.e. on the last
- *   step of every `Run()` call: they are consumed from registers by the
- *   collision of the same pass, and no getter can run between two steps of one
- *   `Run()`.
- * - **SoA, direction-major distributions** (`f[idc * N + cell]`): coalesced on
- *   the GPU, unit-stride on the CPU.
+ * - **Macroscopic fields are only stored when observable** (both targets), i.e.
+ *   on the last step of every `Run()` call: they are consumed from registers by
+ *   the collision of the same pass, and no getter can run between two steps of
+ *   one `Run()`.
  */
 template<typename Scalar, typename LatticeType, TargetEnum Target>
 class LbmTube : public ILbmTube<Scalar, LatticeType> {
@@ -125,8 +135,8 @@ public:
     const PerformanceData& /*performance*/
   ) {
     // Before any device is touched or any byte allocated: every buffer size and
-    // every flat index derives from these extents (and the kernels index cells
-    // with `std::int32_t`).
+    // every flat index derives from these extents (and the device kernels index
+    // cells with `std::int32_t`).
     ValidateMeshExtents(
       mesh.size[0], mesh.size[1], kQ_, Target == TargetEnum::GPU ? "alpaka::gpu" : "alpaka::cpu"
     );
@@ -151,8 +161,9 @@ public:
 
   /**
    * @name Macroscopic field getters
-   * @brief Copy-out accessors; device buffers are copied straight into the
-   *        returned Eigen tensor (velocity goes through one SoA -> AoS repack).
+   * @brief Copy-out accessors; the engine fills the returned Eigen tensor
+   *        directly (the CPU target transposes its x-fastest layout, the GPU
+   *        target copies device buffers and repacks the velocity SoA -> AoS).
    * @{
    */
   [[nodiscard]] Tensor<Scalar, kDim_> P() const override {

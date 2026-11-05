@@ -48,8 +48,6 @@ struct Physics {
   static constexpr Scalar kTiny = Scalar{ 1.0e-12 };
   static constexpr Scalar kMaxExp = Scalar{ 700.0 };
   static constexpr int kMaxIter = 3;
-  /// Bound on `M` below which `Exponentials()` factorises (`2 M < 600 < 700`).
-  static constexpr Scalar kFactorBound = Scalar{ 300.0 };
 
   __device__ static constexpr int Vx(const int idc) { return static_cast<int>(Lattice::Velocity(idc, 0)); }
 
@@ -111,6 +109,7 @@ struct Physics {
     const Scalar (&f)[kQ],
     const Scalar (&g)[kQ],
     Scalar& rho,
+    Scalar& invRho,
     Scalar& ux,
     Scalar& uy,
     Scalar& tem,
@@ -127,7 +126,7 @@ struct Physics {
       momX += p.cs[0][idc] * f[idc];
       momY += p.cs[1][idc] * f[idc];
     }
-    const Scalar invRho = Scalar{ 1 } / rhoSum;
+    invRho = Scalar{ 1 } / rhoSum;
     ux = momX * invRho;
     uy = momY * invRho;
     const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
@@ -136,77 +135,61 @@ struct Physics {
     pres = p.rgas * rhoSum * tem;
   }
 
-  /// `s_i = xi . (c_i + U)` and their (clamped) maximum.
-  __device__ __forceinline__ static Scalar Exponents(
-    const Params& p,
-    const Scalar xi0,
-    const Scalar xi1,
-    Scalar (&si)[kQ]
-  ) {
-    Scalar smax = -kMaxExp;
-    #pragma unroll
-    for (int idc = 0; idc < kQ; ++idc) {
-      // Reference: `s = 0; s += xi0 * cx; s += xi1 * cy`. Starting from the
-      // first product differs only in the sign of an all-zero sum, which
-      // neither the maximum nor `exp(s - smax)` can observe.
-      Scalar s = xi0 * p.cs[0][idc];
-      s += xi1 * p.cs[1][idc];
-      si[idc] = s;
-      smax = (s > smax) ? s : smax;
-    }
-    return (smax < kMaxExp) ? smax : kMaxExp;
-  }
-
-  /// `exp(clamp(s_i - smax))`, the reference's clamped exponent.
-  __device__ __forceinline__ static Scalar ClampedExp(const Scalar s, const Scalar smax) {
-    Scalar expo = s - smax;
-    expo = (expo < kMaxExp) ? expo : kMaxExp;
-    expo = (expo > -kMaxExp) ? expo : -kMaxExp;
-    return ::exp(expo);
-  }
-
   /**
-   * @brief `e_i = W_i * exp(clamp(s_i - smax))` for all directions.
+   * @brief `p[c + 1] = W_c * exp(xi * c - max_c' (xi * c'))` for `c = -1, 0, 1`: one axis of the closure.
    *
    * Double precision runs at 1/64 of the single-precision rate on consumer
-   * GPUs and the kernel is bound by it, not by memory; the 9 exponentials per
-   * evaluation (36 per cell and step) are its largest cost. With
-   * `c_ia + U_a = v_ia + U_a`, `v_ia` in {-1, 0, 1}, the exponent factorises:
+   * GPUs and the kernel is bound by it, not by memory, so the number of FP64
+   * instructions per cell is the cost. The D2Q9 weights and the exponents of
+   * the energy equilibrium are tensor products, `W_q = Wx(c_x) Wy(c_y)` and
+   * `s_q = xi_0 (c_x + Ux) + xi_1 (c_y + Uy)`, hence
+   * `W_q exp(s_q - smax) = Px(c_x) Py(c_y)` (the `U` shift and the common maximum
+   * cancel), with a single exponential per axis, `E = exp(-|xi|)`: the exponents
+   * `xi c - max` are `0`, `-|xi|` and `-2 |xi|` in the order of the sign of `xi`,
+   * i.e. `1`, `E` and `E^2`. That is 2 exponentials per evaluation (8 per cell and
+   * step; the reference evaluates 9 per evaluation, 36 per cell and step) and it
+   * turns the nine-term sums of the Newton step into three-term ones.
    *
-   *   exp(s_i - smax) = exp(xi . U - smax) * exp(xi_0)^v_ix * exp(xi_1)^v_iy,
-   *
-   * three exponentials instead of nine. It equals the reference to rounding
-   * error whenever neither clamp can be active, which `|s_i| <= M =
-   * (|xi_0| + |xi_1|) * cbound` guarantees for `2 M < 700` (the spread
-   * `s_i - smax` is at least `-2 M`, and no factor can overflow). Otherwise —
-   * including any NaN warm start — the reference evaluation is used verbatim.
+   * It equals the reference to rounding error while neither of its clamps
+   * (`|s - smax| <= 700`) is active; beyond that every omitted term is below
+   * `exp(-700)` relative to the largest one.
    */
-  __device__ __forceinline__ static void Exponentials(
-    const Params& p,
+  __device__ __forceinline__ static void AxisExp(
+    const Scalar xi,
+    const Scalar wn,
+    const Scalar wZero,
+    Scalar (&p)[3]
+  ) {
+    const Scalar t = -::fabs(xi);
+    const Scalar e = ::exp((t > -kMaxExp) ? t : -kMaxExp);
+    const Scalar e2 = e * e;
+    const bool pos = xi >= Scalar{ 0 };
+    p[0] = wn * (pos ? e2 : Scalar{ 1 });
+    p[1] = wZero * e;
+    p[2] = wn * (pos ? Scalar{ 1 } : e2);
+  }
+
+  /// Equilibrium energy populations from the Newton solution `xi`.
+  __device__ __forceinline__ static void GeqFromXi(
     const Scalar xi0,
     const Scalar xi1,
-    const Scalar (&wi)[kQ],
-    Scalar (&e)[kQ]
+    const Scalar wn,
+    const Scalar wZero,
+    const Scalar targetE,
+    Scalar (&geq)[kQ]
   ) {
-    Scalar si[kQ];
-    const Scalar smax = Exponents(p, xi0, xi1, si);
-    if ((::fabs(xi0) + ::fabs(xi1)) * p.cbound < kFactorBound) {
-      const Scalar base = ::exp(xi0 * p.ushiftX + xi1 * p.ushiftY - smax);
-      const Scalar ex = ::exp(xi0);
-      const Scalar ey = ::exp(xi1);
-      const Scalar bx[3] = { base / ex, base, base * ex }; // v_x = -1, 0, 1
-      const Scalar invEy = Scalar{ 1 } / ey;
-      #pragma unroll
-      for (int idc = 0; idc < kQ; ++idc) {
-        const Scalar b = bx[Vx(idc) + 1];
-        const Scalar val = (Vy(idc) == 0) ? b : b * ((Vy(idc) > 0) ? ey : invEy);
-        e[idc] = wi[idc] * val;
-      }
-    } else {
-      #pragma unroll
-      for (int idc = 0; idc < kQ; ++idc)
-        e[idc] = wi[idc] * ClampedExp(si[idc], smax);
-    }
+    Scalar px[3];
+    Scalar py[3];
+    AxisExp(xi0, wn, wZero, px);
+    AxisExp(xi1, wn, wZero, py);
+    const Scalar scale = targetE / ((px[0] + px[1] + px[2]) * (py[0] + py[1] + py[2]));
+    Scalar sx[3];
+    #pragma unroll
+    for (int k = 0; k < 3; ++k)
+      sx[k] = scale * px[k];
+    #pragma unroll
+    for (int idc = 0; idc < kQ; ++idc)
+      geq[idc] = sx[Vx(idc) + 1] * py[Vy(idc) + 1];
   }
 
   /**
@@ -221,6 +204,7 @@ struct Physics {
   __device__ __forceinline__ static void Collide(
     const Params& p,
     const Scalar rhoc,
+    const Scalar invRho,
     const Scalar ux,
     const Scalar uy,
     const Scalar temc,
@@ -236,72 +220,61 @@ struct Physics {
 
     Scalar wi[kQ];
     Weights(temc, wi);
+    // The per-axis factors of `wi` (`W_q = Wx(c_x) Wy(c_y)`), see `AxisExp`.
+    const Scalar wZero = Scalar{ 1 } - temc;
+    const Scalar wn = wZero + (Scalar{ 0.5 } * temc - wZero);
 
     // Geq via Newton-Raphson on the normalised energy flux.
+    //
+    // The closure distribution `W_q exp(xi . (c_q + U))` is a product of an x and a
+    // y factor, so x and y are independent: the Jacobian of the reference is
+    // diagonal (its off-diagonal term is exactly `S2xy / Z - (S1x / Z) (S1y / Z) = 0`)
+    // and the iteration is two scalar Newton steps,
+    // `xi_a -= alpha (m1_a - target_a) / var_a`, each from three weighted
+    // exponentials of one axis (see `AxisExp`). Divisions are 8 FP64 slots each,
+    // so the two axes share one reciprocal per stage.
     const Scalar E = p.cv * temc + Scalar{ 0.5 } * u2;
     const Scalar targetE = Scalar{ 2 } * rhoc * E;
-    const Scalar targetM0 = Scalar{ 2 } * rhoc * ux * (E + temc) / targetE;
-    const Scalar targetM1 = Scalar{ 2 } * rhoc * uy * (E + temc) / targetE;
+    const Scalar invE = Scalar{ 1 } / E;
+    const Scalar targetM0 = ux * (E + temc) * invE; // 2 rho u (E + T) / (2 rho E)
+    const Scalar targetM1 = uy * (E + temc) * invE;
 
     Scalar alpha = Scalar{ 1 };
-    Scalar e[kQ];
     bool solverOk = true;
 
-    #pragma unroll 1
+    #pragma unroll
     for (int iter = 0; iter < kMaxIter; ++iter) {
-      Exponentials(p, xi0, xi1, wi, e);
+      Scalar px[3];
+      Scalar py[3];
+      AxisExp(xi0, wn, wZero, px);
+      AxisExp(xi1, wn, wZero, py);
+      const Scalar zx = px[0] + px[1] + px[2];
+      const Scalar zy = py[0] + py[1] + py[2];
+      const Scalar zxy = zx * zy;
+      solverOk = solverOk && (zxy > kTiny);
+      const Scalar rz = Scalar{ 1 } / zxy;
+      const Scalar invZx = zy * rz;
+      const Scalar invZy = zx * rz;
 
-      Scalar S1x = Scalar{ 0 };
-      Scalar S1y = Scalar{ 0 };
-      Scalar S2xx = Scalar{ 0 };
-      Scalar S2xy = Scalar{ 0 };
-      Scalar S2yy = Scalar{ 0 };
-      Scalar Z = Scalar{ 0 };
-      #pragma unroll
-      for (int idc = 0; idc < kQ; ++idc) {
-        const Scalar wev = e[idc];
-        Z += wev;
-        S1x += p.cs[0][idc] * wev;
-        S1y += p.cs[1][idc] * wev;
-        S2xx += p.css[0][idc] * wev;
-        S2xy += p.css[1][idc] * wev; // == S2yx: (c_x c_y) w and (c_y c_x) w round alike
-        S2yy += p.css[2][idc] * wev;
-      }
+      // Moments of the unshifted velocity; `c_a + U_a` shifts the mean only.
+      const Scalar m1x = (px[2] - px[0]) * invZx;
+      const Scalar m1y = (py[2] - py[0]) * invZy;
+      const Scalar jxx = ((px[2] + px[0]) * invZx - m1x * m1x) + kTiny;
+      const Scalar jyy = ((py[2] + py[0]) * invZy - m1y * m1y) + kTiny;
+      const Scalar jxy = jxx * jyy;
+      solverOk = solverOk && (::fabs(jxy) > kTiny);
 
-      const Scalar Zsafe = (Z > kTiny) ? Z : kTiny;
-      solverOk = solverOk && (Z > kTiny);
-      const Scalar invZ = Scalar{ 1 } / Zsafe;
-
-      // J is symmetric bit for bit: J[1][0] = J[0][1].
-      const Scalar J00 = (S2xx - S1x * S1x * invZ) * invZ + kTiny;
-      const Scalar J01 = (S2xy - S1x * S1y * invZ) * invZ;
-      const Scalar J11 = (S2yy - S1y * S1y * invZ) * invZ + kTiny;
-
-      const Scalar detJ = J00 * J11 - J01 * J01;
-      const Scalar absDet = ::fabs(detJ);
-      const Scalar detSafe = (absDet > kTiny) ? detJ : ((detJ >= Scalar{ 0 }) ? kTiny : -kTiny);
-      solverOk = solverOk && (absDet > kTiny);
-      const Scalar invDet = Scalar{ 1 } / detSafe;
-
-      const Scalar r0 = S1x * invZ - targetM0;
-      const Scalar r1 = S1y * invZ - targetM1;
-      xi0 -= alpha * (J11 * r0 - J01 * r1) * invDet;
-      xi1 -= alpha * (-J01 * r0 + J00 * r1) * invDet;
+      const Scalar rj = alpha * (Scalar{ 1 } / jxy);
+      const Scalar r0 = (m1x + p.ushiftX) - targetM0;
+      const Scalar r1 = (m1y + p.ushiftY) - targetM1;
+      xi0 -= r0 * jyy * rj; // alpha r0 / jxx
+      xi1 -= r1 * jxx * rj; // alpha r1 / jyy
       alpha *= Scalar{ 0.5 };
     }
 
     Scalar geqLocal[kQ];
     if (solverOk) {
-      // Recompute e[], Z with the final xi.
-      Exponentials(p, xi0, xi1, wi, geqLocal);
-      Scalar Z = Scalar{ 0 };
-      #pragma unroll
-      for (int idc = 0; idc < kQ; ++idc)
-        Z += geqLocal[idc];
-      const Scalar scale = targetE / Z;
-      #pragma unroll
-      for (int idc = 0; idc < kQ; ++idc)
-        geqLocal[idc] = scale * geqLocal[idc];
+      GeqFromXi(xi0, xi1, wn, wZero, targetE, geqLocal);
       // The reference also stores `log(scale / rho) - smax` as warm-start
       // component 0; nothing ever reads it, so it is neither computed nor stored.
     } else {
@@ -326,11 +299,13 @@ struct Physics {
     }
 
     // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
-    const Scalar tau = p.viscosity / (rhoc * temc) + Scalar{ 0.5 };
-    const Scalar omega = Scalar{ 1 } / tau;
-    const Scalar diffusivity = p.conductivity / (rhoc * p.cp);
-    const Scalar tauT = diffusivity / temc + Scalar{ 0.5 };
-    Scalar omegaT = Scalar{ 1 } / tauT;
+    // `tau` and `tauT` share `1 / (rho T)`, `omega` and `omegaT` one division.
+    const Scalar invT = Scalar{ 1 } / temc;
+    const Scalar tau = p.viscosity * invRho * invT + Scalar{ 0.5 };
+    const Scalar tauT = p.condOverCp * invRho * invT + Scalar{ 0.5 };
+    const Scalar rTau = Scalar{ 1 } / (tau * tauT);
+    const Scalar omega = tauT * rTau;
+    Scalar omegaT = tau * rTau;
 
     Scalar eps = Scalar{ 0 };
     #pragma unroll
@@ -339,16 +314,16 @@ struct Physics {
       const Scalar den = (feqLocal[idc] > kTiny) ? feqLocal[idc] : kTiny;
       eps += ::fabs(diff) / den;
     }
-    eps /= Scalar(kQ);
-    Scalar sigma = Scalar{ 1 };
+    eps *= Scalar{ 1 } / Scalar(kQ);
+    // `omega / sigma` with `sigma` in {omega, 1.35, 1.05, 1}, without a division.
+    Scalar omegaL = omega;
     if (eps >= Scalar{ 1 })
-      sigma = omega;
+      omegaL = Scalar{ 1 };
     else if (eps >= Scalar{ 0.1 })
-      sigma = Scalar{ 1.35 };
+      omegaL = omega * (Scalar{ 1 } / Scalar{ 1.35 });
     else if (eps >= Scalar{ 0.01 })
-      sigma = Scalar{ 1.05 };
+      omegaL = omega * (Scalar{ 1 } / Scalar{ 1.05 });
 
-    Scalar omegaL = omega / sigma;
     omegaL = (omegaL > Scalar{ 1 }) ? omegaL : Scalar{ 1 };
     omegaL = (omegaL < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaL : (Scalar{ 2 } - Scalar{ 1e-7 });
     omegaT = (omegaT > Scalar{ 1 }) ? omegaT : Scalar{ 1 };
@@ -367,7 +342,6 @@ struct Physics {
       L1 += aux * ciy0;
     }
 
-    const Scalar invT = Scalar{ 1 } / temc;
     #pragma unroll
     for (int idc = 0; idc < kQ; ++idc) {
       const Scalar fOld = f[idc];
@@ -434,11 +408,12 @@ __global__ void __launch_bounds__(kBlockSize) InitKernel(
 
   // computeMacroscopic(): the state every getter sees after Init().
   Scalar rho;
+  Scalar invRho;
   Scalar ux;
   Scalar uy;
   Scalar tem;
   Scalar pres;
-  Phys::Macroscopic(p, f, g, rho, ux, uy, tem, pres);
+  Phys::Macroscopic(p, f, g, rho, invRho, ux, uy, tem, pres);
   rhoOut[cell] = rho;
   pOut[cell] = pres;
   temOut[cell] = tem;
@@ -448,7 +423,7 @@ __global__ void __launch_bounds__(kBlockSize) InitKernel(
   // First collision, cold Newton start.
   Scalar xi0 = Scalar{ 0 };
   Scalar xi1 = Scalar{ 0 };
-  Phys::Collide(p, rho, ux, uy, tem, f, g, xi0, xi1);
+  Phys::Collide(p, rho, invRho, ux, uy, tem, f, g, xi0, xi1);
 
   #pragma unroll
   for (int idc = 0; idc < kQ; ++idc) {
@@ -529,11 +504,12 @@ __global__ void __launch_bounds__(kBlockSize) StepKernel(
   }
 
   Scalar rho;
+  Scalar invRho;
   Scalar ux;
   Scalar uy;
   Scalar tem;
   Scalar pres;
-  Phys::Macroscopic(p, f, g, rho, ux, uy, tem, pres);
+  Phys::Macroscopic(p, f, g, rho, invRho, ux, uy, tem, pres);
   if constexpr (kStoreMacro) {
     rhoOut[cell] = rho;
     pOut[cell] = pres;
@@ -545,7 +521,7 @@ __global__ void __launch_bounds__(kBlockSize) StepKernel(
   Scalar xi0 = xiIo[0 * N + cell];
   Scalar xi1 = xiIo[1 * N + cell];
 
-  Phys::Collide(p, rho, ux, uy, tem, f, g, xi0, xi1);
+  Phys::Collide(p, rho, invRho, ux, uy, tem, f, g, xi0, xi1);
 
   #pragma unroll
   for (int idc = 0; idc < kQ; ++idc) {

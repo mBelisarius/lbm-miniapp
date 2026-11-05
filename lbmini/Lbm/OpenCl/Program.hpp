@@ -9,9 +9,9 @@
  * ### JIT specialisation
  *
  * Every solver instance compiles its own `cl::Program`. In front of the
- * embedded `kernels.cl` it places a block of `#define`s (`ProgramDefines()`)
- * that turns everything the kernels need besides the buffers into
- * compile-time constants:
+ * embedded `kernels.cl` (`kernels_cpu.cl` on the CPU path) it places a block of
+ * `#define`s (`ProgramDefines()`) that turns everything the kernels need
+ * besides the buffers into compile-time constants:
  *
  *  - the mesh extents `LBM_NX`, `LBM_NY`, `LBM_N` (index arithmetic by
  *    immediates, division by `ny` strength-reduced, no bounds parameters);
@@ -76,7 +76,7 @@ std::string List(const Value* values, const int n, Format&& format) {
 }
 
 /**
- * @brief `#define` block that specialises `kernels.cl` for one solver.
+ * @brief `#define` block that specialises `kernels.cl` / `kernels_cpu.cl` for one solver.
  *
  * See the file comment; the macro names are the contract with the kernels.
  */
@@ -121,11 +121,10 @@ std::string ProgramDefines(
     << "#define LBM_USHIFT_X " << real(control.U(0)) << "\n"
     << "#define LBM_USHIFT_Y " << real(control.U(1)) << "\n"
     << "#define LBM_CV " << real(fluid.specificHeatCv) << "\n"
-    << "#define LBM_CP " << real(fluid.specificHeatCp) << "\n"
     << "#define LBM_INV_CV " << real(Scalar{ 1 } / fluid.specificHeatCv) << "\n"
     << "#define LBM_RGAS " << real(fluid.constant) << "\n"
     << "#define LBM_VISCOSITY " << real(fluid.viscosity) << "\n"
-    << "#define LBM_CONDUCTIVITY " << real(fluid.conductivity) << "\n"
+    << "#define LBM_COND_OVER_CP " << real(fluid.conductivity / fluid.specificHeatCp) << "\n"
     << "#define LBM_DENSITY_L " << real(fluid.densityL) << "\n"
     << "#define LBM_PRESSURE_L " << real(fluid.pressureL) << "\n"
     << "#define LBM_DENSITY_R " << real(fluid.densityR) << "\n"
@@ -162,27 +161,29 @@ inline cl::Device SelectDevice(const cl_device_type type, const std::string& who
 }
 
 /**
- * @brief Text of the shared `lbmini/Lbm/OpenCl/kernels.cl`.
+ * @brief Text of `lbmini/Lbm/OpenCl/<file>`: `kernels.cl` (the per-cell kernels
+ *        of both backends) or `kernels_cpu.cl` (the vector-block kernels of the
+ *        CPU path).
  *
  * The kernels are JIT-compiled per solver, so the source is read at run time,
  * relative to the working directory (source tree, build directory one or two
  * levels below it) or from the container install prefix.
  */
-inline std::string LoadKernelSource(const std::string& who) {
-  const char* candidates[] = {
-    "lbmini/Lbm/OpenCl/kernels.cl",
-    "../lbmini/Lbm/OpenCl/kernels.cl",
-    "../../lbmini/Lbm/OpenCl/kernels.cl",
-    "/opt/lbm-miniapp/lbmini/Lbm/OpenCl/kernels.cl"
+inline std::string LoadKernelSource(const std::string& who, const std::string& file = "kernels.cl") {
+  const std::string candidates[] = {
+    "lbmini/Lbm/OpenCl/" + file,
+    "../lbmini/Lbm/OpenCl/" + file,
+    "../../lbmini/Lbm/OpenCl/" + file,
+    "/opt/lbm-miniapp/lbmini/Lbm/OpenCl/" + file
   };
-  for (const char* path : candidates) {
-    std::ifstream file(path);
-    if (file.is_open())
-      return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  for (const std::string& path : candidates) {
+    std::ifstream stream(path);
+    if (stream.is_open())
+      return std::string((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
   }
   throw std::runtime_error(
-    who + ": cannot open lbmini/Lbm/OpenCl/kernels.cl "
-    "(the path is relative to the working directory)."
+    who + ": cannot open lbmini/Lbm/OpenCl/" + file +
+    " (the path is relative to the working directory)."
   );
 }
 

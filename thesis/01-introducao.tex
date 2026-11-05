@@ -123,69 +123,56 @@
 
 %---------------------------------------------------------------------------------------
 
-A simulação de escoamentos complexos tornou-se uma ferramenta indispensável em diversas áreas da engenharia e das ciências aplicadas.
-A demanda por simulações de alta fidelidade decorre da necessidade de prever o comportamento de fluidos em condições extremas, como escoamentos turbulentos, transições de fase e reações químicas, para as quais a experimentação física costuma implicar custos proibitivos \parencite{Aniello2022}.
-Para que tais simulações sejam compatíveis com o ciclo de projeto e com a rotina de investigação científica, requerem-se métodos numéricos eficientes e escaláveis, associados a sistemas computacionais de alto desempenho.
-Nesses sistemas, a divisão do problema em tarefas menores e o emprego de técnicas de programação paralela viabilizam a resolução de malhas refinadas em \textit{hardware} moderno \parencite{Chen1998}.
+A simulação de escoamentos complexos é ferramenta indispensável em diversas áreas da engenharia.
+A demanda por alta fidelidade decorre da necessidade de prever o comportamento de fluidos em condições extremas, como escoamentos turbulentos, transições de fase e reações químicas, nas quais a experimentação física costuma ter custo proibitivo \parencite{Aniello2022}.
+Tais simulações exigem métodos numéricos eficientes e escaláveis, executados em sistemas de alto desempenho, nos quais a programação paralela viabiliza a resolução de malhas refinadas \parencite{Chen1998}.
 
-A arquitetura dos computadores destinados a esse tipo de cálculo sofreu transformações expressivas nas últimas décadas.
-Os supercomputadores deixaram de ser sistemas monolíticos e passaram a adotar arquiteturas paralelas e distribuídas, nas quais processadores multinúcleo operam em conjunto com aceleradores, como as unidades de processamento gráfico (GPUs) e os arranjos de portas programáveis em campo (FPGAs).
-Embora a heterogeneidade tenha ampliado a capacidade de cálculo disponível, ela transferiu ao desenvolvedor a responsabilidade de escrever códigos capazes de explorar dispositivos com modelos de execução e hierarquias de memória distintos.
-Nesse contexto, a viabilidade de simulações representativas dos fenômenos observados na natureza depende da integração entre algoritmos adequados ao paralelismo massivo e plataformas de computação de alto desempenho (HPC).
-Essa necessidade é reforçada pelos estudos de \textcite{Davis2023} e \textcite{Karp2025}, que apontam a importância de códigos executáveis em arquiteturas diversas, com escalabilidade e portabilidade e sem prejuízo significativo de desempenho.
+Os supercomputadores atuais combinam processadores multinúcleo e aceleradores, como as unidades de processamento gráfico (GPUs) e os arranjos de portas programáveis em campo (FPGAs).
+A heterogeneidade ampliou a capacidade de cálculo, mas transferiu ao desenvolvedor a tarefa de explorar dispositivos com modelos de execução e hierarquias de memória distintos.
+A viabilidade de simulações representativas depende, assim, da integração entre algoritmos adequados ao paralelismo massivo e plataformas de computação de alto desempenho (HPC), com códigos escaláveis e portáveis entre arquiteturas, sem perda significativa de desempenho \parencite{Davis2023, Karp2025}.
 
-O método de Lattice Boltzmann (LBM) apresenta-se como alternativa aos métodos tradicionais de solução das equações de Navier-Stokes, pois descreve o escoamento em escala mesoscópica, a partir da teoria cinética dos gases, em vez de discretizar diretamente aquelas equações.
-Suas raízes remontam à década de 1980, quando modelos cinéticos discretos foram adaptados à simulação de fluidos, inicialmente com base em autômatos celulares e em estudos sobre gases discretizados.
-A superação dos autômatos de gás de rede (\textit{Lattice Gas Automata}, LGA), marcados por ruído estatístico e por regras de colisão cuja complexidade cresce rapidamente com o número de velocidades discretas, motivou a adoção de uma representação probabilística dos estados das partículas sobre uma malha regular.
-Essa representação é atualizada por etapas de propagação (\textit{streaming}) e de colisão \parencite{Kruger2017}.
-Por envolver apenas operações locais, a formulação é altamente paralelizável e permite representar comportamentos complexos, como a coexistência de fases vapor-líquido e o escoamento em meios porosos ou em geometrias de formato irregular \parencite{Chen1998}.
+O método de Lattice Boltzmann (LBM) é uma alternativa aos métodos de solução das equações de Navier-Stokes: descreve o escoamento em escala mesoscópica, a partir da teoria cinética dos gases, em vez de discretizar diretamente aquelas equações.
+Originado na década de 1980 a partir dos autômatos de gás de rede (\textit{Lattice Gas Automata}, LGA), o método substituiu as partículas booleanas, sujeitas a ruído estatístico, por uma representação probabilística sobre uma malha regular, atualizada por etapas de propagação (\textit{streaming}) e de colisão \parencite{Kruger2017}.
+Por envolver apenas operações locais, a formulação é altamente paralelizável e representa fenômenos como a coexistência de fases e o escoamento em meios porosos ou em geometrias irregulares \parencite{Chen1998}.
 
-A introdução de operadores de colisão contínuos, comumente aproximados pelo modelo de Bhatnagar-Gross-Krook (BGK) \parencite{Bhatnagar1954}, conferiu maior eficiência e flexibilidade ao método.
-Com esse operador, as equações macroscópicas são recuperadas pela expansão de Chapman-Enskog, e as grandezas macroscópicas resultam dos momentos das funções de distribuição \parencite{Qian1992, Chen1998}.
-Tal operador também é capaz de representar escoamentos compressíveis, tendo sido empregado por \textcite{Chu1965} na análise da formação de ondas de choque com base na teoria cinética dos gases.
+A aproximação do operador de colisão pelo modelo de Bhatnagar-Gross-Krook (BGK) \parencite{Bhatnagar1954} conferiu eficiência e flexibilidade ao método: as equações macroscópicas são recuperadas pela expansão de Chapman-Enskog, e as grandezas macroscópicas resultam dos momentos das funções de distribuição \parencite{Qian1992, Chen1998}.
+Esse operador também representa escoamentos compressíveis, tendo sido empregado por \textcite{Chu1965} na análise da formação de ondas de choque com base na teoria cinética.
 
-O avanço das teorias científicas e das aplicações de engenharia associadas a escoamentos compressíveis impulsionou o desenvolvimento de técnicas voltadas à simulação precisa dessa classe de problemas.
-Entre essas aplicações, destacam-se a aerodinâmica de veículos aeroespaciais em regimes supersônico e hipersônico \parencite{Guo2020}, a interação entre ondas de choque e camadas limite \parencite{Qiu2020} e o projeto de turbomáquinas e de motores de combustão \parencite{Mira2023}, nos quais variações abruptas de pressão, de massa específica e de temperatura precisam ser resolvidas com precisão.
-Como ambiente controlado para o estudo dos fenômenos envolvidos, empregam-se tubos de choque, nos quais um gás em alta pressão é separado de outro, em baixa pressão, por uma membrana.
-Com o rompimento instantâneo dessa membrana, os gases entram em contato e dão origem a um escoamento de alta velocidade e a ondas de choque, com variações descontínuas de pressão e de massa específica.
-Problemas dessa natureza fornecem informações sobre a dinâmica de gases em alta velocidade, sobre as ondas de choque e sobre sua interação com diferentes materiais, podendo ser investigados por via experimental, analítica ou numérica.
+Os escoamentos compressíveis são centrais em aplicações como a aerodinâmica de veículos aeroespaciais em regimes supersônico e hipersônico \parencite{Guo2020}, a interação entre ondas de choque e camadas limite \parencite{Qiu2020} e o projeto de turbomáquinas e de motores de combustão \parencite{Mira2023}, nas quais variações abruptas de pressão, de massa específica e de temperatura precisam ser resolvidas com precisão.
+Como ambiente controlado para estudá-los, empregam-se tubos de choque, nos quais uma membrana separa um gás em alta pressão de outro em baixa pressão.
+Com o rompimento instantâneo da membrana, os gases entram em contato e originam um escoamento de alta velocidade e ondas de choque, com variações descontínuas de pressão e de massa específica.
+O problema, investigável por via experimental, analítica ou numérica, fornece informações sobre a dinâmica de gases em alta velocidade.
 
-As aplicações do LBM a tubos de choque são amplamente estudadas, conforme revisado por \textcite{Guo2020}.
-Entretanto, as descontinuidades nos campos das grandezas termodinâmicas e a alteração do campo de entropia impostas pelas ondas de choque dificultam a simulação, uma vez que instabilidades numéricas tendem a surgir nas vizinhanças dessas descontinuidades.
-Com o emprego de técnicas de regularização do operador de colisão e de funções de distribuição de equilíbrio adequadas ao regime térmico, implementações recentes mostraram-se capazes de simular escoamentos compressíveis em tubos de choque com camada limite \parencite{Qiu2020}, bem como escoamentos tridimensionais com grandes variações nos campos de temperatura e de massa específica \parencite{Guo2020}.
+As aplicações do LBM a tubos de choque são amplamente estudadas \parencite{Guo2020}.
+As descontinuidades nos campos termodinâmicos e a alteração do campo de entropia impostas pelas ondas de choque, contudo, favorecem instabilidades numéricas em suas vizinhanças.
+Com regularização do operador de colisão e equilíbrios adequados ao regime térmico, implementações recentes simularam escoamentos compressíveis em tubos de choque com camada limite \parencite{Qiu2020} e escoamentos tridimensionais com grandes variações de temperatura e de massa específica \parencite{Guo2020}.
 
-O custo dessas formulações, contudo, é elevado.
-A regularização atua sobre a parcela de não equilíbrio das funções de distribuição, reconstruindo-a a cada colisão a partir de um número reduzido de momentos, o que acrescenta ao ciclo de cálculo a computação desses momentos e a reconstrução das populações em todas as direções discretas.
-Na formulação de dupla distribuição adotada neste trabalho, o regime térmico é representado por um segundo conjunto de funções de distribuição \parencite{Tran2022}, e a estabilização em regime compressível exige a solução de um problema iterativo local em cada nó da malha, além de uma propagação interpolada.
-Em consequência, o número de operações por atualização é consideravelmente superior ao do LBM isotérmico clássico, e a viabilidade prática dessas simulações passa a depender da eficiência com que o algoritmo é mapeado sobre o \textit{hardware} disponível.
-Disso decorre uma decisão de projeto raramente discutida de forma sistemática na literatura de dinâmica dos fluidos computacional: a escolha da tecnologia de paralelização com a qual o resolvedor será construído.
+Essas formulações, porém, têm custo elevado.
+A regularização acrescenta ao ciclo de cálculo o cômputo dos momentos e a reconstrução da parcela de não equilíbrio em todas as direções discretas.
+Na formulação de dupla distribuição adotada neste trabalho, o regime térmico é representado por um segundo conjunto de funções de distribuição \parencite{Tran2022}, e a estabilização exige a solução de um problema iterativo local em cada nó, além de uma propagação interpolada.
+O número de operações por atualização é, assim, consideravelmente superior ao do LBM isotérmico clássico, e a viabilidade dessas simulações depende da eficiência com que o algoritmo é mapeado sobre o \textit{hardware}.
+A escolha da tecnologia de paralelização do resolvedor torna-se, portanto, uma decisão de projeto raramente discutida de forma sistemática na literatura de dinâmica dos fluidos computacional.
 
-Atualmente, o desenvolvedor dispõe de modelos baseados em diretivas de compilação, de interfaces de programação de baixo nível específicas de cada fabricante, de camadas de abstração em C++ voltadas à portabilidade de desempenho (\textit{performance portability}) e de bibliotecas de troca de mensagens para sistemas de memória distribuída.
-Cada alternativa impõe um compromisso distinto entre desempenho de pico, abrangência de arquiteturas suportadas e esforço de desenvolvimento, e a decisão tomada no início de um projeto condiciona todo o seu ciclo de vida, uma vez que a migração posterior para outra tecnologia costuma exigir a reescrita das partes mais sensíveis do código.
-Todavia, observa-se a escassez de referências quantitativas obtidas sob um mesmo algoritmo, um mesmo caso de teste e um mesmo ambiente de execução, o que dificulta essa escolha.
-A dificuldade se acentua quando o algoritmo é limitado pela largura de banda de memória, situação em que o ganho oferecido pelas tecnologias de baixo nível pode não compensar o custo de desenvolvimento.
+O desenvolvedor dispõe de modelos baseados em diretivas de compilação, de interfaces de baixo nível específicas de cada fabricante, de camadas de abstração em C++ voltadas à portabilidade de desempenho (\textit{performance portability}) e de bibliotecas de troca de mensagens para memória distribuída.
+Cada alternativa impõe um compromisso distinto entre desempenho de pico, abrangência de arquiteturas e esforço de desenvolvimento, e a migração posterior costuma exigir a reescrita das partes mais sensíveis do código.
+Faltam, porém, referências quantitativas obtidas sob um mesmo algoritmo, caso de teste e ambiente de execução, o que dificulta a decisão, sobretudo quando o ganho das tecnologias de baixo nível pode não compensar seu custo de desenvolvimento.
 
-A decisão tampouco se restringe à linguagem C++.
-Códigos científicos escritos em Fortran acessam os modelos por diretivas e dispõem ainda da construção nativa \texttt{do concurrent}, cuja tradução para aceleradores é atribuída ao compilador.
-Já as linguagens de mais alto nível, como Python e Julia, recorrem à compilação em tempo de execução e a interfaces diretas com as bibliotecas nativas dos aceleradores para se aproximarem do desempenho do código compilado.
-Soma-se a esse conjunto o padrão SYCL, que estende o C++ à programação de dispositivos heterogêneos de diferentes fabricantes.
-A opção pela linguagem C++ neste trabalho decorre de ela ser a única para a qual todas as tecnologias avaliadas dispõem de interface oficial, condição necessária para que as implementações permaneçam comparáveis entre si.
+A escolha da linguagem também condiciona as alternativas: o Fortran acessa os modelos por diretivas e dispõe da construção \texttt{do concurrent}, o Python e o Julia recorrem à compilação em tempo de execução, e o padrão SYCL estende o C++ à programação de dispositivos de diferentes fabricantes.
+Adotou-se o C++ por ser a única linguagem para a qual todas as tecnologias avaliadas dispõem de interface oficial, condição para que as implementações permaneçam comparáveis.
 
 %---------------------------------------------------------------------------------------
 
 \section{Problema}\label{sec:problema}
 
-Diante da necessidade de viabilizar simulações de alta fidelidade para escoamentos compressíveis, este trabalho propõe-se a estudar a escalabilidade da paralelização do método de Lattice Boltzmann para essa classe de escoamentos, empregando a formulação de dupla distribuição com redes deslocadas e as técnicas de estabilização adequadas.
-Para tanto, desenvolveu-se um miniaplicativo que reproduz a mesma implementação do método em diferentes tecnologias de computação de alto desempenho, comparando-se o desempenho computacional de cada tecnologia e sua influência sobre o LBM, o custo de desenvolvimento e a escalabilidade do código em arquiteturas heterogêneas.
+Diante da necessidade de viabilizar simulações de alta fidelidade para escoamentos compressíveis, este trabalho estuda a escalabilidade da paralelização do método de Lattice Boltzmann para essa classe de escoamentos, com a formulação de dupla distribuição, redes deslocadas e técnicas de estabilização adequadas.
+Para tanto, desenvolveu-se um miniaplicativo que reproduz a mesma implementação do método em diferentes tecnologias de computação de alto desempenho, a fim de comparar o desempenho, o custo de desenvolvimento e a escalabilidade do código em arquiteturas heterogêneas.
 
-A adoção de miniaplicativos (\textit{mini-apps}), em lugar de programas de aplicação completos submetidos a ensaios de referência (\textit{benchmarks}), permite obter resultados comparáveis com um ciclo de desenvolvimento reduzido.
-Miniaplicativos são versões simplificadas de um código que preservam os padrões de cálculo e de comunicação dos programas de origem, porém em escala reduzida e reprodutível.
-No contexto do LBM, implementam as etapas críticas de colisão e de propagação segundo diferentes tecnologias e filosofias de paralelização, o que possibilita avaliar o desempenho e a portabilidade relativa de cada abordagem em configurações distintas de \textit{hardware}.
+Miniaplicativos (\textit{mini-apps}) são versões simplificadas de um código que preservam os padrões de cálculo e de comunicação do programa de origem, em escala reduzida e reprodutível, e permitem resultados comparáveis com ciclo de desenvolvimento menor que o de programas completos submetidos a ensaios de referência (\textit{benchmarks}).
+No contexto do LBM, implementam as etapas críticas de colisão e de propagação segundo diferentes filosofias de paralelização, o que possibilita avaliar o desempenho e a portabilidade relativa de cada abordagem.
 
-A questão de pesquisa que orienta o trabalho pode ser enunciada da seguinte forma: em que medida a escolha da tecnologia de paralelização altera o desempenho alcançável e a escalabilidade de um resolvedor de LBM compressível, e qual é o custo de desenvolvimento associado a cada ganho.
-Para respondê-la, a mesma formulação física foi implementada em cada uma das tecnologias avaliadas, mantendo-se inalterados o caso de teste, a disposição dos dados em memória e a sequência de operações.
-Dessa forma, as diferenças observadas podem ser atribuídas ao modelo de execução e não a variações do algoritmo.
-As combinações entre tecnologias de paralelização e alvos de execução consideradas neste trabalho estão resumidas na \autoref{tab:escopo-tecnologias}.
+A questão de pesquisa é: em que medida a escolha da tecnologia de paralelização altera o desempenho alcançável e a escalabilidade de um resolvedor de LBM compressível, e qual é o custo de desenvolvimento associado a cada ganho.
+Para respondê-la, a mesma formulação física foi implementada em cada tecnologia, mantendo-se inalterados o caso de teste, a estrutura de dados e o trabalho por nó, de modo que as diferenças observadas possam ser atribuídas ao modelo de execução e não a variações do algoritmo.
+As combinações entre tecnologias e alvos de execução estão resumidas na \autoref{tab:escopo-tecnologias}.
 
 \begin{table}[H]
     \centering
@@ -210,11 +197,6 @@ As combinações entre tecnologias de paralelização e alvos de execução cons
     \nota{* Os processos MPI podem ser alocados nos núcleos de uma mesma CPU, emulando um sistema de memória distribuída, sem paralelismo em memória compartilhada.}
 \end{table}
 
-Conforme a \autoref{tab:escopo-tecnologias}, cinco das tecnologias avaliadas atendem tanto a CPUs multinúcleo quanto a GPUs, ao passo que o CUDA se restringe aos aceleradores de um único fabricante e o MPI segue o modelo de memória distribuída.
-Embora a implementação em MPI não explore o processador multinúcleo por meio de paralelismo em memória compartilhada, seus processos podem ser alocados nos núcleos de um mesmo processador, de modo a emular um sistema de memória distribuída.
-Nesse arranjo, cada processo mantém sua própria cópia do subdomínio, e a troca de dados continua ocorrendo por mensagens, e não por acesso direto a uma região de memória comum.
-Essa possibilidade de emulação viabiliza os ensaios em memória distribuída relatados neste trabalho, conduzidos em uma estação de trabalho individual, conforme discutido na \autoref{sec:delimitacao}.
-
 %---------------------------------------------------------------------------------------
 
 \section{Objetivos}\label{sec:objetivos}
@@ -225,39 +207,32 @@ Este trabalho tem por objetivo analisar a escalabilidade de diferentes filosofia
 
 \subsection{Objetivos específicos}\label{subsec:objetivos-especificos}
 
-Para alcançar esse objetivo, foram estabelecidos quatro objetivos específicos.
-O primeiro consiste em validar a implementação do método de Lattice Boltzmann compressível para o problema do tubo de choque, confrontando os campos obtidos com a solução analítica de referência e caracterizando a ordem de convergência efetiva do esquema, inclusive diante de variações na razão de pressões inicial e na viscosidade.
-O segundo, em analisar o desempenho de diferentes filosofias e modelos de programação para computação heterogênea, medido pela taxa de atualização de nós da rede e pela aceleração em relação à execução sequencial.
-Em terceiro lugar, busca-se investigar a escalabilidade do método em arquiteturas massivamente paralelas, identificando os fatores que limitam o ganho obtido com o aumento do número de unidades de processamento e confrontando as taxas medidas com os limites estimados pelo modelo \textit{roofline}.
-Por fim, pretende-se comparar o ganho de desempenho de cada modelo de programação com o respectivo custo de desenvolvimento do miniaplicativo.
-Esse custo é avaliado tanto por métricas objetivas, como a contagem de linhas de código e a quantidade de elementos específicos de cada tecnologia, quanto pela experiência de desenvolvimento observada ao longo da implementação.
-Tal experiência abrange a legibilidade do código resultante, a qualidade do diagnóstico oferecido pelo compilador, a disponibilidade de depuradores e de ferramentas de análise de desempenho e o esforço despendido na identificação de erros de execução no dispositivo acelerador.
-A reunião desses elementos fornece subsídios para a escolha da tecnologia em projetos futuros, nos quais o tempo de desenvolvimento e a facilidade de manutenção são tão relevantes quanto o desempenho alcançado.
-
+Para alcançá-lo, foram estabelecidos quatro objetivos específicos.
+O primeiro consiste em validar a implementação do método de Lattice Boltzmann compressível para o tubo de choque, confrontando os campos obtidos com a solução analítica de referência e caracterizando a ordem de convergência efetiva do esquema, inclusive diante de variações na razão de pressões inicial e na viscosidade.
+O segundo, em analisar o desempenho de diferentes filosofias e modelos de programação para computação heterogênea, medido pela taxa de atualização de nós e pela aceleração em relação à execução sequencial.
+O terceiro, em investigar a escalabilidade do método em arquiteturas massivamente paralelas, identificando os fatores que limitam o ganho com o aumento do número de unidades de processamento e confrontando as taxas medidas com os limites estimados pelo modelo \textit{roofline}.
+O quarto, em comparar o ganho de desempenho de cada modelo com o respectivo custo de desenvolvimento do miniaplicativo, avaliado pela contagem de linhas de código e pela experiência de desenvolvimento, que abrange a legibilidade do código, o diagnóstico do compilador, a disponibilidade de depuradores e de ferramentas de análise de desempenho e o esforço de identificação de erros no acelerador.
 %---------------------------------------------------------------------------------------
 
 \section{Delimitação do Trabalho}\label{sec:delimitacao}
 
-O escopo deste trabalho restringe-se ao estudo comparativo de tecnologias de paralelização aplicadas a um único algoritmo e a um único caso de teste.
-O caso adotado é o tubo de choque de Sod, escolhido por dispor de solução analítica exata, por concentrar em um domínio simples as três estruturas de onda características dos escoamentos compressíveis e por ser amplamente empregado como referência na literatura.
-A geometria é, por consequência, elementar, e o trabalho não aborda malhas não estruturadas, refinamento local nem geometrias imersas.
+O escopo restringe-se ao estudo comparativo de tecnologias de paralelização aplicadas a um único algoritmo e a um único caso de teste: o tubo de choque de Sod, escolhido por dispor de solução analítica exata, por concentrar em um domínio simples as três estruturas de onda características dos escoamentos compressíveis e por ser amplamente empregado como referência.
+O domínio é uma faixa bidimensional estreita (\(N_y = N_x/100\)), com escoamento essencialmente unidimensional, e o trabalho não aborda malhas não estruturadas, refinamento local nem geometrias imersas.
 
-O miniaplicativo não pretende substituir um programa de aplicação completo.
-Ausentam-se dele recursos usuais de resolvedores consolidados, como reinício de simulações a partir de estados salvos, modelos de turbulência, tratamento de escoamentos multifásicos e balanceamento dinâmico de carga.
-Essa simplificação é deliberada e constitui a própria razão de ser de um miniaplicativo, que isola o \textit{kernel} de cálculo, isto é, a rotina que concentra o trabalho computacional do algoritmo e cujo desempenho se pretende medir.
+O miniaplicativo não pretende substituir um programa de aplicação completo: ausentam-se recursos usuais de resolvedores consolidados, como reinício a partir de estados salvos, modelos de turbulência, escoamentos multifásicos e balanceamento dinâmico de carga.
+A simplificação é deliberada, pois o miniaplicativo isola o \textit{kernel} de cálculo, isto é, a rotina que concentra o trabalho computacional do algoritmo e cujo desempenho se pretende medir.
 
-Os ensaios de desempenho foram planejados para uma estação de trabalho individual, descrita no Capítulo~\ref{ch:metodologia}, e não para um agrupamento de computadores de grande porte.
-As medições referentes à execução em memória distribuída restringem-se, portanto, a múltiplos processos em um mesmo nó de computação, o que permite avaliar a sobrecarga de comunicação, mas não a escalabilidade em redes de interconexão de alto desempenho.
-As conclusões relativas a esse ponto devem ser interpretadas como tendências, e não como valores extrapoláveis para instalações de maior porte.
+Os ensaios foram planejados para uma estação de trabalho individual, descrita no Capítulo~\ref{ch:metodologia}, e não para um agrupamento de grande porte.
+As medições em memória distribuída restringem-se, portanto, a múltiplos processos em um mesmo nó, o que permite avaliar a sobrecarga de comunicação, mas não a escalabilidade em redes de interconexão de alto desempenho; as conclusões a esse respeito devem ser lidas como tendências, e não como valores extrapoláveis para instalações maiores.
 
 %---------------------------------------------------------------------------------------
 
 \section{Organização do Trabalho}\label{sec:organizacao-do-trabalho}
 
-Este trabalho está organizado em sete capítulos, cuja sequência acompanha o percurso do problema físico até a avaliação computacional.
-O Capítulo~\ref{ch:revisao-bibliografica} apresenta a revisão bibliográfica, abordando a verificação e a validação em simulações de alta fidelidade, os fundamentos e o desenvolvimento histórico do LBM, as pesquisas relacionadas à sua aplicação a escoamentos compressíveis e ondas de choque e as tecnologias de computação de alto desempenho.
-O Capítulo~\ref{ch:metodologia} detalha a metodologia da pesquisa, descrevendo o problema clássico do tubo de choque de Sod, o ambiente de ensaio, as tecnologias de paralelização selecionadas e as métricas empregadas na análise de escalabilidade, entre elas a taxa de atualização de nós, a aceleração e a eficiência paralela.
-O Capítulo~\ref{ch:metodo-de-lattice-boltzmann} apresenta a dedução e o equacionamento do método, incluindo a expansão de Chapman-Enskog, as propriedades do LBM clássico, os modelos de estabilização e a formulação de dupla distribuição com redes deslocadas para regimes compressíveis.
-O Capítulo~\ref{ch:implementacao-computacional} descreve a implementação computacional, detalhando a arquitetura do miniaplicativo, o custo computacional do algoritmo segundo o modelo \textit{roofline} e as estratégias de engenharia de \textit{software} adotadas para acomodar as diferentes tecnologias de paralelização e de aceleração em \textit{hardware}.
-O Capítulo~\ref{ch:resultados} expõe a campanha de ensaios, com o protocolo e os resultados da validação do escoamento frente à solução analítica de referência e da avaliação do desempenho e da escalabilidade, além da análise de complexidade do código.
-Por fim, o Capítulo~\ref{ch:consideracoes-finais} consolida as considerações finais, sintetizando as contribuições alcançadas, reconhecendo as limitações do estudo e apontando diretrizes para pesquisas futuras.
+Este trabalho está organizado em sete capítulos.
+O Capítulo~\ref{ch:revisao-bibliografica} apresenta a revisão bibliográfica sobre simulações de alta fidelidade, o LBM, escoamentos compressíveis com ondas de choque e tecnologias de computação de alto desempenho.
+O Capítulo~\ref{ch:metodologia} detalha a metodologia: o tubo de choque de Sod, as métricas e o protocolo de medição, o procedimento de otimização, o ambiente de ensaio e as tecnologias de paralelização selecionadas.
+O Capítulo~\ref{ch:metodo-de-lattice-boltzmann} apresenta a dedução do método, da expansão de Chapman-Enskog à formulação de dupla distribuição com redes deslocadas.
+O Capítulo~\ref{ch:implementacao-computacional} descreve a arquitetura do miniaplicativo, o custo computacional segundo o modelo \textit{roofline} e a implementação em cada tecnologia.
+O Capítulo~\ref{ch:resultados} expõe a validação frente à solução analítica, as decisões de implementação e os resultados de desempenho, de escalabilidade e de complexidade do código.
+Por fim, o Capítulo~\ref{ch:consideracoes-finais} sintetiza as contribuições, as limitações do estudo e as propostas de trabalhos futuros.

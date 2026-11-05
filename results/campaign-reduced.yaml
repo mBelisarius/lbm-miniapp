@@ -1,0 +1,144 @@
+# Reduced campaign: same studies, report and figures as campaign.yaml, run with
+# smaller meshes, fewer repetitions and at most eight cores so that the whole
+# set of measurements takes a couple of hours.
+#
+# Every path is either absolute or relative to the repository root.
+# The binaries of the two builds are expected under <workdir>/bin:
+#   bin/nvhpc  nvc++ build (Plain, OpenMP, OpenACC, OpenCL, MPI)
+#   bin/gcc    g++/nvcc build (CUDA, Kokkos, RAJA)
+#
+# Cost: a run takes about 0.35 nx time steps (tmax = 0.2), i.e. about
+# 0.0035 nx^3 node updates.
+
+executable: simulations-campaign-reduced/bin/nvhpc/lbm-miniapp-main
+base_config: lbmini/config.yaml
+workdir: simulations-campaign-reduced
+
+figures:
+    path: simulations-campaign-reduced/figures
+    lang: br      # br (Português); en (English)
+    dpi: 200
+
+# Environment applied to every run, overriding the inherited one: one thread
+# per physical core, packed and pinned.
+environment:
+    OMP_PLACES: cores
+    OMP_PROC_BIND: close
+
+# Values applied to every run unless a study overrides them.
+defaults:
+    ny: 0             # Transversal nodes (see ny_ratio for an aspect-ratio driven mesh)
+    ny_ratio: 100       # If > 0, ny = max(1, nx // ny_ratio) and overrides ny
+    tmax: 0.2
+    printStep: 20     # Number of recordings after the initial state
+    viscosity: 1.0e-2 # Dynamic viscosity, in lattice units
+    prandtl: 0.71
+    gamma: 1.4
+    target: CPU
+    backend: Plain
+    cores: 0
+    repeats: 1
+    timeout: 3600     # Per-run wall-clock limit in seconds (0 disables it)
+    warmup: false     # Discard one extra run before the measured repetitions
+
+# Launchers prepended to the executable, per backend.
+# The {cores} placeholder is replaced by the number of cores of the run.
+launchers:
+    MPI: [mpirun, -np, '{cores}', --bind-to, core, --map-by, core]
+
+# Per-backend executable overrides (different builds may be required).
+executables:
+    CUDA: simulations-campaign-reduced/bin/gcc/lbm-miniapp-main
+    Kokkos: simulations-campaign-reduced/bin/gcc/lbm-miniapp-main
+    RAJA: simulations-campaign-reduced/bin/gcc/lbm-miniapp-main
+
+studies:
+    # Accuracy studies drive the validation, convergence, pressure-ratio and viscosity results.
+    # The reference profiles are extracted from the convergence run selected in report.profiles.
+    convergence:
+        kind: accuracy
+        target: GPU
+        backend: CUDA
+        nx: [100, 500, 1000, 5000]
+        plpr: [2.0, 5.0, 10.0, 20.0]
+
+    viscosity:
+        kind: accuracy
+        target: GPU
+        backend: CUDA
+        nx: [10000]
+        plpr: [10.0]
+        viscosity: [1.0e-1, 3.0e-2, 1.0e-2, 3.0e-3, 1.0e-3, 3.0e-4, 1.0e-4]
+
+    # Performance studies drive the scalability and technology comparisons.
+    # Only the initial and the final states are written (printStep: 1), and the
+    # runtime recorded with them covers the time marching alone.
+    cpu_scalability:
+        kind: performance
+        target: CPU
+        backends: [OpenMP]
+        nx: [100, 500, 1000]
+        cores: [1, 2, 3, 4, 5, 6, 7, 8]
+        printStep: 1
+        repeats: 2
+
+    cpu_technologies:
+        kind: performance
+        target: CPU
+        backends: [Plain, OpenMP, OpenACC, OpenCL, Kokkos, RAJA, MPI]
+        nx: [100, 500, 1000, 5000]
+        cores: [8]
+        printStep: 1
+        repeats: 2
+
+    gpu_technologies:
+        kind: performance
+        target: GPU
+        backends: [CUDA, OpenACC, OpenMP, Kokkos, RAJA]
+        nx: [100, 500, 1000, 5000]
+        printStep: 1
+        repeats: 3
+        warmup: true
+
+report:
+    profiles:
+        study: convergence
+        nx: 10000
+        plpr: 10.0
+        times: [0.0, 0.1, 0.2]
+    convergence:
+        study: convergence
+        reference_plpr: 10.0
+    pressure_ratio:
+        study: convergence
+    viscosity:
+        study: viscosity
+    cpu_scalability:
+        study: cpu_scalability
+    cpu_technologies:
+        study: cpu_technologies
+        baseline_backend: Plain
+    gpu_technologies:
+        study: gpu_technologies
+        baseline_study: cpu_technologies
+        baseline_backend: Plain
+
+# Source trees counted for the code complexity table.
+complexity:
+    baseline: Plain
+    # Each technology is charged with the shared headers it includes (directly or through
+    # another header): Stencil.hpp (the DirectionStencil of every fused kernel),
+    # OpenAcc/CellPhysics.hpp (the per-cell physics of the OpenACC and OpenMP GPU paths) and,
+    # for the CPU solvers, the vector kernel they all drive (Simd.hpp + HostKernel.hpp, which
+    # OpenACC's CPU path uses for its geometry and partition only).
+    sources:
+        Plain: [lbmini/Lbm/Plain]
+        OpenMP: [lbmini/Lbm/OpenMp, lbmini/Lbm/OpenAcc/CellPhysics.hpp, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        OpenACC: [lbmini/Lbm/OpenAcc, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        OpenCL: [lbmini/Lbm/OpenCl, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        CUDA: [lbmini/Lbm/Cuda, lbmini/Lbm/Stencil.hpp]
+        Kokkos: [lbmini/Lbm/Kokkos, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        RAJA: [lbmini/Lbm/Raja, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        Alpaka: [lbmini/Lbm/Alpaka, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+        MPI: [lbmini/Lbm/Mpi, lbmini/Lbm/Stencil.hpp, lbmini/Lbm/Simd.hpp, lbmini/Lbm/HostKernel.hpp]
+    extensions: ['.hpp', '.cpp', '.cl', '.cu']

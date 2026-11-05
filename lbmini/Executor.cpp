@@ -85,6 +85,21 @@ void SetProcessEnvironment(const char* name, const std::string& value, const boo
   if (result != 0)
     throw std::runtime_error(std::string("Failed to set process environment variable ") + name + ".");
 }
+
+#ifdef USE_MPI
+// Number of ranks announced by the MPI launcher, or 0 when the process was not
+// started by one (the MPI backend then re-launches itself with one rank per core).
+int LauncherWorldSize() {
+  for (const char* name : { "OMPI_COMM_WORLD_SIZE", "PMI_SIZE", "PMIX_SIZE" }) {
+    if (const char* value = std::getenv(name)) {
+      const int size = std::atoi(value);
+      if (size > 0)
+        return size;
+    }
+  }
+  return 0;
+}
+#endif
 } // namespace
 
 template<typename Scalar>
@@ -162,7 +177,27 @@ Executor<Scalar>::Executor(
   const Index cores = (performance.cores > 0) ? performance.cores : static_cast<Index>(lbmini::CountPerformanceCores());
   const std::string coresStr = std::to_string(cores);
   #if defined(_OPENMP)
-  omp_set_num_threads(static_cast<int>(cores));
+  // `cores` is the number of cores of the whole run. The ranks of the MPI
+  // backend already occupy cores, so each rank only gets its share as OpenMP
+  // threads; with one rank per core that is a single thread, instead of
+  // `cores` threads in each of `cores` ranks.
+  Index threads = cores;
+  #ifdef USE_MPI
+  if (performance.backend == lbmini::BackendEnum::MPI) {
+    const int ranks = LauncherWorldSize();
+    threads = (ranks > 0) ? std::max<Index>(1, cores / ranks) : 1;
+  }
+  #endif
+  omp_set_num_threads(static_cast<int>(threads));
+  // The loops of the CPU backends are `schedule(runtime)` over fine-grained row
+  // segments. The cores of a real machine are rarely equally fast (E-cores, SMT
+  // siblings, vCPUs time-sliced by a hypervisor), and a static schedule makes every
+  // time step wait for the slowest thread: measured on a hybrid laptop CPU it left
+  // 25-35 % of the step idle at 8 threads, where a dynamic schedule left 3 %. A
+  // user-provided `OMP_SCHEDULE` (e.g. `static` on a NUMA node, to keep the
+  // first-touch placement) is never overridden.
+  if (std::getenv("OMP_SCHEDULE") == nullptr)
+    omp_set_schedule(omp_sched_dynamic, 1);
   #endif
   SetProcessEnvironment("ACC_NUM_CORES", coresStr, true);
   SetProcessEnvironment("POCL_MAX_PTHREAD_COUNT", coresStr, true);

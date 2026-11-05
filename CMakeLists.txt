@@ -787,6 +787,7 @@ endif()
 add_library("${ProjectName}-lbm-openacc-cpu" STATIC
         lbmini/Lbm/OpenAcc/Cpu/LatticeD2Q9.hpp
         lbmini/Lbm/OpenAcc/Cpu/LbmTube.hpp
+        lbmini/Lbm/OpenAcc/Cpu/LaneKernel.hpp
 )
 
 target_include_directories("${ProjectName}-lbm-openacc-cpu" PUBLIC "${CMAKE_SOURCE_DIR}/lbmini")
@@ -807,9 +808,12 @@ target_compile_definitions("${ProjectName}-lbm-openacc-gpu" PRIVATE PROJECT_NAME
 target_link_libraries("${ProjectName}-lbm-openacc-gpu" PUBLIC Eigen3::Eigen PUBLIC "${ProjectName}-common")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
+    # `nvc++` vectorises with 128-bit registers unless told otherwise, even for an AVX2
+    # target (-tp=native); the lane loops of the OpenACC CPU solver need 256-bit ones.
     target_compile_options("${ProjectName}-lbm-openacc-cpu" PUBLIC
             "-acc=multicore"
             "-Minfo=accel,vect"
+            "-Mvect=simd:256"
     )
     target_link_options("${ProjectName}-lbm-openacc-cpu" INTERFACE
             "-acc=multicore"
@@ -828,6 +832,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "NVIDIA|NVHPC")
             $<$<COMPILE_LANGUAGE:CXX>:-acc=multicore>
             $<$<COMPILE_LANGUAGE:CXX>:-acc=gpu>
             $<$<COMPILE_LANGUAGE:CXX>:-mp=gpu>
+            $<$<COMPILE_LANGUAGE:CXX>:-Mvect=simd:256>
     )
 endif()
 
@@ -920,6 +925,7 @@ endif()
 if(ENABLE_OPENCL AND OpenCL_FOUND)
     add_library("${ProjectName}-lbm-opencl-cpu" STATIC
             lbmini/Lbm/OpenCl/Cpu/LatticeD2Q9.hpp
+            lbmini/Lbm/OpenCl/Cpu/Engine.hpp
             lbmini/Lbm/OpenCl/Cpu/LbmTube.hpp
     )
 
@@ -1012,6 +1018,7 @@ if(ENABLE_ALPAKA AND TARGET alpaka::host)
             lbmini/Lbm/Alpaka/LbmTubeImpl.hpp
             lbmini/Lbm/Alpaka/Cpu/LatticeD2Q9.hpp
             lbmini/Lbm/Alpaka/Cpu/LbmTube.hpp
+            lbmini/Lbm/Alpaka/Cpu/LbmTubeImpl.hpp
             lbmini/Lbm/Alpaka/Gpu/LatticeD2Q9.hpp
             lbmini/Lbm/Alpaka/Gpu/LbmTube.hpp
     )
@@ -1136,6 +1143,7 @@ set(TestSources
         test/memory_safety_test.cpp
         test/streaming_table_test.cpp
         test/backend_equivalence_test.cpp
+        test/host_kernel_test.cpp
 )
 
 add_executable("${ProjectName}-test" ${TestSources})
