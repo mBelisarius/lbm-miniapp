@@ -86,7 +86,9 @@ inline void ValidateMeshExtents(
  * @brief Proves that a precomputed gather table only addresses valid cells.
  *
  * Runs once, right after the table is built, and is the reason the streaming
- * kernels may dereference `streamIdx_` without any per-element bounds check.
+ * kernels may dereference `streamIdx_` without any per-element bounds check
+ * (the table of the test oracle `test/ReferenceTube.hpp`; the solvers of the
+ * program resolve their sources arithmetically from `DirectionStencil`).
  * A failure here is a geometry bug, never a user error, so it aborts loudly
  * instead of clamping — a clamped index would silently produce wrong physics.
  *

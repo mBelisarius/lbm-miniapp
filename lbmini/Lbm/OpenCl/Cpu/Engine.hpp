@@ -210,7 +210,14 @@ private:
     return define("LBM_VW", lanes_) + define("LBM_PITCH", geo_.pitch) + define("LBM_PLANE", geo_.plane)
       + define("LBM_BLOCKS", part_.blocksPerRow) + define("LBM_CHUNK", part_.chunkBlocks)
       + define("LBM_SEGMENTS", part_.Segments()) + define("LBM_INTERIOR_LO", interiorLo)
-      + define("LBM_INTERIOR_HI", interiorHi) + define("LBM_ANY_NEAREST", params.anyNearest ? 1 : 0);
+      + define("LBM_INTERIOR_HI", interiorHi) + define("LBM_ANY_NEAREST", params.anyNearest ? 1 : 0)
+      + define("LBM_STREAM", StreamingStores(params) ? 1 : 0);
+  }
+
+  /// Non-temporal stores of the populations (see `host::UseStreamingStores`), if the buffers are vector aligned.
+  bool StreamingStores(const host::Params<Scalar>& params) const {
+    const std::size_t baseAlign = device_.getInfo<CL_DEVICE_MEM_BASE_ADDR_ALIGN>() / 8;
+    return params.stream && baseAlign >= static_cast<std::size_t>(lanes_) * sizeof(Scalar);
   }
 
   cl::Buffer MakeBuffer(const std::size_t bytes, const char* what) {

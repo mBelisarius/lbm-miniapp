@@ -8,11 +8,12 @@
 \criarsigla{DDF}{\textit{Double Distribution Function}}
 \criarsigla{DNS}{\textit{Direct Numerical Simulation}}
 \criarsigla{FHP}{Frisch-Hasslacher-Pomeau}
-\criarsigla{FVM}{\textit{Finite Volume Method}}
+\criarsigla{HIP}{\textit{Heterogeneous-computing Interface for Portability}}
 \criarsigla{HPP}{Hardy-Pomeau-de Pazzis}
 \criarsigla{LES}{\textit{Large Eddy Simulation}}
 \criarsigla{MPI}{\textit{Message Passing Interface}}
 \criarsigla{PCIe}{\textit{Peripheral Component Interconnect Express}}
+\criarsigla{SYCL}{Padrão aberto do Khronos Group para programação heterogênea em C++}
 \criarsigla{TPU}{\textit{Tensor Processing Unit}}
 \criarsigla{V\&V}{Verificação e Validação}
 
@@ -22,25 +23,31 @@
 
 %---------------------------------------------------------------------------------------
 
-A simulação de alta fidelidade em dinâmica dos fluidos computacional (CFD) depende, simultaneamente, da adequação do modelo físico, do rigor dos procedimentos que asseguram a confiabilidade dos resultados e da capacidade computacional para obtê-los em prazo compatível com o uso pretendido \parencite{Moin2011, Oberkampf2010}.
-Esses condicionantes raramente são separáveis: o refinamento exigido pela fidelidade eleva o custo do cálculo, e as arquiteturas capazes de absorvê-lo impõem restrições aos algoritmos \parencite{Karp2025, Kolla2018}.
-O método de Lattice Boltzmann (LBM) tem despertado interesse por substituir a discretização direta das equações de Navier-Stokes por uma dinâmica local de funções de distribuição, adequada às máquinas de computação de alto desempenho (HPC) \parencite{Chen1998, Succi2001, Tomczak2021}.
+A simulação de alta fidelidade em dinâmica dos fluidos computacional (CFD) depende simultaneamente da adequação do modelo físico, do rigor dos procedimentos que asseguram a confiabilidade dos resultados e da capacidade computacional para obtê-los em prazo compatível com o uso pretendido \parencite{Moin2011, Oberkampf2010}.
+Essas condicões raramente são separáveis, já que o refinamento exigido pela alta fidelidade eleva o custo do cálculo, e as arquiteturas capazes de absorvê-lo impõem restrições aos algoritmos \parencite{Karp2025, Kolla2018}.
+O método de Lattice Boltzmann tem despertado interesse por substituir a discretização direta das equações de Navier-Stokes por uma dinâmica local de funções de distribuição, adequada às máquinas de computação de alto desempenho (HPC) \parencite{Chen1998, Succi2001, Tomczak2021}.
 Sua aplicação a escoamentos compressíveis, porém, é recente e apoia-se em formulações que ainda coexistem na literatura \parencite{Tran2022, Rathnayake2024, Coreixas2017}, e a escolha da tecnologia de paralelização do resolvedor permanece pouco amparada por evidências comparativas \parencite{Davis2023, Martineau2016}.
 
 %---------------------------------------------------------------------------------------
 
 \section{Simulações de Alta Fidelidade}\label{sec:simulacoes-de-alta-fidelidade}
 
-Os fenômenos fluidodinâmicos de interesse prático dependem de pequenas escalas espaciais e temporais, o que exige discretizações refinadas e esquemas de alta ordem, enquanto os ensaios em túnel de vento tornam-se custosos, e por vezes inviáveis, para explorar amplos espaços de parâmetros, como os números de Mach e de Reynolds e a geometria do domínio.
+Os fenômenos fluidodinâmicos de interesse prático dependem de pequenas escalas espaciais e temporais, o que exige discretizações refinadas e esquemas de alta ordem.
+Os ensaios em túnel de vento tornam-se custosos, e por vezes inviáveis, para explorar amplos espaços de parâmetros, como os números de Mach e de Reynolds e a geometria do domínio.
 Métodos que conciliem exatidão e eficiência são, portanto, necessários em aplicações aeroespaciais e farmacêuticas, em turbomáquinas e em motores de combustão \parencite{Mira2023, Succi2001}.
-A versatilidade do LBM em escoamentos multifásicos e em meios porosos o consolidou como alternativa competitiva aos resolvedores baseados no método de volumes finitos (\textit{Finite Volume Method}, FVM) \parencite{Lauricella2025, Aniello2022}.
+A versatilidade do LBM em escoamentos multifásicos e em meios porosos o consolidou como alternativa competitiva aos resolvedores baseados no método de volumes finitos \parencite{Lauricella2025, Aniello2022}.
 
-A simulação de grandes escalas (\textit{Large Eddy Simulation}, LES) e a simulação numérica direta das equações de Navier-Stokes (\textit{Direct Numerical Simulation}, DNS) alcançam elevada precisão, porém são limitadas pelo custo computacional e pelo consumo de memória.
-Representar os efeitos turbulentos exige resolver um amplo intervalo de escalas, até a de Kolmogorov, na qual os vórtices são dissipados por efeitos viscosos \parencite{Davidson2015}, o que demanda malhas de dezenas de milhões a bilhões de elementos.
-Como a DNS é viável apenas para números de Reynolds reduzidos, a LES, que resolve somente as maiores escalas e modela as menores por submalha, é a abordagem mais frequente em simulações de alta fidelidade \parencite{Karp2025}.
+Entre as abordagens de alta fidelidade, a simulação de grandes escalas (\textit{Large Eddy Simulation}, LES) e a simulação numérica direta das equações de Navier-Stokes (\textit{Direct Numerical Simulation}, DNS) alcançam elevada precisão, porém são limitadas pelo custo computacional e pelo consumo de memória.
+Representar os efeitos turbulentos exige resolver um amplo intervalo de escalas, até a de Kolmogorov, na qual os vórtices são dissipados \parencite{Davidson2015}, o que demanda malhas de dezenas de milhões a bilhões de elementos.
+Como a abordagem DNS é viável apenas para números de Reynolds reduzidos, a LES, que resolve somente as maiores escalas e modela as menores por submalha, é a abordagem mais frequente em simulações de alta fidelidade \parencite{Karp2025}.
 
-Para ampliar o paralelismo, o domínio é dividido em subdomínios tratados em nós distintos, o que viabiliza simulações de grande porte e alta resolução em \textit{hardware} moderno \parencite{Kolla2018}.
+Para conter esse custo, o domínio é dividido em subdomínios tratados em nós de computação distintos de forma simultânea, o que viabiliza simulações de grande porte em \textit{hardware} moderno \parencite{Kolla2018}.
 A eficiência, contudo, depende da arquitetura: \textcite{Karp2025} demonstram que, em agrupamentos de CPUs, a escalabilidade forte de um resolvedor de elementos espectrais permanece praticamente linear, ao passo que em GPUs a eficiência paralela diminui de cerca de 80\% para 50\% a 60\% à medida que a carga por dispositivo se reduz.
+
+O LBM relaciona-se com ambos os problemas: tem sido empregado em simulações resolvidas de escoamentos turbulentos e multifásicos, de porte equivalente ao da DNS e da LES, executadas em várias GPUs \parencite{Lauricella2025}.
+A localidade de suas operações reduz a comunicação entre subdomínios às camadas de fronteira e dispensa reduções globais, o que favorece a escalabilidade entre dispositivos.
+Em contrapartida, a baixa intensidade aritmética da variante isotérmica a torna limitada pela largura de banda de memória \parencite{Tomczak2021, Ma2023}, o que faz a escalabilidade depender da hierarquia de memória de cada dispositivo.
+Essa dependência motiva a análise deste trabalho, pois a formulação compressível acrescenta, por nó da malha, uma carga aritmética que pode deslocar o fator limitante (Seção~\ref{sec:custo-computacional}).
 
 %---------------------------------------------------------------------------------------
 
@@ -49,25 +56,29 @@ A eficiência, contudo, depende da arquitetura: \textcite{Karp2025} demonstram q
 A confiabilidade das simulações de alta fidelidade fundamenta-se em processos rigorosos de verificação e validação (V\&V) \parencite{Roache1998, Oberkampf2010}.
 A verificação busca assegurar que as equações do modelo matemático sejam resolvidas corretamente, e a validação, que o modelo escolhido represente fielmente a realidade física \parencite{AIAA1998, ASME2009}.
 
-A abordagem experimental oferece contato direto com a realidade física, mas envolve alto custo, acesso limitado a dados no domínio e erros de medição, de calibração e de interferência dos sensores \parencite{Stern2001}.
-A simulação numérica extrai dados em qualquer ponto do domínio e explora amplos espaços de parâmetros a custo menor, ainda que sua precisão dependa da qualidade dos modelos e da resolução numérica \parencite{Oberkampf2010}.
+Ambos os processos recorrem a uma referência, que pode ser experimental ou analítica.
+Os dados experimentais oferecem contato direto com o fenômeno, mas envolvem alto custo, acesso limitado ao interior do domínio de interesse e erros de medição, de calibração e de interferência dos sensores \parencite{Stern2001}.
+As soluções analíticas são exatas, porém restritas a geometrias e condições de contorno simples. % TODO: Adicionar que podem ser numéricamente exatas, mas não necessáriamente o modelo físico correto.
+Um exemplo é o tubo de choque de Sod empregado neste trabalho, caso particular do problema de Riemann, cuja solução exata é conhecida (Seção~\ref{sec:problema-do-tubo-de-choque-de-sod}).
+Nos escoamentos de maior complexidade, em que nenhuma dessas abordagens está disponível, recorre-se à solução numérica, que aproxima as equações governantes por métodos de discretização e fornece dados em qualquer ponto do domínio a custo menor, embora a precisão dependa da qualidade dos modelos e da resolução numérica \parencite{Oberkampf2010}.
 
-A modelagem matemática traduz o problema físico em equações governantes, como as de Navier-Stokes ou a de Boltzmann, geralmente com simplificações.
-A solução analítica é exata, porém restrita a geometrias e condições de contorno elementares; em escoamentos complexos, é necessária a solução numérica, que aproxima as equações contínuas por métodos de discretização.
-
-A passagem da realidade física ao resultado numérico introduz diversas fontes de erro.
+Ao usar soluções analíticas ou numéricas como referência, a passagem da realidade física ao resultado numérico introduz diversas fontes de erro.
 O erro de modelagem decorre de simplificações nas equações governantes ou de modelos que não capturam toda a física envolvida, e manifesta-se na incapacidade de reproduzir observações experimentais \parencite{AIAA1998}.
-O erro de discretização origina-se da transformação das equações diferenciais em algébricas e engloba os truncamentos espaciais e temporais, que afetam a convergência e a captura das pequenas escalas \parencite{Roache1998}.
-Somam-se a eles o erro de iteração, associado ao alcance dos critérios de convergência, e o erro de arredondamento, decorrente da precisão finita.
-No LBM, a verificação exige estudos de convergência de malha que demonstrem a redução do erro global com taxa de segunda ordem em escoamentos subsônicos \parencite{Rathnayake2024, Succi2001}.
-Em regimes compressíveis, sobretudo supersônicos e hipersônicos, choques e descontinuidades introduzem erros adicionais capazes de degradar a ordem de convergência, o que exige técnicas de estabilização e sensores de choque \parencite{Tran2022, Qiu2020, Guo2020}.
+O erro de discretização nas soluções numéricas origina-se da transformação das equações diferenciais em algébricas, com os truncamentos espaciais e temporais que afetam a convergência e a captura das pequenas escalas \parencite{Roache1998}.
+A ele se somam o erro de iteração, associado ao alcance dos critérios de convergência, e o erro de arredondamento, decorrente da precisão finita nos números de ponto flutuante utilizados para computação.
+A verificação examina sobretudo os erros de discretização, de iteração e de arredondamento, e a redução do primeiro com o refinamento da malha define a ordem de convergência do esquema numérico.
+
+No LBM clássico com o operador BGK, a verificação em escoamentos subsônicos suaves exige estudos de convergência de malha que demonstrem a redução do erro global com taxa de segunda ordem \parencite{Rathnayake2024, Succi2001}, ordem nominal do esquema padrão.
+Formulações com propagação interpolada ou regularização podem exibir ordem efetiva inferior, a ser determinada caso a caso.
+Em regimes compressíveis, sobretudo supersônicos e hipersônicos, os choques e as descontinuidades introduzem erros adicionais capazes de degradar a ordem de convergência de qualquer variante, o que exige técnicas de estabilização e sensores de choque \parencite{Tran2022, Qiu2020, Guo2020}.
+Por esse motivo, a validação deste trabalho confronta o resolvedor com a solução analítica do tubo de choque de Sod e caracteriza a ordem de convergência efetiva (Capítulo~\ref{ch:resultados}).
 
 %---------------------------------------------------------------------------------------
 
 \section{Método de Lattice Boltzmann}\label{sec:metodo-de-lattice-boltzmann}
 
-O método de Lattice Boltzmann é uma abordagem mesoscópica fundamentada na teoria cinética dos gases: modela a evolução de funções de distribuição de partículas sobre uma rede discreta, em vez de resolver diretamente as variáveis macroscópicas contínuas.
-Integra-se naturalmente ao paralelismo massivo pelo caráter local de suas operações: o acoplamento espacial entre nós ocorre apenas pelo deslocamento das populações ao longo de direções discretas, e os termos não lineares permanecem restritos à colisão em cada nó \parencite{Chen1998, Succi2001, WolfGladrow2000}.
+O método de Lattice Boltzmann é uma abordagem mesoscópica fundamentada na teoria cinética dos gases, onde a evolução de funções de distribuição de partículas sobre uma rede discreta é modelada, em vez de resolver diretamente as variáveis macroscópicas contínuas.
+O LBM se integra naturalmente ao paralelismo massivo pelo caráter local de suas operações: o acoplamento espacial entre nós ocorre apenas pelo deslocamento das populações, e os termos não lineares permanecem restritos à colisão em cada nó \parencite{Chen1998, Succi2001, WolfGladrow2000}.
 
 %---------------------------------------------------------------------------------------
 
@@ -77,19 +88,19 @@ A origem do LBM está nos autômatos de gás de rede (LGA).
 O modelo precursor HPP (Hardy, Pomeau e de Pazzis) demonstrou que leis macroscópicas de conservação podem emergir de regras locais simples de colisão e propagação em uma rede quadrada bidimensional \parencite{HPP1973}, mas carecia de isotropia rotacional, o que impedia recuperar corretamente as equações de Navier-Stokes.
 \textcite{Frisch1986} superaram o obstáculo com o modelo FHP (Frisch, Hasslacher e Pomeau), que emprega uma rede hexagonal.
 
-Conforme \textcite{Kruger2017}, os modelos LGA eram atraentes pela simplicidade, pela facilidade de paralelização e pela ausência de erros de arredondamento, já que as colisões operam sobre variáveis booleanas.
-Tinham, porém, o ruído estatístico inerente a essas variáveis, a falta de invariância de Galileu, uma dependência anômala da pressão com a velocidade e regras de colisão cuja complexidade cresce acentuadamente com o número de velocidades \parencite{WolfGladrow2000}.
-A transição para o LBM, liderada por \textcite{McNamara1988}, substituiu as partículas booleanas por suas médias de conjunto, $f_i$, isto é, funções de distribuição contínuas que representam a probabilidade de encontrar uma partícula em determinada direção de velocidade, o que eliminou o ruído estatístico e permitiu uma representação mais fiel da hidrodinâmica \parencite{Chen1998}.
-\textcite{Higuera1989} linearizaram o operador de colisão em torno da distribuição de equilíbrio, o que facilitou a análise de estabilidade e viabilizou a implementação numérica que fundamenta a maioria das variantes atuais.
-Os modelos de tempo de relaxação único (BGK), propostos de forma independente, foram consolidados por \textcite{Qian1992}, que forneceram a formulação simples e amplamente utilizada do LBM contemporâneo.
+Os modelos LGA eram simples, de fácil paralelização e livres de erros de arredondamento, pois as colisões operam sobre variáveis booleanas \parencite{Kruger2017}.
+Tinham, porém, ruído estatístico, falta de invariância de Galileu, dependência anômala da pressão com a velocidade e regras de colisão cuja complexidade cresce acentuadamente com o número de velocidades \parencite{WolfGladrow2000}.
+A transição para o LBM, liderada por \textcite{McNamara1988}, substituiu as partículas booleanas por suas médias de conjunto $f$, funções de distribuição contínuas, o que eliminou o ruído estatístico \parencite{Chen1998}.
+\textcite{Higuera1989} linearizaram o operador de colisão em torno da distribuição de equilíbrio, o que facilitou a análise de estabilidade e fundamenta a maioria das variantes atuais.
+Os modelos de tempo de relaxação único (BGK), propostos de forma independente, foram consolidados por \textcite{Qian1992} na formulação mais utilizada do LBM contemporâneo.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Escalas de Descrição e Modelagem Mesoscópica}\label{subsec:lbm-escalas}
 
 A descrição de sistemas fluidodinâmicos admite três escalas, conforme o grau de detalhamento requerido (\autoref{fig:lbm-escalas}).
-Na escala molecular, ou microscópica, o fluido é um conjunto de partículas que seguem as leis de Newton, rastreadas por dinâmica molecular, descrição precisa, porém computacionalmente proibitiva para os sistemas macroscópicos da engenharia.
-Na escala macroscópica, o fluido é um meio contínuo, caracterizado por campos médios de massa específica, velocidade, pressão e temperatura e regido por equações de conservação, como as de Navier-Stokes.
+Na escala molecular, ou microscópica, o fluido é um conjunto de partículas que seguem as leis de Newton, rastreadas por dinâmica molecular, descrição precisa, porém computacionalmente proibitiva para os sistemas macroscópicos encontrados na engenharia.
+Na escala macroscópica, o fluido é um meio contínuo, caracterizado por campos médios e regido por equações de conservação, como as de Navier-Stokes.
 
 O LBM situa-se na escala mesoscópica, como elo entre as duas descrições.
 Em vez de rastrear cada partícula, opera sobre a função de distribuição de probabilidade $f(\mathbf{x}, \boldsymbol{\xi}, t)$, que descreve a densidade provável de partículas na posição $\mathbf{x}$, com velocidade microscópica $\boldsymbol{\xi}$, no instante $t$, e cuja evolução é governada pela equação de transporte de Boltzmann:
@@ -100,54 +111,63 @@ onde $\mathbf{F}$ representa as forças externas volumétricas, como a gravidade
 
 \begin{figure}[H]
     \centering
-    \caption{Escalas de descrição de um fluido: microscópica, com partículas individuais e dinâmica molecular; mesoscópica, com funções de distribuição de probabilidade e equação de Boltzmann; e macroscópica, com meio contínuo e equações de Navier-Stokes.}
+    \caption{Escalas de descrição de um fluido: microscópica, com partículas individuais e dinâmica molecular; mesoscópica, com funções de distribuição de probabilidade sobre uma rede e equação de Boltzmann; e macroscópica, com meio contínuo e equações de Navier-Stokes.}
     \label{fig:lbm-escalas}
     \includegraphics[width=0.85\linewidth]{fig/macroscopic-mesoscopic-microscopic-scales.png}
-    \fonte{\textcite{Saito2017}.}
+    \fonte{Adaptado de \textcite{Saito2017}.}
 \end{figure}
 
-A transição entre as escalas é parametrizada pelo número de Knudsen, $Kn = \lambda/L$, em que $\lambda$ é o percurso livre médio das partículas e $L$ é o comprimento característico do escoamento.
+A transição entre as escalas é parametrizada pelo número de Knudsen $Kn = \lambda/L$, em que $\lambda$ é o percurso livre médio das partículas e $L$ é o comprimento característico do escoamento.
 Para $Kn \ll 1$, as colisões ocorrem em escala muito menor que as variações espaciais macroscópicas, e a distribuição local permanece próxima do equilíbrio de Maxwell-Boltzmann.
-Nesse regime de meio contínuo, o LBM recupera as equações de Navier-Stokes pela análise assintótica multiescala de Chapman-Enskog \parencite{Chen1998, Benzi1992}, desenvolvida originalmente por \textcite{Chapman1916} e por \textcite{Enskog1917} para fenômenos de transporte em gases diluídos e sistematizada por \textcite{Chapman1970}.
-Adaptada à equação de Boltzmann discretizada, ela relaciona o tempo de relaxação aos coeficientes de transporte do LBM, e \textcite{He1997} formalizaram a conexão entre a equação de Boltzmann contínua e sua forma discretizada no espaço e no tempo.
+Nesse regime de meio contínuo, o LBM recupera as equações de Navier-Stokes pela análise assintótica multiescala de Chapman-Enskog \parencite{Chen1998, Benzi1992}, desenvolvida originalmente por \textcite{Chapman1916} e por \textcite{Enskog1917} para gases diluídos e sistematizada por \textcite{Chapman1970}.
+A conexão entre a equação de Boltzmann contínua e sua forma discretizada no espaço e no tempo foi formalizada por \textcite{He1997}.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Pesquisas em Escoamentos Compressíveis e Ondas de Choque}\label{subsec:lbm-pesquisas-compressivel}
 
-A aplicação do LBM a escoamentos compressíveis acompanha o método desde seus primeiros anos, mas só nas duas últimas décadas alcançou maturidade para tratar choques intensos.
-A limitação tem duas causas: o equilíbrio obtido pelo truncamento da distribuição de Maxwell-Boltzmann em segunda ordem na velocidade macroscópica restringe o método a números de Mach reduzidos, e a rede usual de velocidades discretas não possui momentos isotrópicos de ordem suficiente para reproduzir o fluxo de energia do regime térmico.
-As primeiras tentativas de superá-la acrescentaram velocidades discretas e termos de ordem superior ao equilíbrio, como no modelo termo-hidrodinâmico de \textcite{Alexander1993}, com uma única função de distribuição sobre uma rede hexagonal de treze velocidades, restrito a pequenas diferenças de temperatura.
-A revisão de \textcite{Chen1998} aponta, no fim da década de 1990, como limitações em aberto a compressibilidade artificial associada ao erro de ordem $Ma^2$ e a ausência de um modelo térmico estável.
+A aplicação do LBM a escoamentos compressíveis acompanha o método desde seus primeiros desenvolvimentos, mas só nas duas últimas décadas alcançou maturidade para tratar choques intensos.
+O modelo clássico fica restrito a números de Mach reduzidos por duas limitações: o equilíbrio truncado em segunda ordem na velocidade e a rede usual, sem momentos isotrópicos de ordem suficiente para o fluxo de energia (Seção~\ref{sec:lbm-limitacoes-classico}).
+As primeiras tentativas de superá-las acrescentaram velocidades discretas e termos de ordem superior ao equilíbrio, como no modelo termo-hidrodinâmico de \textcite{Alexander1993}, com uma única função de distribuição sobre rede hexagonal de treze velocidades, restrito a pequenas diferenças de temperatura.
+A revisão de \textcite{Chen1998} aponta, no fim da década de 1990, a compressibilidade artificial de ordem $Ma^2$ e a ausência de um modelo térmico estável como limitações em aberto.
 
-Delinearam-se então duas linhas de solução.
-A primeira ampliou o conjunto de velocidades discretas, nas redes multivelocidade, que satisfazem as condições de isotropia dos momentos de ordem superior exigidas pelo regime térmico: \textcite{Sun1998} propôs um conjunto adaptativo à velocidade e à temperatura locais, e \textcite{Yan1999} construíram um modelo capaz de capturar ondas de choque com poucas velocidades.
+Duas linhas de solução foram então seguidas.
+A primeira ampliou o conjunto de velocidades discretas, nas redes multivelocidade, que satisfazem a isotropia dos momentos de ordem superior exigida pelo regime térmico: \textcite{Sun1998} propôs um conjunto adaptativo à velocidade e à temperatura locais, e \textcite{Yan1999} construíram um modelo capaz de capturar ondas de choque com poucas velocidades.
 A segunda substituiu a propagação exata sobre a rede por esquemas de diferenças finitas aplicados à equação de Boltzmann discreta, adotados por \textcite{Watari2003} em um modelo térmico bidimensional e por \textcite{Kataoka2004} para recuperar as equações de Euler compressíveis.
-Na mesma direção, \textcite{Qu2007} construíram o equilíbrio por integração de uma função circular sobre o espaço de velocidades, em lugar da forma polinomial, o que estendeu o modelo a escoamentos invíscidos com números de Mach elevados.
+\textcite{Qu2007} construíram o equilíbrio por integração de uma função circular sobre o espaço de velocidades, em lugar da forma polinomial, o que estendeu o modelo a escoamentos invíscidos com números de Mach elevados.
 
 A partir de meados da década de 2000, o esforço voltou-se à estabilização do método sobre redes de tamanho convencional, computacionalmente mais convenientes.
-\textcite{Latt2006} propuseram regularizar as funções de distribuição antes da colisão, substituindo a parcela de não equilíbrio por sua reconstrução a partir de um conjunto reduzido de momentos, o que remove as contribuições espúrias de ordem superior responsáveis pela perda de estabilidade.
-\textcite{Coreixas2017} sistematizaram a ideia em uma regularização recursiva, e \textcite{Feng2019} a empregaram em um modelo térmico híbrido, com a energia resolvida por diferenças finitas e massa e quantidade de movimento sob a dinâmica de Lattice Boltzmann.
-Em paralelo, \textcite{Frapolli2015} estenderam a formulação entrópica ao regime compressível, determinando o equilíbrio pela minimização de um funcional de entropia sujeito às restrições de conservação, e \textcite{Saadat2019} mostraram ser possível ajustar de forma independente o número de Prandtl e o expoente adiabático na rede padrão.
+\textcite{Latt2006} propuseram regularizar as funções de distribuição antes da colisão, reconstruindo a parcela de não equilíbrio a partir de um conjunto reduzido de momentos, o que remove contribuições espúrias de ordem superior.
+\textcite{Coreixas2017} sistematizaram a ideia em uma regularização recursiva, e \textcite{Feng2019} a empregaram em um modelo térmico híbrido, com a energia resolvida por diferenças finitas.
+Em paralelo, \textcite{Frapolli2015} estenderam a formulação entrópica ao regime compressível, com o equilíbrio determinado pela minimização de um funcional de entropia, e \textcite{Saadat2019} mostraram ser possível ajustar de forma independente o número de Prandtl e o expoente adiabático na rede padrão.
 
-O tratamento de escoamentos com choques fortes e grandes variações de temperatura consolidou-se, de 2018 a 2025, em torno de duas ideias complementares.
-A primeira é o uso de referenciais móveis para as velocidades discretas, proposto por \textcite{Dorschner2018} como partículas sob demanda, em que cada nó define seu próprio referencial, e estendido a escoamentos com descontinuidades severas \parencite{Kallikounis2022}.
-A segunda é o emprego de duas funções de distribuição (\textit{Double Distribution Function}, DDF), uma para massa e quantidade de movimento e outra para a energia total, associado a redes deslocadas (\textit{shifted lattices}), nas quais as velocidades discretas são transladadas por uma velocidade de referência constante, próxima da velocidade característica do escoamento.
-Essa combinação foi formulada por \textcite{Tran2022} para escoamentos compressíveis com elevado número de Reynolds e detalhada e validada por \textcite{Rathnayake2024} em casos supersônicos, com equilíbrios obtidos pela minimização de um funcional de entropia e estabilidade preservada na presença de choques.
+O tratamento de choques fortes e grandes variações de temperatura consolidou-se, a partir de 2018, em torno de duas ideias.
+A primeira é o uso de referenciais móveis para as velocidades discretas, proposto por \textcite{Dorschner2018} como partículas sob demanda, com um referencial próprio em cada nó, e estendido a escoamentos com descontinuidades severas \parencite{Kallikounis2022}.
+A segunda é o emprego de duas funções de distribuição (\textit{Double Distribution Function}, DDF), uma para massa e quantidade de movimento e outra para a energia total, associado a redes deslocadas (\textit{shifted lattices}), cujas velocidades discretas são transladadas por uma velocidade de referência constante próxima da velocidade característica do escoamento.
+Essa combinação foi formulada por \textcite{Tran2022} para escoamentos compressíveis com elevado número de Reynolds e validada por \textcite{Rathnayake2024} em casos supersônicos, com equilíbrios obtidos pela minimização de um funcional de entropia e estabilidade preservada na presença de choques.
+
 A formulação semilagrangiana de \textcite{Wilde2020} remove a restrição de que o deslocamento das populações coincida com os nós da malha, e \textcite{Renard2021} aperfeiçoaram esquemas híbridos aplicados a regimes subsônicos e supersônicos sobre redes padrão.
-\textcite{Qiu2020} investigaram, com um modelo de dupla distribuição, a interação entre onda de choque e camada limite em tubo de choque, problema pouco explorado com o LBM, e \textcite{Guo2020} aplicaram o método a escoamentos tridimensionais com grandes variações de temperatura e de massa específica.
+\textcite{Qiu2020} resolveram, com dupla distribuição e diferenças finitas, a interação entre onda de choque e camada limite em tubo de choque.
+\textcite{Guo2020} propuseram um modelo híbrido, com regularização recursiva híbrida na rede D3Q19 para a massa e a quantidade de movimento e volumes finitos para a entropia, aplicado a escoamentos tridimensionais de alta velocidade.
 
-Nenhuma formulação se tornou dominante: a escolha depende do compromisso entre custo por nó, faixa de números de Mach e complexidade de implementação.
-O custo adicional assume formas distintas: estêncil maior nas redes multivelocidade, perda de localidade nos esquemas híbridos de diferenças finitas e iterações locais com interpolação nas formulações de dupla distribuição sobre redes deslocadas.
-Os avanços consolidam, assim, o LBM como alternativa viável para simulações aeroespaciais complexas, mas elevam o custo do ciclo de cálculo em relação ao método isotérmico clássico, o que reforça a importância da eficiência da implementação.
+Nenhuma formulação se tornou dominante: a escolha depende do compromisso entre custo por nó, faixa de números de Mach e complexidade de implementação, e o custo adicional assume formas distintas em cada família (\autoref{tab:lbm-comparacao-compressivel}).
+Os avanços consolidam, assim, o LBM como alternativa viável para simulações aeroespaciais complexas, mas elevam o custo do ciclo de cálculo em relação ao método isotérmico clássico, o que reforça a importância de implementações eficientes.
 
 %---------------------------------------------------------------------------------------
 
 \section{Tecnologias de Computação de Alto Desempenho}\label{sec:tecnologias-de-computacao-de-alto-desempenho}
 
-A evolução dos supercomputadores em direção a arquiteturas heterogêneas favoreceu algoritmos como o LBM, dada a localidade espacial da colisão e o padrão regular de acesso à memória da propagação \parencite{Ma2023, Tomczak2021}.
-As GPUs, originalmente voltadas à renderização gráfica, são eficientes no cálculo científico por executarem milhares de operações simultâneas \parencite{Herdman2012, Karp2025}; as FPGAs oferecem flexibilidade e eficiência energética para algoritmos específicos; e os aceleradores tensoriais (\textit{Tensor Processing Unit}, TPU) ampliam a diversidade de alvos.
-A \autoref{fig:hpc-arquitetura-heterogenea} resume a organização típica de um nó heterogêneo e os níveis de paralelismo explorados pelos modelos de programação avaliados neste trabalho.
+Os supercomputadores evoluíram em direção a arquiteturas heterogêneas, que combinam processadores de propósito geral (CPUs), com poucos núcleos de elevado desempenho individual, e aceleradores, com muitos núcleos mais simples e memória própria.
+Entre os aceleradores, as GPUs são as mais difundidas no cálculo científico \parencite{Herdman2012, Karp2025}.
+Uma GPU reúne dezenas de multiprocessadores, cada qual com centenas de unidades aritméticas simples que executam a mesma instrução sobre dados distintos (modelo SIMT, \textit{Single Instruction, Multiple Threads}), e uma memória de alta largura de banda.
+A latência dos acessos é ocultada pela troca entre grupos de fluxos residentes, em lugar de grandes memórias \textit{cache}, e o desempenho é máximo em cargas com muito paralelismo de dados e acesso regular à memória \parencite{Lindholm2008}.
+
+As FPGAs seguem outro princípio: o algoritmo é implementado como um circuito dedicado, montado a partir de blocos lógicos, de memória e de processamento de sinais interligados por uma rede reconfigurável, o que oferece flexibilidade e eficiência energética ao custo de maior esforço de desenvolvimento \parencite{Kuon2008}.
+Os aceleradores tensoriais, como a TPU (\textit{Tensor Processing Unit}), baseiam-se em uma matriz de multiplicadores e acumuladores, otimizada para as multiplicações matriciais de precisão reduzida das redes neurais \parencite{Jouppi2017}, o que limita seu aproveitamento em simulações em dupla precisão como a deste trabalho.
+
+O dispositivo acelerador comunica-se com a CPU por um barramento de interconexão (\textit{Peripheral Component Interconnect Express}, PCIe), de largura de banda muito inferior à das memórias locais, o que exige manter os dados na memória do dispositivo durante os cálculos.
+A \autoref{fig:hpc-arquitetura-heterogenea} resume a organização típica de um nó de computação heterogêneo e os níveis de paralelismo explorados pelos modelos avaliados.
+
 
 \begin{figure}[H]
     \centering
@@ -157,20 +177,22 @@ A \autoref{fig:hpc-arquitetura-heterogenea} resume a organização típica de um
     \fonte{O autor (2026).}
 \end{figure}
 
-A escolha entre modelos proprietários, como o CUDA, e camadas de abstração, como o Kokkos e o RAJA, é um compromisso entre desempenho e portabilidade.
-Os modelos proprietários exploram ao máximo um \textit{hardware} específico, mas restringem a portabilidade e exigem reescritas na migração para outras arquiteturas; as camadas de abstração executam o mesmo código em múltiplas plataformas com modificações mínimas, ao custo de possível leve penalização de desempenho \parencite{Wong2016}.
-Os modelos são agrupados a seguir pela forma como expõem o paralelismo ao programador (diretivas de compilação, interfaces de baixo nível, camadas de abstração em C++ e passagem de mensagens), e o Capítulo~\ref{ch:implementacao-computacional} retoma cada um do ponto de vista de sua implementação.
+Cada componente do nó de computação exige uma forma distinta de expressar o paralelismo: vetorização e memória compartilhada nas CPUs, milhares de fluxos organizados em blocos nas GPUs e troca de mensagens entre nós de computação.
+A escolha da tecnologia de programação é, portanto, um compromisso entre desempenho e portabilidade.
+Os modelos proprietários, como o CUDA, exploram ao máximo um \textit{hardware} específico, mas restringem a portabilidade e exigem reescritas na migração para outras arquiteturas.
+As camadas de abstração, por sua vez, executam o mesmo código em múltiplas plataformas com modificações mínimas, ao custo de eventual penalização de desempenho \parencite{Wong2016}.
+Os modelos avaliados agrupam-se pela forma como expõem o paralelismo ao programador (diretivas de compilação, interfaces de baixo nível, camadas de abstração em C++ e passagem de mensagens), e o Capítulo~\ref{ch:implementacao-computacional} retoma cada um do ponto de vista de sua implementação.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Modelos Baseados em Diretivas de Compilação}\label{subsec:modelos-por-diretivas}
 
-Os modelos baseados em diretivas pressupõem um código sequencial existente, com o paralelismo expresso por anotações (\texttt{\#pragma}) interpretadas pelo compilador, o que preserva uma única base de código: ignoradas as diretivas, o programa permanece válido e produz o mesmo resultado em execução sequencial.
+Os modelos baseados em diretivas pressupõem um código sequencial existente, com o paralelismo expresso por anotações (\texttt{\#pragma}) interpretadas pelo compilador, o que preserva uma única base de código, pois o programa permanece válido e sequencial quando as diretivas são ignoradas.
 
-O OpenMP (\textit{Open Multi-Processing}), concebido para sistemas de memória compartilhada, é amplamente utilizado em CPUs multinúcleo e adota o modelo de bifurcação e junção (\textit{fork-join}): um fluxo principal cria fluxos auxiliares ao entrar em uma região paralela e os reúne ao final dela.
-A partir da versão 4.0, suporta também aceleradores por meio das diretivas de descarregamento (\textit{offloading}), e seus atrativos são a facilidade de integração, a maturidade da especificação e a disponibilidade nos compiladores de uso corrente \parencite{Dagum1998}.
+O OpenMP (\textit{Open Multi-Processing}), concebido para sistemas de memória compartilhada e amplamente utilizado em CPUs multinúcleo, adota o modelo de bifurcação e junção (\textit{fork-join}): um fluxo principal cria fluxos auxiliares ao entrar em uma região paralela e os reúne ao final dela.
+Desde a versão 4.0, suporta também aceleradores por meio das diretivas de descarregamento (\textit{offloading}), e seus atrativos são a facilidade de integração e a maturidade da especificação \parencite{Dagum1998}.
 
-O OpenACC (\textit{Open Accelerators}) também se baseia em diretivas e acelera trechos de código em dispositivos heterogêneos, especialmente GPUs, sem a reescrita de aplicações existentes.
+O OpenACC (\textit{Open Accelerators}) acelera trechos de código em dispositivos heterogêneos, especialmente GPUs, sem a reescrita de aplicações existentes.
 Sua abordagem é descritiva: o programador informa a existência de paralelismo e delega ao compilador o mapeamento das iterações no dispositivo, o que reduz o esforço de programação, mas torna o desempenho dependente da qualidade do compilador \parencite{Wolfe2018}.
 
 %---------------------------------------------------------------------------------------
@@ -180,40 +202,48 @@ Sua abordagem é descritiva: o programador informa a existência de paralelismo 
 Os modelos de baixo nível expressam o paralelismo de forma explícita, em funções de cálculo executadas no dispositivo, denominadas \textit{kernels}.
 Cabe ao programador separar o código do hospedeiro (\textit{host}) do código do acelerador e controlar a hierarquia de memória, as transferências, a organização dos fluxos de execução e a sincronização.
 
-A plataforma CUDA, da NVIDIA, estende a linguagem C/C++ e é um dos modelos proprietários mais maduros para GPUs.
-Permite controle fino sobre a memória e a execução paralela, com os fluxos organizados em blocos e grades e níveis distintos de memória (global, compartilhada por bloco, constante e registradores), cuja utilização determina o desempenho, mas restringe o código a \textit{hardware} NVIDIA \parencite{Chakrabarti2012}.
+A plataforma CUDA, da NVIDIA, estende a linguagem C++ e é um dos modelos proprietários mais maduros para GPUs, com controle fino sobre a memória (de acesso global, compartilhada por bloco, constante e registradores) e sobre a organização dos fluxos em blocos e grades, ao custo de restringir o código a \textit{hardware} NVIDIA \parencite{Chakrabarti2012}.
+
+O HIP (\textit{Heterogeneous-computing Interface for Portability}), da AMD, é uma interface em C++ de sintaxe muito próxima à do CUDA, que compila o mesmo código para GPUs AMD, pela plataforma ROCm, e para GPUs NVIDIA, pela tradução em chamadas do CUDA.
+Dispõe ainda de ferramentas de conversão automática de código CUDA \parencite{AMD2026HIP}.
+Por manter a hierarquia de blocos, fluxos e memórias do CUDA, obtém a portabilidade entre fabricantes sem abandonar o modelo de baixo nível.
 
 O OpenCL (\textit{Open Computing Language}), mantido pelo Khronos Group, é uma interface aberta para o cálculo paralelo em CPUs, GPUs, FPGAs e outros aceleradores.
 Baseado em \textit{kernels} e filas de comandos, permite escrever código portável, embora otimizações específicas para cada \textit{hardware} sejam frequentemente necessárias \parencite{Stone2010}.
-Os \textit{kernels} são compilados em tempo de execução, o que permite adaptá-los ao dispositivo encontrado, mas implica latência na inicialização, manutenção dos \textit{kernels} em arquivos separados e código de infraestrutura para descoberta de plataformas, criação de contextos, alocação de \textit{buffers} e enfileiramento de comandos.
+A compilação dos \textit{kernels} em tempo de execução permite adaptá-los ao dispositivo encontrado, mas implica latência na inicialização e código de infraestrutura para descoberta de plataformas, criação de contextos, alocação de \textit{buffers} e enfileiramento de comandos.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Camadas de Abstração para Portabilidade de Desempenho}\label{subsec:camadas-de-abstracao}
 
-As camadas de abstração surgiram da fragmentação do ecossistema de aceleradores nos grandes laboratórios de pesquisa, cujos códigos precisam sobreviver à substituição periódica das máquinas e à troca de fabricante.
-Expressam o paralelismo por recursos do C++, como modelos (\textit{templates}) e expressões \textit{lambda}, resolvidos em tempo de compilação, de modo que o mesmo código-fonte gera código nativo para o alvo selecionado, sem chamadas intermediárias em tempo de execução.
+As camadas de abstração surgiram da fragmentação do ecossistema de aceleradores nos grandes laboratórios de pesquisa, cujos códigos precisam sobreviver à troca periódica de máquinas e de fabricantes.
+Expressam o paralelismo por recursos da linguagem C++, como modelos parametrizados (\textit{templates}) e expressões \textit{lambda}, resolvidos em tempo de compilação, de modo que o mesmo código-fonte gera código nativo para cada alvo.
 
-O Kokkos, desenvolvido no Sandia National Laboratories, visa à portabilidade entre CPUs e GPUs sem prejuízo de desempenho: permite escrever C++ agnóstico à plataforma e delega à biblioteca a otimização para o \textit{hardware} disponível \parencite{CarterEdwards2014}.
-Seu diferencial é abstrair simultaneamente a execução, por espaços de execução, e os dados, por estruturas multidimensionais (\texttt{Kokkos::View}) cuja disposição em memória é escolhida conforme o alvo.
-Essa escolha favorece a vetorização em CPUs e o acesso coalescido em GPUs, no qual os fluxos vizinhos acessam posições adjacentes da memória em uma única transação.
+O Kokkos, desenvolvido no Sandia National Laboratories, permite escrever C++ agnóstico à plataforma e delega à biblioteca a otimização para o \textit{hardware} disponível \parencite{CarterEdwards2014}.
+Seu diferencial é abstrair simultaneamente a execução, por espaços de execução, e os dados, por estruturas multidimensionais (\texttt{Kokkos::View}) cuja disposição em memória é escolhida conforme o alvo, o que favorece a vetorização em CPUs e o acesso coalescido em GPUs, em que fluxos vizinhos acessam posições adjacentes da memória.
 
-O RAJA, desenvolvido no Lawrence Livermore National Laboratory, também visa ao C++ portável para arquiteturas heterogêneas \parencite{Beckingsale2019}, mas com abrangência deliberadamente menor: abstrai apenas os laços, por políticas de execução (\texttt{RAJA::forall}), e deixa à aplicação a decisão sobre onde os dados residem, o que facilita a adoção incremental em códigos com estruturas de dados próprias.
-Ambas as bibliotecas dispõem de implementações baseadas no padrão SYCL e em interfaces de outros fabricantes, como o HIP, o que amplia os aceleradores alcançáveis a partir de uma única base de código.
+O RAJA, desenvolvido no Lawrence Livermore National Laboratory, também visa ao C++ portável, mas com abrangência deliberadamente menor \parencite{Beckingsale2019}.
+A abstração limita-se aos laços de repetição, por políticas de execução (\texttt{RAJA::forall}), e a localização dos dados fica a cargo da aplicação, o que facilita a adoção incremental em códigos com estruturas de dados próprias.
+Ambas as bibliotecas dispõem de implementações baseadas em interfaces de fabricantes, como o HIP, e no padrão SYCL, o que amplia os aceleradores alcançáveis a partir de uma única base de código.
 
-Originada no Helmholtz-Zentrum Dresden-Rossendorf (HZDR) e na Technische Universität Dresden, a biblioteca Alpaka baseia-se em um modelo hierárquico explícito de paralelismo que mapeia a execução em malhas, blocos, fluxos e elementos \parencite{Zenker2016, Matthes2017}.
-Diferentemente do Kokkos, que acopla a execução ao gerenciamento de dados, e do RAJA, restrito às políticas de laços, o Alpaka expressa a hierarquia computacional de forma próxima à de modelos nativos como o CUDA, com abstrações resolvidas em compilação.
-Sua versão 3 (\textit{alpaka3}) é uma reformulação em C++20 que emprega conceitos (\textit{concepts}), metaprogramação estática e filas unificadas de comandos para simplificar o despacho de operações e o controle de fluxos assíncronos em CPUs e GPUs \parencite{AlpakaContributors2026}.
+O SYCL, especificado pelo Khronos Group, é uma camada de abstração em C++ moderno, com o código do hospedeiro e o do acelerador no mesmo arquivo, memória gerenciada por \textit{buffers} ou por memória unificada e núcleos de cálculo expressos por funções \textit{lambda} \parencite{Reinders2021, Khronos2020SYCL}.
+Suas implementações, como o DPC++ e o AdaptiveCpp, geram código para GPUs de diversos fabricantes, CPUs e FPGAs.
+
+A biblioteca Alpaka, originada no Helmholtz-Zentrum Dresden-Rossendorf (HZDR) e na Technische Universität Dresden, baseia-se em um modelo hierárquico explícito de paralelismo que mapeia a execução em malhas, blocos, fluxos e elementos \parencite{Zenker2016, Matthes2017}.
+Diferentemente do Kokkos, que acopla a execução ao gerenciamento de dados, e do RAJA, restrito às políticas de laços, o Alpaka expressa a hierarquia computacional de forma próxima à do CUDA, com abstrações resolvidas em compilação.
+Sua versão 3 (\textit{alpaka3}) é uma reformulação em C++20, com conceitos (\textit{concepts}), metaprogramação estática e filas unificadas de comandos que simplificam o despacho de operações e o controle de fluxos assíncronos em CPUs e GPUs \parencite{AlpakaContributors2026}.
 
 %---------------------------------------------------------------------------------------
 
 \subsection{Paralelismo em Memória Distribuída}\label{subsec:paralelismo-distribuido}
 
-Simulações de grande porte excedem a memória e a capacidade de processamento de um único nó, o que exige distribuir o domínio entre máquinas conectadas por uma rede de interconexão.
+Simulações de grande porte excedem a memória de um único nó de computação, o que exige distribuir o domínio entre máquinas conectadas por uma rede de interconexão.
 
 A interface de passagem de mensagens (\textit{Message Passing Interface}, MPI), especificada pelo MPI Forum, é o padrão para a comunicação entre processos em sistemas distribuídos, amplamente utilizado em agrupamentos de computadores (\textit{clusters}) e supercomputadores \parencite{TheMPIForum1993}.
-Cada processo detém um subdomínio e troca com seus vizinhos, a cada passo de tempo, apenas as camadas de fronteira; o custo de comunicação é, assim, proporcional à área das interfaces, e não ao volume do subdomínio, propriedade que sustenta a escalabilidade em problemas de grande porte.
-Na prática corrente, o MPI combina-se aos modelos anteriores em uma abordagem híbrida: coordena os nós, enquanto um modelo de memória compartilhada ou de acelerador explora o paralelismo no interior de cada um \parencite{Kolla2018}.
+Cada processo detém um subdomínio e troca com seus vizinhos, a cada passo de tempo, apenas as camadas de fronteira.
+O custo de comunicação é, assim, proporcional à área das interfaces, e não ao volume do subdomínio, propriedade que sustenta a escalabilidade.
+Na prática corrente, o MPI combina-se aos modelos anteriores em uma abordagem híbrida: coordena os nós de computação, enquanto um modelo de memória compartilhada ou de acelerador explora o paralelismo no interior de cada um \parencite{Kolla2018}.
+Como se trata de uma especificação, o padrão admite diversas implementações, como o Open MPI \parencite{Gabriel2004}, o MPICH \parencite{Gropp1996} e as bibliotecas dele derivadas, mantidas por fabricantes, de modo que o desempenho da comunicação depende também da implementação e de sua configuração para o transporte de cada sistema.
 
 %---------------------------------------------------------------------------------------
 
@@ -222,33 +252,32 @@ Na prática corrente, o MPI combina-se aos modelos anteriores em uma abordagem h
 A avaliação comparativa de tecnologias de paralelização enfrenta uma dificuldade metodológica: programas completos acumulam otimizações específicas de uma tecnologia, o que impede atribuir as diferenças observadas ao modelo de programação, e reescrever um resolvedor maduro em cada tecnologia é inviável no prazo de uma pesquisa.
 O impasse é contornado com miniaplicativos, programas reduzidos que preservam o \textit{kernel} de cálculo, o padrão de acesso à memória e o padrão de comunicação da aplicação de origem e descartam as funcionalidades acessórias.
 
-A abordagem tem dupla função.
-Como instrumento de medida, o miniaplicativo isola o comportamento que se pretende observar e permite reimplementá-lo em cada tecnologia com esforço compatível com um estudo comparativo, conforme demonstrado por \textcite{Herdman2012} na avaliação de modelos por diretivas frente a modelos de baixo nível.
-Como instrumento de projeto, funciona como protótipo do resolvedor, antecipando decisões de arquitetura de \textit{software}.
+Como instrumento de medida, o miniaplicativo isola o comportamento que se pretende observar e permite reimplementá-lo em cada tecnologia com esforço compatível com um estudo comparativo.
+Como instrumento de projeto, ele funciona como protótipo do resolvedor, antecipando decisões de arquitetura de \textit{software}.
 Estudos recentes de portabilidade de desempenho adotam essa estratégia para comparar camadas de abstração em máquinas distintas \parencite{Davis2023}.
-A prática consolidou-se com o conjunto Mantevo, do Sandia National Laboratories, que reuniu miniaplicativos de diferentes classes de cálculo científico, como o miniFE (elementos finitos), o miniMD (dinâmica molecular) e o miniGhost (troca de camadas de fronteira) \parencite{Heroux2009}.
+A prática consolidou-se com o conjunto Mantevo, do Sandia National Laboratories, que reuniu miniaplicativos de diferentes classes de cálculo científico, como o miniFE (elementos finitos) e o miniMD (dinâmica molecular) \parencite{Heroux2009}.
 
 Na dinâmica dos fluidos, três exemplos aproximam-se particularmente deste trabalho.
 O LULESH, do Lawrence Livermore National Laboratory, reproduz o \textit{kernel} de um resolvedor lagrangiano de hidrodinâmica em malha não estruturada e tornou-se referência em estudos de portabilidade por dispor de implementações em praticamente todos os modelos de programação \parencite{Karlin2013}.
-O CloverLeaf, do \textit{Atomic Weapons Establishment} (Reino Unido), resolve as equações de Euler compressíveis bidimensionais em malha cartesiana por um esquema explícito de volumes finitos, o que o aproxima do escopo físico desta pesquisa \parencite{Mallinson2013}; com esse código, \textcite{Herdman2012} confrontaram OpenACC, OpenCL e CUDA.
-O TeaLeaf, em contraste, isola a solução implícita de um problema de condução de calor e permite comparar resolvedores iterativos e suas exigências de comunicação coletiva \parencite{McIntoshSmith2017}.
+O CloverLeaf, do \textit{Atomic Weapons Establishment} (Reino Unido), resolve as equações de Euler compressíveis bidimensionais em malha cartesiana por um esquema explícito de volumes finitos, o que o aproxima do escopo físico desta pesquisa \parencite{Mallinson2013}; com esse código, \textcite{Herdman2012} confrontaram modelos por diretivas e de baixo nível (OpenACC, OpenCL e CUDA)\@.
+O TeaLeaf isola a solução implícita de um problema de condução de calor e permite comparar resolvedores iterativos e suas exigências de comunicação coletiva \parencite{McIntoshSmith2017}.
 
 Dois casos delimitam os extremos de complexidade.
 O BabelStream reduz-se a operações elementares sobre vetores para medir a largura de banda de memória alcançada por cada modelo em cada arquitetura, referência para algoritmos limitados por memória, como o LBM \parencite{Deakin2018}.
-O HPCG foi proposto como métrica complementar à fatoração densa na classificação de supercomputadores porque seu padrão de acesso irregular e sua dependência de comunicação representam melhor as aplicações científicas reais \parencite{Dongarra2016}.
+O HPCG, em contraste, foi proposto como métrica complementar à fatoração densa na classificação de supercomputadores, por seu padrão de acesso irregular e sua dependência de comunicação representarem melhor as aplicações reais \parencite{Dongarra2016}.
 Entre esses extremos situam-se os \textit{kernels} extraídos de resolvedores completos, como os empregados na avaliação do LBM em GPUs \parencite{Tomczak2021, Ma2023}, e os protótipos que precederam resolvedores de produção em métodos de elementos espectrais \parencite{Jansson2024}.
-O miniaplicativo desta pesquisa segue essa linha, com a particularidade de reproduzir a formulação compressível completa, e não apenas o \textit{kernel} isotérmico.
+O miniaplicativo desta pesquisa segue essa linha, com a particularidade de reproduzir a formulação compressível completa em vez de limitar-se ao \textit{kernel} isotérmico.
 
-A principal limitação decorre da própria simplificação: por não reproduzir a diversidade de padrões de acesso de uma aplicação completa, o miniaplicativo pode subestimar efeitos de pressão sobre a hierarquia de memória ou de desequilíbrio de carga, de modo que suas conclusões indicam tendências, e não previsões absolutas de desempenho.
+A principal limitação dessa abordagem decorre da própria simplificação: por não reproduzir a diversidade de padrões de acesso de uma aplicação completa, o miniaplicativo pode subestimar efeitos de pressão sobre a hierarquia de memória ou de desequilíbrio de carga, de modo que suas conclusões indicam tendências, e não previsões absolutas de desempenho.
 
 %---------------------------------------------------------------------------------------
 
 \section{Síntese da Revisão e Lacuna Identificada}\label{sec:sintese-e-lacuna}
 
 A literatura revisada permite três constatações que delimitam a contribuição deste trabalho.
-Primeiro, o LBM alcançou maturidade para tratar escoamentos compressíveis com ondas de choque, desde que associado a operadores de colisão estáveis, a técnicas de regularização ou a formulações de dupla distribuição \parencite{Tran2022, Rathnayake2024, Guo2020}.
-Segundo, o caráter local da colisão e a regularidade do acesso à memória na propagação tornam o método adequado às arquiteturas heterogêneas atuais, com desempenho reportado próximo do limite imposto pela largura de banda de memória \parencite{Tomczak2021, Ma2023}.
-Terceiro, há grande número de tecnologias de paralelização concorrentes, cada uma com compromisso próprio entre desempenho, portabilidade e esforço de desenvolvimento.
+A primeira é que o LBM alcançou maturidade para tratar escoamentos compressíveis com ondas de choque, desde que associado a operadores de colisão estáveis, a técnicas de regularização ou a formulações de dupla distribuição \parencite{Tran2022, Rathnayake2024, Guo2020}.
+A segunda é que o caráter local da colisão e a regularidade do acesso à memória na propagação tornam o método adequado às arquiteturas heterogêneas atuais, com desempenho reportado próximo do limite imposto pela largura de banda de memória \parencite{Tomczak2021, Ma2023}.
+A terceira é a existência de grande número de tecnologias de paralelização concorrentes, cada uma com compromisso próprio entre desempenho, portabilidade e esforço de desenvolvimento.
 
 Os estudos comparativos disponíveis, no entanto, concentram-se em \textit{kernels} simples ou em versões isotérmicas do LBM, de custo aritmético por nó reduzido, e raramente confrontam, sob um mesmo algoritmo e caso de teste, modelos por diretivas, modelos de baixo nível, camadas de abstração e paralelismo distribuído.
 São ainda mais escassos os trabalhos que associam as métricas de desempenho a uma medida objetiva do esforço de implementação.

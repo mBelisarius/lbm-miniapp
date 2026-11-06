@@ -27,8 +27,8 @@
  *    (a convex combination — otherwise mass is created or destroyed);
  *  - `nx * ny` still fits into the `std::int32_t` the table is made of.
  *
- * Only the serial reference (`plain::LbmTube`) still builds that table. Every
- * optimised backend streams through the shared per-direction
+ * Only the reference solver of the test suite (`test/ReferenceTube.hpp`) still builds that table. The
+ * program itself, `plain::LbmTube` included, streams through the shared per-direction
  * `lbmini::DirectionStencil` (`Lbm/Stencil.hpp`) instead, resolving the four
  * source cells in the kernel with a clamp in x and a wrap in y. The second
  * suite below proves, exhaustively for every `(cell, idc)` of every mesh shape
@@ -47,9 +47,9 @@
 #include <gtest/gtest.h>
 
 #include "MemorySafetyHarness.hpp"
+#include "ReferenceTube.hpp"
 
 #include "Lbm/Plain/LatticeD2Q9.hpp"
-#include "Lbm/Plain/LbmTube.hpp"
 #include "Lbm/Stencil.hpp"
 
 namespace {
@@ -84,7 +84,7 @@ struct TableProbe : TubeT {
 
 struct PlainTables {
   using Lattice = lbmini::plain::LatticeD2Q9<Scalar>;
-  using Tube = lbmini::plain::LbmTube<Scalar, Lattice>;
+  using Tube = lbmini_test::reference::LbmTube<Scalar, Lattice>;
   static lbmini::PerformanceData Performance() {
     return lbmini_test::MakePerformance(lbmini::BackendEnum::Plain, lbmini::TargetEnum::CPU);
   }

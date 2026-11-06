@@ -36,6 +36,18 @@
 % \usepackage{xcolor} 	    % já incluído em UFPR.sty ou abntex2
 \usepackage{smartdiagram}   % gera diagramas a partir de listas
 \usepackage{float} 		    % Para a figura ficar na posição correta
+% Os flutuantes declarados com [H] são tratados como [!htbp], de modo que o texto
+% subsequente preencha o fim da página em vez de deixar espaços em branco.
+\makeatletter
+\def\@float@HH#1[H]{\@float@Hx{#1}[!htbp]}
+\makeatother
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.7}
+\setcounter{topnumber}{3}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{5}
 \usepackage{textcomp} 		% supporte para fontes da Text Companion 
 \usepackage{longtable}		% uso de longtable
 \usepackage{amsmath}	    % simbolos matematicos
@@ -100,7 +112,7 @@
 \makeatother
 
 \lstset{
-    basicstyle=\ttfamily\small,
+    basicstyle=\ttfamily\footnotesize,
     keywordstyle=\color{blue},
     stringstyle=\color{red},
     commentstyle=\color{green!60!black},

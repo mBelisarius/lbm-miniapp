@@ -85,7 +85,7 @@ are only declared when `__FAST_MATH__` is defined. The vector CPU kernel (next s
 not depend on it: it evaluates `exp` with its own polynomial (`lbmini/Lbm/Simd.hpp`), written
 to survive `-ffast-math` (its rounding trick sits behind an `asm` barrier that the optimizer
 cannot fold away).
-The scalar `Plain` reference and the GPU kernels still call libm/CUDA `exp`. Results differ
+The scalar `Plain` solver and the GPU kernels still call libm/CUDA `exp`. Results differ
 from a strict-IEEE build in the last bits (in regimes with a low relaxation time on the high-pressure side,
 e.g. a pressure ratio of 2 with `nu = 1e-2`, rounding differences are amplified by the scheme itself, see
 `docs/performance.md`). Pass `-DLBMINI_FAST_MATH=OFF` to disable it. Note
@@ -94,7 +94,12 @@ for every NaN/Inf check.
 
 ### CPU backends: SIMD kernel, memory layout, scheduling
 
-`Plain` is the scalar, serial reference (and the baseline of every speed-up). All the other
+`Plain` is the scalar, serial solver (the single-core baseline of the speed-ups): the fused pull
+step, the post-collision ping-pong state, the factorised closure and the per-direction stencil of
+the other backends, executed one cell at a time by one thread (`lbmini/Lbm/Plain/LbmTube.hpp`,
+per-cell physics in `lbmini/Lbm/OpenAcc/CellPhysics.hpp`). The literal transcription of the model
+(general per-direction closure, three passes, per-cell streaming tables) is kept as the oracle of
+the test suite in `test/ReferenceTube.hpp`. All the other
 CPU backends (`OpenMP`, `OpenACC`, `OpenCL`, `Kokkos`, `RAJA`, `MPI`, `Alpaka`) run a
 vectorized kernel on the same data layout, and differ in how they spread it over the cores:
 
@@ -110,12 +115,29 @@ vectorized kernel on the same data layout, and differ in how they spread it over
   reference, cell by cell, except `exp` and the closure (next item).
 - **Energy closure.** The Newton-Raphson equilibrium `W_q exp(xi . c_q)` is a product of an x and
   a y factor, so its Jacobian is exactly diagonal and each step is two scalar steps with one
-  `exp(-|xi|)` per axis: 8 exponentials and ~850 flops per cell and step instead of 36 and
-  ~2200. Every backend (CPU and GPU) uses this form; `Plain` keeps the general one as the
-  reference.
+  `exp(-|xi|)` per axis: with five iterations (`LBMINI_NEWTON_ITERATIONS`, `Lbm/EnergyClosure.hpp`),
+  12 exponentials and ~1100 flops per cell and step instead of 54 and more than twice as many
+  flops. Every backend (CPU and GPU, `Plain` included) uses this form; the general one lives in the
+  test oracle `test/ReferenceTube.hpp`.
+  The residual and regularised Jacobian are scaled by the squared axis
+  normaliser (`Lbm/EnergyClosure.hpp`), cancelling one division per iteration
+  without changing the iterations or damping. The determinant
+  threshold is scaled too. The per-cell physics of every backend is additionally written in the
+  product form of the D2Q9 equilibria with shared differences and (on the GPU) FP32-seeded
+  reciprocals: about +25 % on every GPU backend (all of them at the FP64 issue rate) and
+  +7–9 % per CPU core. See `docs/performance.md`, sections 11 and 15.
+- **One kernel for all host backends.** `host::Kernel<Scalar, Lattice, W>` is a thin class
+  over `host::KernelCore<Scalar, W>`, which only depends on the D2Q9 velocity table (checked
+  at compile time for each backend's lattice): OpenMP, Kokkos, RAJA, Alpaka and MPI run the
+  same machine code, and the differences between them are those of their drivers.
+- **MPI.** Each step computes the edge blocks first, posts the halo of the new state and
+  computes the inner blocks while it is in flight (`MPI_Testall` between chunks of rows).
+  Static slabs stay sensitive to the jitter of the slowest rank; one rank with all the
+  threads equals OpenMP.
 - **Stores.** Meshes whose working set exceeds four times the last-level cache write the
   post-collision populations with streaming stores (`LBMINI_HOST_STREAM=0|1` overrides),
-  saving the write-allocate traffic.
+  saving the write-allocate traffic; the OpenCL CPU kernel does the same with
+  `__builtin_nontemporal_store`.
 - **Scheduling.** The unit of work is a *segment*: a run of `LBMINI_HOST_CHUNK_CELLS` (256)
   cells of one row, so even a `ny = 1` mesh is spread over all cores. The segments are handed
   out dynamically (`schedule(dynamic,1)`; `OMP_SCHEDULE` overrides it for the OpenMP backend),
@@ -130,7 +152,12 @@ See [`docs/performance.md`](docs/performance.md) for the analysis of the campaig
 results that led to this design, the roofline position of every CPU and GPU backend, the
 backend limitations and the measured scaling;
 [`scripts/cpu-scaling.py`](scripts/cpu-scaling.py) reproduces the scaling table and the
-independent-copies throughput ceiling that parallel efficiency should be judged against.
+independent-copies scaling comparison, and [`scripts/roofline/`](scripts/roofline) holds the
+CPU and GPU microbenchmarks that measure the ceilings.
+Independent copies are a scaling diagnostic, not an independent roofline ceiling.
+The latest measurements, the operation counts, the comparison with the committed baseline, the rejected hypotheses and the
+attribution of the remaining backend differences are in sections 11 and 12 of `docs/performance.md` and in
+`thesis/campaign-results/`; projections must not be interpreted as measurements on the final hardware.
 
 ## Testing & Verification
 

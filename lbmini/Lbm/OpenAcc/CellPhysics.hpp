@@ -4,15 +4,17 @@
 /**
  * @file CellPhysics.hpp
  * @brief Per-cell D2Q9 physics shared by the NVIDIA HPC SDK directive backends
- *        (`openacc::cpu`, `openacc::gpu`, `openmp::gpu`).
+ *        (`openacc::cpu`, `openacc::gpu`, `openmp::gpu`) and by the serial
+ *        `plain::LbmTube`.
  *
  * Plain inline C++ without any directive: nvc++ compiles a device version of
  * every function whose definition is visible where an OpenACC compute region
  * or an OpenMP `target` region calls it, and inlines it there, so all per-cell
  * arrays stay in registers. The functions are the per-cell physics of
  * `lbmini::cuda::gpu` (`Physics` in `Cuda/Gpu/LbmTube.cu`), including its
- * factorised energy closure (`AxisExp`): equal to the arithmetic of the plain
- * reference solver to rounding error, not bit for bit.
+ * factorised energy closure (`AxisExp`): equal to the general per-direction
+ * closure of the reference in `test/ReferenceTube.hpp` to rounding error, not
+ * bit for bit.
  *
  * The D2Q9 velocity set is spelled out as `constexpr` conditional expressions
  * instead of a lookup table: every loop over the directions is fully unrolled,
@@ -26,6 +28,7 @@
 
 #include "Data.hpp"
 #include "Lbm/DeviceBuffer.hpp"
+#include "Lbm/EnergyClosure.hpp"
 #include "Lbm/Stencil.hpp"
 
 namespace lbmini::directive {
@@ -110,7 +113,7 @@ template<typename Scalar>
 struct Cell {
   static constexpr Scalar kTiny = Scalar{ 1.0e-12 };
   static constexpr Scalar kMaxExp = Scalar{ 700.0 };
-  static constexpr int kMaxIter = 3;
+  static constexpr int kMaxIter = energy::kNewtonIterations;
 
   /**
    * @brief Temperature-dependent D2Q9 weights `W_q(T)` of all directions.
@@ -173,13 +176,52 @@ struct Cell {
       momX += (static_cast<Scalar>(Cx(idc)) + p.ushiftX) * f[idc];
       momY += (static_cast<Scalar>(Cy(idc)) + p.ushiftY) * f[idc];
     }
-    invRho = Scalar{ 1 } / rhoSum;
+    invRho = Recip(rhoSum);
     ux = momX * invRho;
     uy = momY * invRho;
     const Scalar kin = Scalar{ 0.5 } * (ux * ux + uy * uy);
     tem = (Scalar{ 0.5 } * nrg * invRho - kin) * p.invCv;
     rho = rhoSum;
     pres = p.rgas * rhoSum * tem;
+  }
+
+  /**
+   * @brief `1 / x` to about one unit in the last place, from a single-precision seed.
+   *
+   * A double-precision division costs 8 FP64 instructions on an NVIDIA GPU, and the FP64 pipe (1/64 of
+   * the FP32 rate on consumer parts) is the bottleneck of this kernel. The `1 / float(x)` seed runs on the
+   * FP32 pipe and has a relative error `e <= 6e-8`; `r (1 + e + e^2)` then has an error of `e^3 ~ 2e-22`,
+   * i.e. rounding only, in three FP64 FMAs. Not correctly rounded (within ~1 ulp). `x` must lie in the
+   * single-precision range: every caller divides by a positive state variable, or by a quantity whose
+   * range `solverOk` checks.
+   */
+  static inline Scalar Recip(const Scalar x) {
+    const Scalar r0 = static_cast<Scalar>(1.0f / static_cast<float>(x));
+    const Scalar e = Scalar{ 1 } - x * r0;
+    return r0 + r0 * (e + e * e);
+  }
+
+  /// The factors of the product form of the density equilibrium: `feq(q) = a[c_x + 1] * b[c_y + 1]`,
+  /// `a = rho * px`, `b = py` (`c = -1, 0, +1`); see `Feq`.
+  static inline void FeqFactors(
+    const CellParams<Scalar>& p,
+    const Scalar rhoc,
+    const Scalar ux,
+    const Scalar uy,
+    const Scalar temc,
+    Scalar (&a)[3],
+    Scalar (&b)[3]
+  ) {
+    const Scalar uaX = ux - p.ushiftX;
+    const Scalar uaY = uy - p.ushiftY;
+    const Scalar tx = uaX * uaX + temc;
+    const Scalar ty = uaY * uaY + temc;
+    a[0] = rhoc * (Scalar{ 0.5 } * (-uaX + tx));
+    a[1] = rhoc * (Scalar{ 1 } - tx);
+    a[2] = rhoc * (Scalar{ 0.5 } * (uaX + tx));
+    b[0] = Scalar{ 0.5 } * (-uaY + ty);
+    b[1] = Scalar{ 1 } - ty;
+    b[2] = Scalar{ 0.5 } * (uaY + ty);
   }
 
   /**
@@ -211,27 +253,24 @@ struct Cell {
     p[2] = wn * (pos ? Scalar{ 1 } : e2);
   }
 
-  /// Equilibrium energy populations from the Newton solution `xi`.
-  static inline void GeqFromXi(
+  /// Energy equilibrium from the Newton solution `xi` as the factors of the product form:
+  /// `geq(q) = sx[c_x + 1] * gy[c_y + 1]`.
+  static inline void GeqFactors(
     const Scalar xi0,
     const Scalar xi1,
     const Scalar wn,
     const Scalar wZero,
     const Scalar targetE,
-    Scalar (&geq)[kQ]
+    Scalar (&sx)[3],
+    Scalar (&gy)[3]
   ) {
     Scalar px[3];
-    Scalar py[3];
     AxisExp(xi0, wn, wZero, px);
-    AxisExp(xi1, wn, wZero, py);
-    const Scalar scale = targetE / ((px[0] + px[1] + px[2]) * (py[0] + py[1] + py[2]));
-    Scalar sx[3];
+    AxisExp(xi1, wn, wZero, gy);
+    const Scalar scale = targetE * Recip((px[0] + px[1] + px[2]) * (gy[0] + gy[1] + gy[2]));
     LBMINI_UNROLL(3)
     for (int k = 0; k < 3; ++k)
       sx[k] = scale * px[k];
-    LBMINI_UNROLL(9)
-    for (int idc = 0; idc < kQ; ++idc)
-      geq[idc] = sx[Cx(idc) + 1] * py[Cy(idc) + 1];
   }
 
   /**
@@ -239,7 +278,7 @@ struct Cell {
    *
    * `f`/`g` enter as the pre-collision populations of the cell and leave as the
    * post-collision ones; `xi` is the Newton warm start (read and updated).
-   * The Newton loop runs a fixed number of iterations with clamped reciprocals
+   * The Newton loop runs a fixed number of iterations with regularisation
    * and a sticky `solverOk` predicate, so control flow stays uniform across a
    * warp except in the (rare) degenerate fallback.
    */
@@ -256,14 +295,16 @@ struct Cell {
   ) {
     const Scalar u2 = ux * ux + uy * uy;
 
-    Scalar feqLocal[kQ];
-    Feq(rhoc, ux, uy, temc, p, feqLocal);
-
-    // The per-axis factors of the weights (`W_q = Wx(c_x) Wy(c_y)`), see `AxisExp`.
+    // The per-axis factors of the weights (`W_q = Wx(c_x) Wy(c_y)`, see `AxisExp`); the
+    // factor is exactly the one `LatticeType::Weights` evaluates for each dimension.
     const Scalar wZero = Scalar{ 1 } - temc;
     const Scalar wn = wZero + (Scalar{ 0.5 } * temc - wZero);
-    Scalar wi[kQ];
-    Weights(wZero, wn, wi);
+
+    // The density equilibrium in product form, `feq(q) = a[c_x + 1] * b[c_y + 1]`: only six values
+    // are kept and the products are formed where they are used.
+    Scalar a[3];
+    Scalar b[3];
+    FeqFactors(p, rhoc, ux, uy, temc, a, b);
 
     // Geq via Newton-Raphson on the normalised energy flux.
     //
@@ -272,90 +313,115 @@ struct Cell {
     // diagonal (its off-diagonal term is exactly `S2xy / Z - (S1x / Z) (S1y / Z) = 0`)
     // and the iteration is two scalar Newton steps,
     // `xi_a -= alpha (m1_a - target_a) / var_a`, each from three weighted
-    // exponentials of one axis (see `AxisExp`). Divisions are expensive on
-    // a GPU, so the two axes share one reciprocal per stage.
+    // exponentials of one axis (see `AxisExp`). Scaling by Z^2 cancels the
+    // normalisation reciprocal; the two axes share the remaining reciprocal.
     const Scalar E = p.cv * temc + Scalar{ 0.5 } * u2;
     const Scalar targetE = Scalar{ 2 } * rhoc * E;
-    const Scalar invE = Scalar{ 1 } / E;
-    const Scalar targetMx = ux * (E + temc) * invE; // 2 rho u (E + T) / (2 rho E)
-    const Scalar targetMy = uy * (E + temc) * invE;
+    const Scalar invE = Recip(E);
+    const Scalar targetM0 = ux * (E + temc) * invE; // 2 rho u (E + T) / (2 rho E)
+    const Scalar targetM1 = uy * (E + temc) * invE;
 
     Scalar alpha = Scalar{ 1 };
     bool solverOk = true;
 
-    LBMINI_UNROLL(3)
+    LBMINI_UNROLL(LBMINI_NEWTON_ITERATIONS)
     for (int iter = 0; iter < kMaxIter; ++iter) {
       Scalar px[3];
       Scalar py[3];
       AxisExp(xi[0], wn, wZero, px);
       AxisExp(xi[1], wn, wZero, py);
-      const Scalar zx = px[0] + px[1] + px[2];
-      const Scalar zy = py[0] + py[1] + py[2];
-      const Scalar zxy = zx * zy;
+      const auto x = energy::ScaledAxis(px[0], px[1], px[2], p.ushiftX - targetM0, kTiny);
+      const auto y = energy::ScaledAxis(py[0], py[1], py[2], p.ushiftY - targetM1, kTiny);
+      const Scalar zxy = x.z * y.z;
       solverOk = solverOk && (zxy > kTiny);
-      const Scalar rz = Scalar{ 1 } / zxy;
-      const Scalar invZx = zy * rz;
-      const Scalar invZy = zx * rz;
+      const Scalar jxy = x.jacobian * y.jacobian;
+      solverOk = solverOk && (std::fabs(jxy) > kTiny * (zxy * zxy));
 
-      // Moments of the unshifted velocity; `c_a + U_a` shifts the mean only.
-      const Scalar m1x = (px[2] - px[0]) * invZx;
-      const Scalar m1y = (py[2] - py[0]) * invZy;
-      const Scalar jxx = ((px[2] + px[0]) * invZx - m1x * m1x) + kTiny;
-      const Scalar jyy = ((py[2] + py[0]) * invZy - m1y * m1y) + kTiny;
-      const Scalar jxy = jxx * jyy;
-      solverOk = solverOk && (std::fabs(jxy) > kTiny);
-
-      const Scalar rj = alpha * (Scalar{ 1 } / jxy);
-      const Scalar r0 = (m1x + p.ushiftX) - targetMx;
-      const Scalar r1 = (m1y + p.ushiftY) - targetMy;
-      xi[0] -= r0 * jyy * rj; // alpha r0 / jxx
-      xi[1] -= r1 * jxx * rj; // alpha r1 / jyy
+      const Scalar rj = alpha * Recip(jxy);
+      xi[0] -= x.residual * y.jacobian * rj;
+      xi[1] -= y.residual * x.jacobian * rj;
       alpha *= Scalar{ 0.5 };
     }
 
-    Scalar geqLocal[kQ];
+    // Energy equilibrium `geq(q) = sx[c_x + 1] * gy[c_y + 1]`.
+    Scalar sx[3];
+    Scalar gy[3];
     if (solverOk) {
-      GeqFromXi(xi[0], xi[1], wn, wZero, targetE, geqLocal);
+      GeqFactors(xi[0], xi[1], wn, wZero, targetE, sx, gy);
       // The reference also stores `log(scale / rho) - smax` as warm-start
       // component 0; nothing ever reads it, so it is neither computed nor stored.
     } else {
-      // Fallback: normalised-Wi distribution, cold restart of the warm start.
+      // Fallback: normalised-Wi distribution (`W_q = wf(c_x) wf(c_y)`, summing to `(2 wn + wZero)^2`),
+      // cold restart of the warm start.
       xi[0] = Scalar{ 0 };
       xi[1] = Scalar{ 0 };
-      Scalar sumW = Scalar{ 0 };
-      LBMINI_UNROLL(9)
-      for (int idc = 0; idc < kQ; ++idc)
-        sumW += wi[idc];
+      const Scalar sumAxis = wn + wZero + wn;
+      const Scalar sumW = sumAxis * sumAxis;
+      const Scalar wf[3] = { wn, wZero, wn };
       if (sumW <= kTiny) {
         const Scalar uni = targetE / Scalar(kQ);
-        LBMINI_UNROLL(9)
-        for (int idc = 0; idc < kQ; ++idc)
-          geqLocal[idc] = uni;
+        LBMINI_UNROLL(3)
+        for (int k = 0; k < 3; ++k) {
+          sx[k] = uni;
+          gy[k] = Scalar{ 1 };
+        }
       } else {
         const Scalar sc = targetE / sumW;
-        LBMINI_UNROLL(9)
-        for (int idc = 0; idc < kQ; ++idc)
-          geqLocal[idc] = wi[idc] * sc;
+        LBMINI_UNROLL(3)
+        for (int k = 0; k < 3; ++k) {
+          sx[k] = wf[k] * sc;
+          gy[k] = wf[k];
+        }
       }
     }
 
     // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
     // `tau` and `tauT` share `1 / (rho T)`, `omega` and `omegaT` one division.
-    const Scalar invT = Scalar{ 1 } / temc;
+    const Scalar invT = Recip(temc);
     const Scalar tau = p.viscosity * invRho * invT + Scalar{ 0.5 };
     const Scalar tauT = p.condOverCp * invRho * invT + Scalar{ 0.5 };
-    const Scalar rTau = Scalar{ 1 } / (tau * tauT);
+    const Scalar rTau = Recip(tau * tauT);
     const Scalar omega = tauT * rTau;
     Scalar omegaT = tau * rTau;
 
-    Scalar eps = Scalar{ 0 };
+    // Non-equilibrium part `d = f - feq`: the sensor, the thermal correction and the BGK update all use it.
+    Scalar d[kQ];
     LBMINI_UNROLL(9)
-    for (int idc = 0; idc < kQ; ++idc) {
-      const Scalar diff = f[idc] - feqLocal[idc];
-      const Scalar den = (feqLocal[idc] > kTiny) ? feqLocal[idc] : kTiny;
-      eps += std::fabs(diff) / den;
+    for (int idc = 0; idc < kQ; ++idc)
+      d[idc] = f[idc] - a[Cx(idc) + 1] * b[Cy(idc) + 1];
+
+    // Knudsen sensor `eps = mean_q |d_q| / max(feq_q, tiny)`.
+    //
+    // While every factor of the product form is well above the clamp (the whole physical range;
+    // `a_min * b_min > tiny` is then guaranteed) no `max` is active and
+    // `|d_q| / feq_q = |d_q| (1 / a_i)(1 / b_j)`: the six reciprocals come from a single one
+    // (Montgomery's trick) and the sum factorises by rows, instead of nine divisions.
+    // Otherwise (negative or vanishing populations) the per-direction form of the reference is used.
+    constexpr Scalar kFloorFactor = Scalar{ 1e-5 };
+    Scalar epsSum = Scalar{ 0 };
+    const Scalar aMin = (a[0] < a[1] ? a[0] : a[1]) < a[2] ? (a[0] < a[1] ? a[0] : a[1]) : a[2];
+    const Scalar bMin = (b[0] < b[1] ? b[0] : b[1]) < b[2] ? (b[0] < b[1] ? b[0] : b[1]) : b[2];
+    if (aMin > kFloorFactor && bMin > kFloorFactor) {
+      const Scalar pa = (a[0] * a[1]) * a[2];
+      const Scalar pb = (b[0] * b[1]) * b[2];
+      const Scalar rab = Recip(pa * pb);
+      const Scalar rpa = pb * rab; // 1 / pa
+      const Scalar rpb = pa * rab; // 1 / pb
+      const Scalar ra[3] = { (a[1] * a[2]) * rpa, (a[0] * a[2]) * rpa, (a[0] * a[1]) * rpa };
+      const Scalar rb[3] = { (b[1] * b[2]) * rpb, (b[0] * b[2]) * rpb, (b[0] * b[1]) * rpb };
+      Scalar row[3] = { Scalar{ 0 }, Scalar{ 0 }, Scalar{ 0 } };
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc)
+        row[Cy(idc) + 1] += ra[Cx(idc) + 1] * std::fabs(d[idc]);
+      epsSum = (rb[0] * row[0] + rb[1] * row[1]) + rb[2] * row[2];
+    } else {
+      LBMINI_UNROLL(9)
+      for (int idc = 0; idc < kQ; ++idc) {
+        const Scalar feq = a[Cx(idc) + 1] * b[Cy(idc) + 1];
+        epsSum += std::fabs(d[idc]) / ((feq > kTiny) ? feq : kTiny);
+      }
     }
-    eps *= Scalar{ 1 } / Scalar(kQ);
+    const Scalar eps = epsSum * (Scalar{ 1 } / Scalar(kQ));
     // `omega / sigma` with `sigma` in {omega, 1.35, 1.05, 1}, without a division.
     Scalar omegaL = omega;
     if (eps >= Scalar{ 1 })
@@ -370,28 +436,43 @@ struct Cell {
     omegaT = (omegaT > Scalar{ 1 }) ? omegaT : Scalar{ 1 };
     omegaT = (omegaT < (Scalar{ 2 } - Scalar{ 1e-7 })) ? omegaT : (Scalar{ 2 } - Scalar{ 1e-7 });
 
-    // L[a] = sum_i 2 * (u . c_i) * c_i_a * (f - feq)   (c_i unshifted)
-    Scalar Lx = Scalar{ 0 };
-    Scalar Ly = Scalar{ 0 };
+    // L[a] = sum_i 2 (u . c_i) c_i_a d_i with the unshifted c_i, i.e. from the second moments of d:
+    // Lx = 2 (ux Mxx + uy Mxy), Ly = 2 (ux Mxy + uy Myy).
+    Scalar mxx = Scalar{ 0 };
+    Scalar myy = Scalar{ 0 };
+    Scalar mxy = Scalar{ 0 };
     LBMINI_UNROLL(9)
     for (int idc = 0; idc < kQ; ++idc) {
-      const Scalar cix0 = static_cast<Scalar>(Cx(idc));
-      const Scalar ciy0 = static_cast<Scalar>(Cy(idc));
-      const Scalar uvi = ux * cix0 + uy * ciy0;
-      const Scalar aux = Scalar{ 2 } * uvi * (f[idc] - feqLocal[idc]);
-      Lx += aux * cix0;
-      Ly += aux * ciy0;
+      if (Cx(idc) != 0)
+        mxx += d[idc];
+      if (Cy(idc) != 0)
+        myy += d[idc];
+      if (Cx(idc) * Cy(idc) > 0)
+        mxy += d[idc];
+      else if (Cx(idc) * Cy(idc) < 0)
+        mxy -= d[idc];
     }
+    // The thermal correction `(omegaL - omegaT) w_q (L . (c_q + U)) / T`, with `(omegaL - omegaT) / T` folded into L.
+    const Scalar scaleL = Scalar{ 2 } * ((omegaL - omegaT) * invT);
+    const Scalar lx = scaleL * (ux * mxx + uy * mxy);
+    const Scalar ly = scaleL * (ux * mxy + uy * myy);
+    Scalar tx[3];
+    Scalar ty[3];
+    LBMINI_UNROLL(3)
+    for (int k = 0; k < 3; ++k) {
+      tx[k] = lx * (Scalar(k - 1) + p.ushiftX);
+      ty[k] = ly * (Scalar(k - 1) + p.ushiftY);
+    }
+    // Weights: `W_q = wf(c_x) wf(c_y)`, `wf = wn` for a moving and `wZero` for a rest component.
+    const Scalar wf[3] = { wn, wZero, wn };
 
     LBMINI_UNROLL(9)
     for (int idc = 0; idc < kQ; ++idc) {
-      const Scalar fOld = f[idc];
-      f[idc] = fOld + omegaL * (feqLocal[idc] - fOld);
-      const Scalar cidotL = Lx * (static_cast<Scalar>(Cx(idc)) + p.ushiftX)
-        + Ly * (static_cast<Scalar>(Cy(idc)) + p.ushiftY);
-      const Scalar gDiff = wi[idc] * cidotL * invT;
+      const int ix = Cx(idc) + 1;
+      const int iy = Cy(idc) + 1;
+      f[idc] -= omegaL * d[idc];
       const Scalar gOld = g[idc];
-      g[idc] = gOld + omegaL * (geqLocal[idc] - gOld) + (omegaL - omegaT) * gDiff;
+      g[idc] = gOld + omegaL * (sx[ix] * gy[iy] - gOld) + (wf[ix] * wf[iy]) * (tx[ix] + ty[iy]);
     }
   }
 

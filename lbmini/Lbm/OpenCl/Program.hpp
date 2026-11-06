@@ -44,6 +44,7 @@
 #include <vector>
 #include <CL/cl2.hpp>
 #include "Data.hpp"
+#include "Lbm/EnergyClosure.hpp"
 #include "Lbm/Stencil.hpp"
 #include "Utils.hpp"
 
@@ -115,6 +116,7 @@ std::string ProgramDefines(
     << "#define LBM_NY " << mesh.size[1] << "\n"
     << "#define LBM_N " << mesh.size[0] * mesh.size[1] << "\n"
     << "#define LBM_Q " << kQ << "\n"
+    << "#define LBM_MAX_ITER " << energy::kNewtonIterations << "\n"
     << "#define LBM_CX " << List(cx, kQ, integer) << "\n"
     << "#define LBM_CY " << List(cy, kQ, integer) << "\n"
     << "#define LBM_CS2 " << real(LatticeType::Cs2) << "\n"

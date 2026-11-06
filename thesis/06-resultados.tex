@@ -13,12 +13,18 @@
 
 %---------------------------------------------------------------------------------------
 
-A campanha de ensaios compreendeu a validação física do escoamento no tubo de choque de Sod, a sensibilidade paramétrica do método, a escalabilidade em unidades centrais de processamento (CPUs) e a comparação entre as tecnologias de paralelização quanto ao desempenho em CPU e em unidades de processamento gráfico (GPUs) e à complexidade de implementação.
-Todos os ensaios partiram da mesma configuração de referência e foram executados no equipamento de medição e estendidos à plataforma de referência (Seção~\ref{subsec:ambiente-computacional}), com malhas limitadas a 11~GB de memória, de modo que as diferenças observadas sejam atribuíveis ao fator variado em cada caso.
-Conforme a Seção~\ref{sec:delineamento-da-pesquisa}, nenhuma implementação paralela foi admitida na campanha antes de reproduzir, dentro da tolerância numérica estipulada, os campos macroscópicos da versão sequencial de referência.
-As medições das Seções~\ref{sec:escalabilidade-em-cpu-multinucleo} a~\ref{sec:analise-de-complexidade-do-codigo} referem-se à implementação descrita no Capítulo~\ref{ch:implementacao-computacional}, nas oito tecnologias, com núcleo vetorial compartilhado nas CPUs e fechamento energético fatorado por eixo em todas (Seção~\ref{subsec:procedimento-de-otimizacao}).
-Cada valor da grade do protocolo é identificado como medido ou extrapolado no arquivo \texttt{protocol-otimizado.json} (Seção~\ref{subsec:protocolo-de-medicao}).
-O efeito de cada decisão de implementação sobre o desempenho consta da Seção~\ref{sec:otimizacao-roofline}.
+A campanha de ensaios compreendeu a validação física do escoamento no tubo de choque de Sod, a sensibilidade paramétrica do método, a escalabilidade em unidades centrais de processamento (CPUs) e a comparação entre as tecnologias de paralelização.
+Essa comparação considerou o desempenho em CPU e em unidades de processamento gráfico (GPUs) e a complexidade de implementação.
+Todos os ensaios partiram da mesma configuração de referência e foram executados na plataforma descrita na Seção~\ref{subsec:ambiente-computacional}, com malhas limitadas a 10~GB de memória, o que permite atribuir as diferenças observadas ao fator variado em cada caso.
+
+Conforme a Seção~\ref{sec:delineamento-da-pesquisa}, nenhuma implementação foi admitida na campanha antes de reproduzir, dentro da tolerância numérica estipulada, os campos macroscópicos da transcrição direta das equações do modelo, mantida no conjunto de testes (Seção~\ref{sec:implementacao-computacional-sequencial}).
+No problema de Sod com $N_x = 1000$ e $346$ passos, os campos finais diferiram dos da transcrição em no máximo $9{,}4 \times 10^{-15}$ no \textit{Plain}, $3{,}1 \times 10^{-13}$ nas versões de CPU com o núcleo vetorial ($3{,}9 \times 10^{-14}$ no OpenCL) e $5{,}6 \times 10^{-14}$ nas de GPU, em valor relativo a $\max(1, |\text{valor}|)$.
+O MPI com quatro processos diferiu do \textit{Plain} em $5{,}1 \times 10^{-13}$, da mesma ordem do OpenMP ($5{,}4 \times 10^{-13}$).
+
+As medições das Seções~\ref{sec:escalabilidade-em-cpu-multinucleo} a~\ref{sec:analise-de-complexidade-do-codigo} referem-se à implementação descrita no Capítulo~\ref{ch:implementacao-computacional}, nas oito tecnologias, com núcleo vetorial compartilhado nas CPUs e fechamento energético fatorado por eixo em todas.
+A aceleração $S$ é calculada em relação a um núcleo de CPU do OpenMP, que já executa o núcleo vetorial, com o mesmo número de nós, e mede o ganho de paralelismo.
+O \textit{Plain} é comparado a essa referência pelo ganho $G_1$, e a aceleração em relação a ele é $S_{seq} = G_1 S$ (Seção~\ref{sec:escalabilidade-e-complexidade}).
+O efeito de cada decisão de implementação sobre o desempenho e a posição das taxas em relação aos tetos do modelo \textit{roofline} constam da Seção~\ref{sec:otimizacao-roofline}.
 
 %---------------------------------------------------------------------------------------
 
@@ -38,24 +44,29 @@ A \autoref{fig:perfis-temporais} compara os perfis simulados de massa específic
 
 Os perfis simulados acompanham a solução analítica nas regiões suaves, nos estados iniciais não perturbados e no leque de rarefação.
 As posições das frentes de onda (choque, descontinuidade de contato e extremidades do leque) coincidem, na escala do gráfico, com as analíticas, o que confirma o mapeamento da velocidade do som na rede e da razão entre os calores específicos \(\gamma\).
-Junto ao contato e ao choque, a difusão numérica do esquema de propagação arredonda os degraus, efeito coerente com esquemas de baixa ordem (Seção~\ref{sec:problema-do-tubo-de-choque-de-sod}), e surgem, nos três campos, picos estreitos, restritos a poucos nós, na posição do choque.
-A espessura de cada frente, medida pelo número de nós entre 10\% e 90\% do salto de massa específica, é de três nós no choque em ambos os instantes e de \(63\) nós em \(t=0{,}1\) e \(95\) nós em \(t=0{,}2\) na descontinuidade de contato, na malha de \(N_x = 10000\).
+Junto ao contato e ao choque, a difusão numérica do esquema de propagação arredonda os degraus, efeito coerente com esquemas de baixa ordem (Seção~\ref{sec:problema-do-tubo-de-choque-de-sod}).
+Surgem ainda, nos três campos, picos estreitos, restritos a poucos nós, na posição do choque.
+A espessura de cada frente é medida pelo número de nós entre 10\% e 90\% do salto de massa específica.
+Na malha de \(N_x = 10000\), a espessura é de três nós no choque em ambos os instantes e de \(63\) nós em \(t=0{,}1\) e \(95\) nós em \(t=0{,}2\) na descontinuidade de contato.
 
-A diferença de espessura decorre da natureza de cada onda.
-O choque é uma onda genuinamente não linear e compressiva: as características convergem para ele, e o alargamento introduzido pela difusão numérica é comprimido de volta (\textit{self-sharpening}), o que mantém a espessura em poucos nós.
+A diferença de espessura decorre da natureza de cada onda: o choque é uma onda genuinamente não linear e compressiva, em que as características convergem para ele.
+O alargamento introduzido pela difusão numérica é comprimido de volta (\textit{self-sharpening}), o que mantém a espessura em poucos nós.
 A descontinuidade de contato é uma onda linearmente degenerada, com pressão e velocidade normal contínuas e salto apenas de massa específica e de temperatura.
 As características são paralelas à onda, e inexiste mecanismo de compressão que contrarie o alargamento: o salto é transportado passivamente, sujeito à difusão numérica da propagação interpolada e à condução de calor (\(\tau_T\), Seção~\ref{subsec:lbm-transporte}).
 O espalhamento é, assim, difusivo, com espessura proporcional a \(\sqrt{t}\), e entre \(t=0{,}1\) e \(t=0{,}2\) deveria crescer por um fator próximo de \(\sqrt{2}\approx1{,}41\).
 A razão medida, \(95/63\approx1{,}51\), excede esse valor em cerca de \(7\%\), diferença compatível com a resolução em número inteiro de nós e com a medição em apenas dois instantes.
+
 O alargamento do contato contribui para o erro quadrático médio da massa específica, mas não o explica isoladamente: na malha de \(N_x = 10000\), o EQM da pressão, contínua através do contato, é da mesma ordem de grandeza que o da massa específica (\autoref{tab:convergencia-eqm}).
 À exceção desse alargamento, o erro não se acumulou de forma perceptível ao longo da marcha no tempo.
 
 Para a análise de convergência, adotam-se \(N_x = 100\), \(1000\) e \(10000\) nós longitudinais, com \(N_y = N_x/100\), e comparam-se os resultados com a solução analítica em \(t = 0{,}2\), ao longo da linha central da malha.
-Como a viscosidade dinâmica é fixada em unidades da rede, o número de Reynolds cresce proporcionalmente a \(N_x\) (da ordem de \(7 \times 10^{5}\) em \(N_x = 10000\), Seção~\ref{sec:lbm-unidades}), e o refinamento reduz simultaneamente o erro de discretização e a viscosidade física; a análise mede, portanto, a aproximação ao limite invíscido.
-A malha de \(N_x = 100000\), com \(10^8\) nós, é excluída por exceder o limite de memória (\autoref{tab:memoria-malhas}).
+Como a viscosidade dinâmica é fixada em unidades da rede, o número de Reynolds cresce proporcionalmente a \(N_x\) (da ordem de \(7 \times 10^{5}\) em \(N_x = 10000\), Seção~\ref{sec:lbm-unidades}).
+O refinamento reduz simultaneamente o erro de discretização e a viscosidade física, e a análise mede a aproximação ao limite invíscido.
+A malha de \(N_x = 10^5\), com \(10^8\) nós, é excluída por exceder o limite de memória (\autoref{tab:memoria-malhas}).
 
 Cada malha é combinada com as razões de pressões iniciais \(\Pi = p_L/p_R\) em \(\{2;\ 5;\ 10;\ 20\}\), o que perfaz doze execuções e separa a redução do erro pelo refinamento do aumento do erro pela intensificação da descontinuidade.
-Mantém-se fixo o estado à esquerda e ajusta-se a pressão à direita por \(p_R = p_L/\Pi\), com massa específica dada pela relação isentrópica \(\rho_R = \rho_{R,0}\,(p_R/p_{R,0})^{1/\gamma}\), em que o índice 0 designa o estado à direita da configuração clássica, de modo que a entropia do gás à direita permaneça a dessa configuração.
+Mantém-se fixo o estado à esquerda e ajusta-se a pressão à direita por \(p_R = p_L/\Pi\), com massa específica dada pela relação isentrópica \(\rho_R = \rho_{R,0}\,(p_R/p_{R,0})^{1/\gamma}\), em que o índice 0 designa o estado à direita da configuração clássica.
+Com isso, a entropia do gás à direita permanece a dessa configuração.
 Esta seção trata da configuração clássica (\(\Pi = 10\)), e a Seção~\ref{subsec:efeito-da-razao-de-pressoes-no-erro} trata do efeito de \(\Pi\).
 
 O erro quadrático médio (EQM), na forma da raiz quadrada da média dos quadrados dos desvios em relação à solução analítica de Sod amostrada nos mesmos pontos \(x_i\), é calculado para a pressão,
@@ -64,12 +75,19 @@ O erro quadrático médio (EQM), na forma da raiz quadrada da média dos quadrad
 \]
 e, de forma análoga, para \(\rho\) e \(u\).
 
-A \autoref{fig:convergencia} apresenta o EQM da pressão em função de \(N_x\), em escala logarítmica, com uma curva para cada razão de pressões, e a \autoref{tab:convergencia-eqm} reúne o EQM de cada variável e a ordem de convergência efetiva entre malhas consecutivas, \(p_{ef} = \log\!\left(\mathrm{EQM}_{N} / \mathrm{EQM}_{rN}\right) / \log r\), com razão de refinamento \(r = 10\), para a configuração clássica.
-A ordem efetiva resultou inferior à nominal do esquema de propagação, tipicamente de segunda ordem em regiões suaves, porque o choque e a descontinuidade de contato introduzem singularidades que dominam a norma do erro e, na norma quadrática, limitam assintoticamente a ordem a valores não superiores a um meio.
+A \autoref{fig:convergencia} apresenta o EQM da pressão em função de \(N_x\), em escala logarítmica, com uma curva para cada razão de pressões.
+O EQM de cada variável e a ordem de convergência efetiva entre malhas consecutivas, \(p_{ef} = \log\!\left(\mathrm{EQM}_{N} / \mathrm{EQM}_{rN}\right) / \log r\), com razão de refinamento \(r = 10\), constam da \autoref{tab:convergencia-eqm} para a configuração clássica.
+A ordem efetiva resultou inferior à nominal do esquema de propagação, tipicamente de segunda ordem em regiões suaves.
+O choque e a descontinuidade de contato introduzem singularidades que dominam a norma do erro e, na norma quadrática, limitam assintoticamente a ordem a valores não superiores a um meio.
+
 Entre \(N_x = 100\) e \(1000\), a ordem efetiva da pressão foi de \(0{,}41\), coerente com esse limite, e as da massa específica e da velocidade ficaram abaixo dele.
-Entre \(N_x = 1000\) e \(10000\), a ordem decresceu para valores próximos de zero (\(-0{,}04\) na velocidade e na pressão), isto é, o erro deixou de diminuir com o refinamento.
-Nas malhas grosseiras, o erro nas regiões suaves representa parcela apreciável da soma quadrática e diminui rapidamente com o refinamento; nas finas, o erro concentrado nos poucos nós das frentes de onda passa a dominar o somatório.
-A estagnação é compatível, ainda, com a fixação da viscosidade em unidades da rede: o refinamento aumenta o número de Reynolds e reduz a dissipação disponível para suavizar as oscilações junto ao choque (\autoref{fig:perfis-temporais}), tendência examinada na Seção~\ref{subsec:efeito-da-viscosidade-no-erro}.
+Já entre \(N_x = 1000\) e \(10000\), a ordem decresceu para valores próximos de zero (\autoref{tab:convergencia-eqm}), isto é, o erro deixou de diminuir com o refinamento.
+Nas malhas grosseiras, o erro nas regiões suaves representa parcela apreciável da soma quadrática e diminui com o refinamento.
+
+Para verificar se, nas malhas finas, o erro concentrado nos nós das frentes passa a dominar o somatório, calculou-se também o erro restrito às regiões suaves, com a exclusão de uma faixa de \(0{,}02\) de cada lado de cada frente (\autoref{tab:erro-referencias}).
+Esse erro não diminui entre \(N_x = 1000\) e \(10000\), e o erro absoluto médio da pressão nessas regiões (\(2{,}8\times10^{-3}\)) é da mesma ordem do erro absoluto médio total (\(3{,}1\times10^{-3}\)).
+A estagnação não decorre, portanto, da difusão das frentes, mas de um desvio presente também fora delas (Seção~\ref{subsec:erro-sistematico}).
+Tampouco decorre da viscosidade fixada em unidades da rede, pois reduzi-la em uma ordem de grandeza aumentou o erro (Seção~\ref{subsec:efeito-da-viscosidade-no-erro}).
 O refinamento de \(100\) vezes entre as malhas extremas reduziu o EQM da pressão por um fator de apenas \(2{,}3\).
 
 \begin{figure}[H]
@@ -88,9 +106,9 @@ O refinamento de \(100\) vezes entre as malhas extremas reduziu o EQM da pressã
         \toprule
         \(N_x\) & \(\mathrm{EQM}(\rho)\) & \(p_{ef}\) & \(\mathrm{EQM}(u)\) & \(p_{ef}\) & \(\mathrm{EQM}(p)\) & \(p_{ef}\) \\
         \midrule
-        100 & \(2{,}38\times10^{-2}\) & --- & \(6{,}31\times10^{-2}\) & --- & \(2{,}22\times10^{-2}\) & --- \\
-        1000 & \(1{,}14\times10^{-2}\) & \(0{,}320\) & \(3{,}36\times10^{-2}\) & \(0{,}274\) & \(8{,}72\times10^{-3}\) & \(0{,}406\) \\
-        10000 & \(9{,}49\times10^{-3}\) & \(0{,}079\) & \(3{,}71\times10^{-2}\) & \(-0{,}044\) & \(9{,}66\times10^{-3}\) & \(-0{,}045\) \\
+        100 & \(2{,}38\times10^{-2}\) & --- & \(6{,}32\times10^{-2}\) & --- & \(2{,}22\times10^{-2}\) & --- \\
+        1000 & \(1{,}14\times10^{-2}\) & \(0{,}319\) & \(3{,}37\times10^{-2}\) & \(0{,}273\) & \(8{,}74\times10^{-3}\) & \(0{,}405\) \\
+        10000 & \(9{,}50\times10^{-3}\) & \(0{,}079\) & \(3{,}72\times10^{-2}\) & \(-0{,}044\) & \(9{,}67\times10^{-3}\) & \(-0{,}044\) \\
         \bottomrule
     \end{tabular}
     \fonte{O autor (2026).}
@@ -98,26 +116,81 @@ O refinamento de \(100\) vezes entre as malhas extremas reduziu o EQM da pressã
 
 %---------------------------------------------------------------------------------------
 
+\subsection{Comparação com Esquemas de Referência e Desvio Sistemático}\label{subsec:erro-sistematico}
+
+Para situar a magnitude do erro, o mesmo problema foi resolvido, com as mesmas malhas e condições iniciais, por dois esquemas de volumes finitos de referência escritos em Python.
+O primeiro é o esquema de Rusanov, de primeira ordem; o segundo, uma reconstrução MUSCL com limitador \textit{minmod}, fluxo HLLC e integração de Runge-Kutta de segunda ordem.
+Para a pressão, a \autoref{tab:erro-referencias} reúne o erro absoluto médio (norma \(L^1\)), o EQM e o EQM restrito às regiões suaves, definidas como na seção anterior.
+
+\begin{table}[H]
+    \centering
+    \caption{Erro da pressão em \(t = 0{,}2\) no método de Lattice Boltzmann (LBM) e em dois esquemas de volumes finitos de referência, para \(\Pi = 10\): erro absoluto médio (\(L^1\)), EQM, EQM nas regiões suaves e ordem de convergência efetiva em \(L^1\) em relação à malha anterior}
+    \label{tab:erro-referencias}
+    \small
+    \begin{tabular}{llcccc}
+        \toprule
+        Esquema & \(N_x\) & \(L^1(p)\) & \(\mathrm{EQM}(p)\) & EQM suave & Ordem \(L^1\) \\
+        \midrule
+        LBM & 100 & \(1{,}25\times10^{-2}\) & \(2{,}22\times10^{-2}\) & \(1{,}59\times10^{-2}\) & --- \\
+         & 1000 & \(3{,}88\times10^{-3}\) & \(8{,}74\times10^{-3}\) & \(6{,}49\times10^{-3}\) & \(0{,}51\) \\
+         & 10000 & \(3{,}10\times10^{-3}\) & \(9{,}67\times10^{-3}\) & \(5{,}71\times10^{-3}\) & \(0{,}10\) \\
+        \midrule
+        Rusanov (1ª ord.) & 100 & \(2{,}25\times10^{-2}\) & \(3{,}73\times10^{-2}\) & \(2{,}64\times10^{-2}\) & --- \\
+         & 1000 & \(4{,}16\times10^{-3}\) & \(1{,}01\times10^{-2}\) & \(4{,}97\times10^{-3}\) & \(0{,}73\) \\
+         & 10000 & \(6{,}35\times10^{-4}\) & \(2{,}34\times10^{-3}\) & \(7{,}01\times10^{-4}\) & \(0{,}82\) \\
+        \midrule
+        MUSCL-HLLC (2ª ord.) & 100 & \(6{,}91\times10^{-3}\) & \(1{,}51\times10^{-2}\) & \(7{,}39\times10^{-3}\) & --- \\
+         & 1000 & \(7{,}38\times10^{-4}\) & \(4{,}45\times10^{-3}\) & \(7{,}36\times10^{-4}\) & \(0{,}97\) \\
+         & 10000 & \(7{,}25\times10^{-5}\) & \(1{,}25\times10^{-3}\) & \(7{,}40\times10^{-5}\) & \(1{,}01\) \\
+        \bottomrule
+    \end{tabular}
+    \fonte{O autor (2026).}
+\end{table}
+
+Em \(N_x = 1000\), o erro \(L^1\) do LBM equivale ao do esquema de primeira ordem e é \(5{,}3\) vezes o do de segunda ordem; em \(N_x = 10^4\), é \(4{,}9\) e \(43\) vezes maior, respectivamente.
+As ordens em \(L^1\) dos esquemas de referência (de \(0{,}7\) a \(0{,}8\) e de \(1{,}0\)) são as esperadas para esquemas de primeira e de segunda ordem diante de descontinuidades.
+O LBM acompanha a primeira ordem até \(10^3\) nós em \(x\) e deixa de convergir a partir daí.
+
+O desvio que impede a convergência é pequeno e sistemático.
+Com \(N_x = 10^4\) e \(\Pi = 10\), o choque e o contato ficam deslocados de \(+1{,}5\times10^{-3}\) e de \(+2{,}1\times10^{-3}\) em relação à solução analítica (\(0{,}18\%\) e \(0{,}30\%\) de suas posições).
+Os patamares de pressão, de massa específica e de velocidade diferem de \(0{,}2\%\) a \(1{,}2\%\).
+No leque de rarefação, as diferenças médias são de \(+1{,}0\times10^{-2}\) na massa específica, \(-1{,}6\times10^{-2}\) na velocidade e \(+1{,}2\times10^{-2}\) na pressão, valores próximos aos de \(N_x = 10^3\) (\(+1{,}2\times10^{-2}\), \(-2{,}0\times10^{-2}\) e \(+1{,}4\times10^{-2}\)).
+Nos estados não perturbados, o erro é da ordem do arredondamento.
+Um desvio que não diminui com o refinamento distingue-se da difusão numérica e sugere um erro de modelagem, isto é, de consistência do modelo discreto com as equações de Euler, em lugar de um erro de truncamento.
+A causa não foi isolada.
+
+Esse desvio não afeta as conclusões de desempenho, pois todas as tecnologias executam o mesmo algoritmo, verificado contra a transcrição direta das equações (Seção~\ref{sec:implementacao-computacional-sequencial}), e concordam entre si até o erro de arredondamento.
+Ele limita, porém, o uso do miniaplicativo como resolvedor de precisão, e sua investigação é indicada como trabalho futuro (Capítulo~\ref{ch:consideracoes-finais}).
+
+%---------------------------------------------------------------------------------------
+
 \subsection{Efeito da Razão de Pressões no Erro}\label{subsec:efeito-da-razao-de-pressoes-no-erro}
 
-A variação da razão de pressões \(\Pi=p_L/p_R\), de \(2\) a \(20\), com o estado à esquerda fixo nos valores da \autoref{tab:parametros-simulacao} e o estado à direita ajustado como na seção anterior, permite avaliar a acurácia e a estabilidade do esquema diante de descontinuidades de intensidade crescente.
+A razão de pressões \(\Pi=p_L/p_R\) é variada de \(2\) a \(20\), com o estado à esquerda fixo nos valores da \autoref{tab:parametros-simulacao} e o estado à direita ajustado como na seção anterior.
+Essa variação permite avaliar a acurácia e a estabilidade do esquema diante de descontinuidades de intensidade crescente.
 O aumento de \(\Pi\) intensifica o leque de rarefação e o choque, elevando os gradientes locais e o número de Mach a jusante do choque.
 
-A \autoref{fig:erro-razao-pressoes} apresenta o EQM da pressão em função de \(\Pi\), com \(N_x\) fixo, e a \autoref{tab:erro-razao-pressoes} reúne os valores de toda a matriz de ensaios.
+O EQM da pressão em função de \(\Pi\), com \(N_x\) fixo, é apresentado na \autoref{fig:erro-razao-pressoes}, e a \autoref{tab:erro-razao-pressoes} reúne os valores de toda a matriz de ensaios.
 O erro não cresceu de modo monotônico com \(\Pi\), como se poderia prever pela ampliação da região afetada pela difusão numérica em descontinuidades mais intensas (Seção~\ref{sec:problema-do-tubo-de-choque-de-sod}).
 Em \(N_x=100\), o EQM cresce com \(\Pi\), com um patamar entre \(\Pi=5\) e \(\Pi=10\).
-Em \(N_x=1000\) e \(10000\), o menor erro ocorre na razão clássica, \(\Pi=10\), e os erros nas demais razões superam esse valor em \(28\%\) a \(194\%\).
-O erro em \(\Pi=2\), de menor salto inicial, não é inferior ao de \(\Pi=10\): em \(N_x=10000\), é quase o triplo (\(2{,}84\times10^{-2}\) contra \(9{,}66\times10^{-3}\)) e superior ao de \(N_x=1000\), isto é, cresceu com o refinamento, o que indica que a intensidade da descontinuidade não é o único fator determinante do erro.
+Para \(N_x=1000\) e \(10000\), o menor erro ocorre na razão clássica, \(\Pi=10\), e os erros nas demais razões superam esse valor em \(28\%\) a \(147\%\).
+
+O erro em \(\Pi=2\), de menor salto inicial, não é inferior ao de \(\Pi=10\): em \(N_x=10000\), é mais que o dobro e superior ao de \(N_x=1000\).
+O erro cresceu, assim, com o refinamento, o que indica que a intensidade da descontinuidade não é o único fator determinante.
 Ensaios adicionais indicaram que, em \(\Pi=2\), parte do erro decorre da amplificação de ruído de arredondamento por uma instabilidade do esquema, o que é compatível com seu crescimento com o refinamento.
 Com \(\nu=10^{-2}\), o tempo de relaxação do estado à direita é de apenas \(\tau\approx0{,}56\), e ondas curtas desse estado em repouso crescem exponencialmente, por um fator de cerca de oito a cada \(17\) passos.
-A versão de referência mantém o estado uniforme exatamente uniforme em ponto flutuante e só é afetada quando as ondas do choque o alcançam.
-Uma perturbação relativa de \(10^{-12}\) na massa específica inicial desse estado, porém, inutiliza a solução antes de \(t_{max}\) (erro de \(5\times10^{-2}\) na massa específica, com \(N_x=1000\)), e as versões vetorizadas compiladas com \texttt{-ffast-math} reproduzem a divergência, por diferenças de arredondamento entre células vizinhas.
+
+A transcrição direta das equações mantém o estado uniforme exatamente uniforme em ponto flutuante e só é afetada quando as ondas do choque o alcançam.
+Uma perturbação relativa de \(10^{-12}\) na massa específica inicial desse estado, porém, inutiliza a solução antes de \(t_{max}\) (erro de \(5\times10^{-2}\) na massa específica, com \(N_x=1000\)).
+As versões vetorizadas compiladas com \texttt{-ffast-math} reproduzem a divergência, por diferenças de arredondamento entre células vizinhas.
 A equivalência numérica entre tecnologias foi, por isso, aferida em regimes de \(\tau\) distante de \(0{,}5\), nos quais concordam até \(10^{-13}\) relativo ao longo de centenas de passos.
-As ordens efetivas médias, entre \(-0{,}09\) e \(0{,}18\), são baixas em todas as razões: o refinamento é pouco eficaz diante de descontinuidades de qualquer intensidade avaliada.
+
+As ordens efetivas médias, entre \(-0{,}05\) e \(0{,}18\), são baixas em todas as razões: o refinamento é pouco eficaz diante de descontinuidades de qualquer intensidade avaliada.
 O maior valor ocorre em \(\Pi=10\), em que a redução do erro entre \(N_x=100\) e \(1000\) foi a mais intensa, por um fator de \(2{,}5\), contra \(1{,}6\) a \(1{,}7\) nas demais.
 
 Nenhuma das doze execuções divergiu antes de \(t_{max}\), nem mesmo a de \(\Pi=20\) na malha mais grosseira, em que o gradiente de velocidade junto ao choque é resolvido por menos nós.
-A faixa de aplicabilidade segura do miniaplicativo para o problema de Sod, sem técnicas adicionais de estabilização como a regularização recursiva (Seção~\ref{sec:lbm-regularizacao}), estende-se, portanto, ao menos até \(\Pi=20\), ressalvada a amplificação de ruído de arredondamento em \(\Pi=2\), resultado compatível com o papel da relaxação dependente do não equilíbrio local (Seção~\ref{subsec:lbm-sensor}), que modula a viscosidade efetiva junto às descontinuidades.
+A faixa de aplicabilidade segura do miniaplicativo para o problema de Sod, sem técnicas adicionais de estabilização como a regularização recursiva (Seção~\ref{sec:lbm-regularizacao}), estende-se, portanto, ao menos até \(\Pi=20\), ressalvada a amplificação de ruído de arredondamento em \(\Pi=2\).
+Esse resultado é compatível com o papel da relaxação dependente do não equilíbrio local (Seção~\ref{subsec:lbm-sensor}), que modula a viscosidade efetiva junto às descontinuidades.
 
 \begin{figure}[H]
   \centering
@@ -135,10 +208,10 @@ A faixa de aplicabilidade segura do miniaplicativo para o problema de Sod, sem t
         \toprule
         \(\Pi\) & \(N_x=100\) & \(N_x=1000\) & \(N_x=10000\) & Ordem efetiva média \\
         \midrule
-        2 & \(1{,}87\times10^{-2}\) & \(1{,}12\times10^{-2}\) & \(2{,}84\times10^{-2}\) & \(-0{,}091\) \\
-        5 & \(2{,}25\times10^{-2}\) & \(1{,}37\times10^{-2}\) & \(1{,}43\times10^{-2}\) & \(0{,}098\) \\
-        10 & \(2{,}22\times10^{-2}\) & \(8{,}72\times10^{-3}\) & \(9{,}66\times10^{-3}\) & \(0{,}181\) \\
-        20 & \(2{,}36\times10^{-2}\) & \(1{,}38\times10^{-2}\) & \(1{,}58\times10^{-2}\) & \(0{,}088\) \\
+        2 & \(1{,}87\times10^{-2}\) & \(1{,}12\times10^{-2}\) & \(2{,}39\times10^{-2}\) & \(-0{,}054\) \\
+        5 & \(2{,}25\times10^{-2}\) & \(1{,}37\times10^{-2}\) & \(1{,}44\times10^{-2}\) & \(0{,}098\) \\
+        10 & \(2{,}22\times10^{-2}\) & \(8{,}74\times10^{-3}\) & \(9{,}67\times10^{-3}\) & \(0{,}180\) \\
+        20 & \(2{,}36\times10^{-2}\) & \(1{,}37\times10^{-2}\) & \(1{,}56\times10^{-2}\) & \(0{,}090\) \\
         \bottomrule
     \end{tabular}
     \fonte{O autor (2026).}
@@ -148,20 +221,23 @@ A faixa de aplicabilidade segura do miniaplicativo para o problema de Sod, sem t
 
 \subsection{Efeito da Viscosidade no Erro}\label{subsec:efeito-da-viscosidade-no-erro}
 
-A solução analítica de Sod decorre das equações de Euler compressíveis, isto é, do limite invíscido, ao passo que o LBM é inerentemente dissipativo: a viscosidade cinemática \(\nu\) está vinculada ao tempo de relaxação \(\tau\) por \(\nu=c_s^2(\tau-\Delta t/2)\) (Seção~\ref{sec:lbm-chapman-enskog}), e permanece dissipação residual mesmo com viscosidade física reduzida.
+A solução analítica de Sod decorre das equações de Euler compressíveis, isto é, do limite invíscido, ao passo que o LBM é inerentemente dissipativo.
+A viscosidade cinemática \(\nu\) está vinculada ao tempo de relaxação \(\tau\) por \(\nu=c_s^2(\tau-\Delta t/2)\) (Seção~\ref{sec:lbm-chapman-enskog}), e permanece dissipação residual mesmo com viscosidade física reduzida.
 A viscosidade dinâmica é variada em torno do valor de referência (\(\mu=1{,}0\times10^{-2}\)), em sete valores entre \(10^{-1}\) e \(10^{-4}\) em unidades da rede, com \(N_x=10000\), \(\Pi=10\) e as demais propriedades fixas.
 Nessa malha, o intervalo corresponde a números de Reynolds (Seção~\ref{sec:lbm-unidades}) entre cerca de \(7\times10^{4}\) e \(7\times10^{7}\) e a tempos de relaxação no estado à esquerda entre \(0{,}8\) e \(0{,}5003\).
-A \autoref{fig:erro-viscosidade} apresenta o EQM da pressão em função de \(\mu\), e a \autoref{tab:erro-viscosidade} reúne os valores medidos.
+Os valores medidos constam da \autoref{tab:erro-viscosidade}, e a \autoref{fig:erro-viscosidade} apresenta o EQM da pressão em função de \(\mu\).
 
-O EQM apresentou comportamento não monotônico, em forma de U assimétrico, com mínimo de \(9{,}66\times10^{-3}\) em \(\mu=1{,}0\times10^{-2}\).
+O EQM apresentou comportamento não monotônico, em forma de U assimétrico, com mínimo em \(\mu=1{,}0\times10^{-2}\) (\autoref{tab:erro-viscosidade}).
 Para viscosidades elevadas, o excesso de dissipação suaviza artificialmente os degraus de massa específica e de pressão, afastando o perfil da descontinuidade nítida da solução invíscida: em \(\mu=3\times10^{-2}\), o erro excede o mínimo em \(50\%\).
-Esse ramo satura, pois o EQM em \(\mu=10^{-1}\) é praticamente igual ao de \(\mu=3\times10^{-2}\), o que concorda com o limite inferior \(\omega_L = 1\) do fator de relaxação modulado (Seção~\ref{subsec:lbm-sensor}), que restringe a viscosidade efetiva a \(\rho T/2\) e é atingido já a partir de \(\mu = 3\times10^{-2}\) na região de baixa pressão, onde \(\rho T\) é menor.
+Esse ramo satura, pois o EQM em \(\mu=10^{-1}\) é praticamente igual ao de \(\mu=3\times10^{-2}\).
+Isso concorda com o limite inferior \(\omega_L = 1\) do fator de relaxação modulado (Seção~\ref{subsec:lbm-sensor}), que restringe a viscosidade efetiva a \(\rho T/2\) e é atingido já a partir de \(\mu = 3\times10^{-2}\) na região de baixa pressão, onde \(\rho T\) é menor.
 
-Para viscosidades inferiores à de referência, o erro cresceu de modo contínuo, de \(+8\%\) em \(\mu=3\times10^{-3}\) a \(+71\%\) em \(\mu=10^{-3}\) e \(+112\%\) em \(\mu=10^{-4}\) em relação ao mínimo, com tendência à saturação entre \(3\times10^{-4}\) e \(10^{-4}\).
+Para viscosidades inferiores à de referência, o erro cresceu de modo contínuo, de \(+12\%\) em \(\mu=3\times10^{-3}\) a \(+111\%\) em \(\mu=10^{-4}\) em relação ao mínimo, com tendência à saturação entre \(3\times10^{-4}\) e \(10^{-4}\).
 Nessa região, o tempo de relaxação aproxima-se do limite de estabilidade \(\tau=0{,}5\), e a menor dissipação é compatível com a amplificação de oscilações espúrias junto ao choque e ao contato, fenômeno análogo às instabilidades em baixas viscosidades discutidas na Seção~\ref{sec:lbm-colisao}.
-As sete simulações completaram a marcha no tempo até \(t_{max}\), de modo que o crescimento do erro não decorre de divergência.
+As sete simulações completaram a marcha no tempo até \(t_{max}\), o que mostra que o crescimento do erro não decorre de divergência.
 
-O valor de referência situa-se, portanto, na faixa que minimiza o EQM, no compromisso entre dissipação excessiva e margem de estabilidade numérica; como os valores avaliados distam entre si por um fator próximo de três, o mínimo só é localizado entre \(3\times10^{-3}\) e \(3\times10^{-2}\).
+O valor de referência situa-se, portanto, na faixa que minimiza o EQM, no compromisso entre dissipação excessiva e margem de estabilidade numérica.
+Como os valores avaliados distam entre si por um fator próximo de três, o mínimo só é localizado entre \(3\times10^{-3}\) e \(3\times10^{-2}\).
 
 \begin{figure}[H]
   \centering
@@ -181,13 +257,13 @@ O valor de referência situa-se, portanto, na faixa que minimiza o EQM, no compr
         \toprule
         \(\mu\) & \(\mathrm{EQM}(p)\) & Desvio ao mínimo \\
         \midrule
-        \(1{,}0\times10^{-1}\) & \(1{,}42\times10^{-2}\) & \(+47\%\) \\
+        \(1{,}0\times10^{-1}\) & \(1{,}42\times10^{-2}\) & \(+46\%\) \\
         \(3{,}0\times10^{-2}\) & \(1{,}45\times10^{-2}\) & \(+50\%\) \\
-        \(1{,}0\times10^{-2}\) & \(9{,}66\times10^{-3}\) & --- \\
-        \(3{,}0\times10^{-3}\) & \(1{,}05\times10^{-2}\) & \(+8\%\) \\
-        \(1{,}0\times10^{-3}\) & \(1{,}66\times10^{-2}\) & \(+71\%\) \\
-        \(3{,}0\times10^{-4}\) & \(1{,}96\times10^{-2}\) & \(+103\%\) \\
-        \(1{,}0\times10^{-4}\) & \(2{,}04\times10^{-2}\) & \(+112\%\) \\
+        \(1{,}0\times10^{-2}\) & \(9{,}67\times10^{-3}\) & --- \\
+        \(3{,}0\times10^{-3}\) & \(1{,}08\times10^{-2}\) & \(+12\%\) \\
+        \(1{,}0\times10^{-3}\) & \(1{,}66\times10^{-2}\) & \(+72\%\) \\
+        \(3{,}0\times10^{-4}\) & \(1{,}97\times10^{-2}\) & \(+104\%\) \\
+        \(1{,}0\times10^{-4}\) & \(2{,}04\times10^{-2}\) & \(+111\%\) \\
         \bottomrule
     \end{tabular}
     \fonte{O autor (2026).}
@@ -195,30 +271,36 @@ O valor de referência situa-se, portanto, na faixa que minimiza o EQM, no compr
 
 %---------------------------------------------------------------------------------------
 
+%---------------------------------------------------------------------------------------
+
 \section{Escalabilidade em CPU Multinúcleo}\label{sec:escalabilidade-em-cpu-multinucleo}
 
-A escalabilidade forte é avaliada para o OpenMP de um a doze núcleos físicos nas malhas de \(N_x = 100\), \(1000\) e \(10000\) e na de \(N_x = 30000\), a maior compatível com o limite de memória (\autoref{tab:memoria-malhas}), com valores medidos até oito núcleos e estendidos aos demais conforme a Seção~\ref{subsec:protocolo-de-medicao}.
-O tempo é medido conforme a Seção~\ref{subsec:protocolo-de-medicao}, com o número de passos e a configuração física constantes, e normalizado pelo caso sequencial \(T(1)\) do próprio núcleo de cálculo.
+A escalabilidade forte é avaliada para o OpenMP de um a doze núcleos físicos, nas malhas de \(N_x = 100\), \(1000\) e \(10000\) e na de \(N_x = 5 \times 10^4\), a maior compatível com o limite de memória (\autoref{tab:memoria-malhas}).
+O tempo é medido conforme a Seção~\ref{subsec:protocolo-de-medicao}, com o número de passos e a configuração física constantes, e normalizado pelo tempo de um núcleo do OpenMP, \(T_1\).
 As métricas, definidas na Seção~\ref{sec:escalabilidade-e-complexidade}, são a aceleração (\textit{speedup}) e a eficiência paralela:
 \[
-S(P)=\frac{T(1)}{T(P)},\qquad
+S(P)=\frac{T_1}{T_P},\qquad
 \eta(P)=\frac{S(P)}{P}.
 \]
 
-A \autoref{fig:escalabilidade-cpu} apresenta a aceleração em função do número de núcleos, relativa à taxa de um núcleo, e a \autoref{tab:escalabilidade-cpu} reúne as métricas com doze núcleos para cada malha, com a taxa absoluta.
-Pelo modelo \textit{roofline} da Seção~\ref{sec:custo-computacional}, quando o domínio reside na memória principal o teto de memória da CPU é de \(320\) MLUPS (\(320\) \textit{bytes} por nó, com armazenamento não temporal) e o teto aritmético, de \(2194\) MLUPS.
-Esse é o caso das malhas de \(N_x = 10000\) e \(30000\), cujas ocupações de \(344\)~MB e \(3{,}1\)~GB (\autoref{tab:memoria-malhas}) superam amplamente a capacidade dos \textit{caches}.
-Nelas, o núcleo de cálculo executa \(26{,}6\) MLUPS em um núcleo, cerca de sete vezes a taxa da implementação sequencial, e atinge com doze núcleos \(S = 5{,}66\) (\(\eta = 0{,}47\)) e \(150{,}4\) MLUPS, isto é, \(47\%\) do teto de memória (cerca de \(48\)~GB/s de tráfego, contra \(102{,}4\)~GB/s de pico) e \(7\%\) do teto aritmético.
-A aceleração é sublinear, e a maior parte do ganho sobre a implementação sequencial vem da taxa de cada núcleo, e não do número de núcleos.
+A aceleração em função do número de núcleos consta da \autoref{fig:escalabilidade-cpu}, e a \autoref{tab:escalabilidade-cpu} reúne as métricas com doze núcleos para cada malha, com a taxa absoluta.
+Pelo modelo \textit{roofline} da Seção~\ref{sec:custo-computacional}, o teto de memória da CPU é de \(320\) MLUPS quando o domínio reside na memória principal (\(320\) \textit{bytes} por nó, com armazenamento não temporal), e o teto aritmético, de \(1886\) MLUPS, corresponde às \(896\) operações por nó do modelo.
+Esse é o caso das malhas de \(N_x = 10^4\) e \(5 \times 10^4\), cujas ocupações de \(344\)~MB e \(8{,}6\)~GB (\autoref{tab:memoria-malhas}) superam amplamente a capacidade dos \textit{caches}.
 
-Em \(N_x = 100\) e \(1000\), com ocupações de \(0{,}03\)~MB e \(3{,}4\)~MB, o conjunto de trabalho cabe nos \textit{caches}, o limite de largura de banda da memória principal não se aplica, e a aceleração é limitada pelo custo das barreiras de sincronização entre as etapas de cada passo e pelo reduzido número de nós por fluxo de execução.
-Em \(N_x = 1000\), com \(10^4\) nós por passo, a taxa com doze núcleos é de \(126{,}1\) MLUPS (\(S = 4{,}00\), \(\eta = 0{,}33\)): a aceleração medida com oito núcleos, de \(4{,}3\), deixou de crescer a partir daí, e a extensão por \(f_{ef}\) prevê um pequeno recuo.
-Em \(N_x = 100\), com \(N_y = 1\), resta apenas uma linha de cem nós a distribuir, e o passo, de cerca de \(6\)~\(\mu\)s em um núcleo, é da ordem do custo de uma barreira.
-A aceleração máxima, de \(1{,}4\), ocorreu com quatro núcleos (\(23{,}3\) MLUPS), e com oito ou mais núcleos a taxa (\(15{,}3\) MLUPS) é inferior à de um núcleo (\(16{,}5\) MLUPS).
+Nelas, um único núcleo executa \(21{,}9\) MLUPS, valor \(5{,}1\) vezes o do \textit{Plain} e resultado conjunto das decisões de implementação da Seção~\ref{sec:otimizacao-roofline}.
+Com doze núcleos, obtêm-se \(S = 6{,}47\) (\(\eta = 0{,}54\)) e \(141{,}9\) MLUPS, ou \(44\%\) do teto de memória e \(7{,}5\%\) do teto aritmético.
+O tráfego correspondente é de cerca de \(45\)~GB/s, contra \(102{,}4\)~GB/s de pico teórico e \(80{,}0\)~GB/s de \textit{triad}.
+A aceleração é sublinear, e a fração sequencial efetiva e o teto de eficiência da máquina, examinados a seguir, indicam a origem dessa perda.
+
+Com ocupações de \(0{,}03\)~MB e \(3{,}4\)~MB em \(N_x = 100\) e \(1000\), o conjunto de trabalho cabe nos \textit{caches} e o limite de largura de banda da memória principal não se aplica.
+A aceleração é restringida, nesses casos, pelo custo das barreiras de sincronização entre as etapas de cada passo e pelo reduzido número de nós por fluxo de execução.
+Em \(N_x = 1000\), com \(10^4\) nós por passo, a taxa com doze núcleos é de \(137{,}5\) MLUPS.
+Já em \(N_x = 100\), com \(N_y = 1\), resta uma única linha de cem nós a distribuir.
+O passo, de cerca de \(4\)~\(\mu\)s em um núcleo, é da ordem do custo de uma barreira, e a taxa pouco varia com o número de núcleos (\(S\) entre \(1{,}1\) e \(1{,}5\), \(31{,}8\) MLUPS com doze).
 
 \begin{figure}[H]
   \centering
-  \caption{Aceleração \(S(P)\) em CPU para um a doze núcleos, com \(N_x = 100\), \(1000\), \(10000\) e \(30000\), relativa à taxa de um núcleo.}
+  \caption{Aceleração \(S(P)\) em CPU para um a doze núcleos, com \(N_x = 100\), \(1000\), \(10000\) e \(50000\), relativa à taxa de um núcleo do OpenMP.}
   \label{fig:escalabilidade-cpu}
   \includegraphics[width=0.85\linewidth]{fig/scalability.png}
   \fonte{O autor (2026).}
@@ -232,50 +314,84 @@ A aceleração máxima, de \(1{,}4\), ocorreu com quatro núcleos (\(23{,}3\) ML
         \toprule
         \(N_x\) & \(S(12)\) & \(\eta(12)\) & \(f_{ef}\) & Taxa (MLUPS) \\
         \midrule
-        100 & 0{,}92 & 0{,}08 & --- & 15{,}3 \\
-        1000 & 4{,}00 & 0{,}33 & 0{,}18 & 126{,}1 \\
-        10000 & 5{,}66 & 0{,}47 & 0{,}10 & 150{,}4 \\
-        30000 & 5{,}66 & 0{,}47 & 0{,}10 & 150{,}4 \\
+        100 & 1{,}37 & 0{,}11 & --- & 31{,}8 \\
+        1000 & 5{,}70 & 0{,}47 & 0{,}10 & 137{,}5 \\
+        10000 & 6{,}47 & 0{,}54 & 0{,}08 & 141{,}9 \\
+        50000 & 6{,}47 & 0{,}54 & 0{,}08 & 141{,}9 \\
         \bottomrule
     \end{tabular}
-    \nota{Valores medidos até oito núcleos e estendidos a doze pela regra da Seção~\ref{subsec:protocolo-de-medicao}; $N_x = 3 \times 10^4$ mantém a taxa de um núcleo e a fração sequencial efetiva de $N_x = 10^4$, e em $N_x = 100$ a aceleração é mantida constante acima de oito núcleos.}
+    \nota{A taxa de um núcleo é de \(23{,}1\), \(24{,}1\), \(21{,}9\) e \(21{,}9\) MLUPS nas quatro malhas.}
     \fonte{O autor (2026).}
 \end{table}
 
-A fração sequencial efetiva \(f_{ef}\) (Karp-Flatt, Seção~\ref{sec:escalabilidade-e-complexidade}) aproximadamente constante com \(P\) caracteriza uma parcela sequencial genuína ou um custo fixo por passo, ao passo que seu crescimento denota uma sobrecarga que aumenta com o paralelismo, como as sincronizações ou a contenção de recursos compartilhados.
-No miniaplicativo, como as condições de contorno estão incorporadas ao estêncil de propagação, a parcela genuinamente sequencial se resume às barreiras implícitas ao final de cada laço distribuído e à troca de ponteiros entre os arranjos de distribuições, de custo praticamente independente do número de núcleos.
-Em uma malha adicional de \(N_x = 5000\), \(f_{ef}\) manteve-se entre \(0{,}12\) e \(0{,}19\) de dois a oito núcleos, com mínimo em cinco.
-Nas malhas grandes, valores dessa magnitude superam em muito a parcela genuinamente sequencial, desprezível diante da varredura de \(10^{6}\) a \(9\times10^{6}\) nós a cada passo, de modo que a lei de Amdahl não explica, por si só, a perda de eficiência.
+Um \(f_{ef}\) de Karp-Flatt (Seção~\ref{sec:escalabilidade-e-complexidade}) aproximadamente constante com \(P\) caracteriza uma parcela sequencial genuína ou um custo fixo por passo.
+Seu crescimento denota, em contrapartida, uma sobrecarga que aumenta com o paralelismo, como as sincronizações ou a contenção de recursos compartilhados.
+No miniaplicativo, as condições de contorno estão incorporadas ao estêncil de propagação.
+A parcela genuinamente sequencial resume-se, assim, às barreiras implícitas ao final de cada laço distribuído e à troca de ponteiros entre os arranjos de distribuições, de custo praticamente independente do número de núcleos.
+De dois a doze núcleos, \(f_{ef}\) variou entre \(0{,}08\) e \(0{,}11\) em \(N_x = 1000\) e em \(N_x = 10^4\), valores que superam em muito a parcela genuinamente sequencial, desprezível diante da varredura de \(10^{4}\) a \(10^{6}\) nós a cada passo.
+A lei de Amdahl não explica, por si só, a perda de eficiência.
 
-Para separar o que pertence à implementação do que pertence à máquina, mediu-se o teto de eficiência paralela do equipamento com cópias independentes e sem comunicação do mesmo programa, uma por núcleo (\autoref{tab:teto-copias}).
-Oito cópias atingem de \(0{,}55\) a \(0{,}73\) da taxa linear, conforme o tamanho da malha (\(117{,}2\) MLUPS em \(N_x = 5000\), contra \(8 \times 26{,}3\)).
-O laço de multiplicações e adições fundidas, que não acessa a memória, também perde eficiência com oito núcleos ocupados (\(381\) GFLOP/s contra \(8 \times 81{,}5\), ou \(0{,}58\)), o que é compatível com a redução da frequência de operação sob carga vetorial, sob o limite de potência do processador; nas malhas grandes, soma-se o caminho compartilhado até a memória.
-A fração sequencial efetiva das cópias independentes, \(0{,}11\) em \(N_x = 5000\), coincide com a do OpenMP (\(0{,}12\)): a perda de eficiência nas malhas grandes é, portanto, integralmente atribuível à máquina.
-O OpenMP atinge de \(92\%\) a \(97\%\) do teto de oito cópias em \(N_x = 5000\) e \(107\%\) em \(N_x = 10^4\), pois os fluxos de uma mesma execução compartilham o conjunto de trabalho na \textit{cache} de último nível.
-Em \(N_x = 1000\), em contraste, o OpenMP atinge de \(71\%\) a \(78\%\) do teto (\(122\) a \(134\) contra \(172{,}7\) MLUPS), e a diferença entre as frações sequenciais (\(0{,}12\) contra \(0{,}05\)) equivale a um custo de \(17\) a \(24\)~\(\mu\)s por passo, em \(10^4\) nós, atribuível às barreiras e ao escalonamento dinâmico.
-Nas malhas pequenas, portanto, a sincronização limita a escalabilidade, e nas grandes, o equipamento.
+Para separar o que pertence à implementação do que pertence à máquina, mediu-se o teto de eficiência paralela com cópias independentes do mesmo programa, sem comunicação, uma por núcleo (\autoref{tab:teto-copias}).
+Doze cópias atingem de \(0{,}48\) a \(0{,}71\) da taxa linear, conforme o tamanho da malha.
+O laço de multiplicações e adições fundidas, que não acessa a memória, também perde eficiência com todos os núcleos ocupados (\(1651\) GFLOP/s contra \(12 \times 166{,}4\), ou \(0{,}83\)).
+Essa razão é igual à da frequência de operação sob carga vetorial (\(4{,}3\) contra \(5{,}2\)~GHz equivalentes) e compatível com o limite de potência do processador.
+Soma-se, nas malhas grandes, o caminho compartilhado até a memória, pois o \textit{triad} sustenta \(80{,}0\)~GB/s com doze fluxos, contra \(12 \times 38{,}0\)~GB/s caso os fluxos não competissem.
+
+A fração sequencial efetiva das cópias independentes, de \(0{,}08\) a \(0{,}09\) em \(N_x = 5000\) e \(10^4\), é próxima da do OpenMP (\(0{,}08\)), o que atribui a perda de eficiência nessas malhas à máquina, em lugar do código.
+O OpenMP atinge \(99\%\) e \(111\%\) do teto de doze cópias em \(N_x = 5000\) e \(10^4\), pois os fluxos de uma mesma execução compartilham o conjunto de trabalho na \textit{cache} de último nível.
+Em \(N_x = 1000\), em contraste, atinge \(76\%\) do teto (\(137{,}5\) contra \(181{,}1\) MLUPS), e a diferença, equivalente a um custo de cerca de \(18\)~\(\mu\)s por passo para \(10^4\) nós, é atribuível às barreiras e ao escalonamento dinâmico.
+Em resumo, a sincronização limita a escalabilidade nas malhas pequenas e, nas grandes, a máquina.
 
 \begin{table}[H]
     \centering
-    \caption{Teto de eficiência paralela do equipamento: taxa total (MLUPS) de $K$ cópias independentes do programa, uma por núcleo, e fração da taxa linear}
+    \caption{Teto de eficiência paralela da máquina: taxa total (MLUPS) de $K$ cópias independentes do programa, uma por núcleo, e fração da taxa linear}
     \label{tab:teto-copias}
-    \begin{tabular}{lccccc}
+    \begin{tabular}{lccc}
         \toprule
-        Malha & $K=1$ & $K=2$ & $K=4$ & $K=8$ & $K=8$ / ($8 \times K=1$) \\
+        Malha & $K=1$ & $K=12$ & $K=12$ / ($12 \times K=1$) \\
         \midrule
-        $N_x = 1000$ & $29{,}48$ & $54{,}46$ & $103{,}37$ & $172{,}66$ & $0{,}73$ \\
-        $N_x = 3536$ & $26{,}49$ & --- & --- & $116{,}89$ & $0{,}55$ \\
-        $N_x = 5000$ & $26{,}28$ & $47{,}05$ & $81{,}14$ & $117{,}24$ & $0{,}56$ \\
-        $N_x = 10^4$ & $24{,}34$ & --- & --- & $124{,}78$ & $0{,}64$ \\
+        $N_x = 625$ & $24{,}4$ & $206{,}8$ & $0{,}71$ \\
+        $N_x = 1000$ & $22{,}8$ & $181{,}1$ & $0{,}66$ \\
+        $N_x = 1250$ & $23{,}4$ & $159{,}7$ & $0{,}57$ \\
+        $N_x = 3536$ & $21{,}2$ & $121{,}4$ & $0{,}48$ \\
+        $N_x = 5000$ & $19{,}6$ & $121{,}9$ & $0{,}52$ \\
+        $N_x = 10^4$ & $20{,}9$ & $128{,}4$ & $0{,}51$ \\
         \bottomrule
     \end{tabular}
-    \nota{Cada cópia é fixada a um núcleo de desempenho e não se comunica com as demais. A malha de $N_x = 3536$ tem o número de nós de uma fatia do MPI com oito processos em $N_x = 10^4$ ($125 \times 10^3$ nós).}
+    \nota{Cada cópia é fixada a um núcleo físico e não se comunica com as demais.}
     \fonte{O autor (2026).}
 \end{table}
 
-O ponto de doze núcleos é uma extrapolação que não captura efeitos exclusivos da topologia em dois complexos de seis núcleos (Seção~\ref{subsec:ambiente-computacional}), cuja comunicação de maior latência pode penalizar as barreiras acima de seis núcleos.
+A escalabilidade fraca, em que cada núcleo mantém cerca de \(10^5\) ou \(2{,}5\times10^5\) nós, indica se a perda de eficiência decorre da redução da carga por núcleo (\autoref{tab:escalabilidade-fraca}).
+A primeira carga, de cerca de \(34\)~MB por núcleo, é comparável à capacidade do \textit{cache} de último nível de um complexo, e a segunda, de cerca de \(86\)~MB, a excede.
+Em ambas, a eficiência fraca \(\eta_w\) cai com o número de núcleos, de \(0{,}95\) e \(0{,}92\) com dois núcleos para \(0{,}56\) e \(0{,}51\) com doze, valores próximos ao da escalabilidade forte em \(N_x = 10^4\) (\(0{,}54\)).
 
-O desempenho é determinado, em última análise, pela taxa de cada núcleo, de \(25\) a \(31\) MLUPS, e a posição dessas taxas em relação aos tetos do equipamento é discutida na Seção~\ref{sec:otimizacao-roofline}.
+Como o trabalho por núcleo permanece o mesmo, a degradação provém dos recursos compartilhados, isto é, da largura de banda de memória, do \textit{cache} de último nível e do limite de potência, em linha com o teto das cópias independentes.
+A diferença entre as duas cargas, de quatro pontos percentuais com oito núcleos (\(0{,}73\) e \(0{,}69\)), limita a parcela atribuível à saída do conjunto de trabalho do \textit{cache}.
+A queda acentua-se acima de seis núcleos, compatível com a ocupação do segundo complexo de núcleos, cujo acesso aos dados do primeiro tem latência maior (Seção~\ref{subsec:ambiente-computacional}).
+
+\begin{table}[H]
+    \centering
+    \caption{Escalabilidade fraca do OpenMP com cerca de \(10^5\) e de \(2{,}5\times10^5\) nós por núcleo: largura da malha, taxa de atualização de nós e eficiência fraca \(\eta_w = R_P/(P R_1)\)}
+    \label{tab:escalabilidade-fraca}
+    \begin{tabular}{c|ccc|ccc}
+        \toprule
+         & \multicolumn{3}{c|}{\(\approx 10^5\) nós por núcleo} & \multicolumn{3}{c}{\(\approx 2{,}5\times10^5\) nós por núcleo} \\
+        Núcleos \(P\) & \(N_x\) & Taxa (MLUPS) & \(\eta_w\) & \(N_x\) & Taxa (MLUPS) & \(\eta_w\) \\
+        \midrule
+        1 & 3200 & 18{,}8 & 1{,}00 & 5000 & 20{,}8 & 1{,}00 \\
+        2 & 4500 & 35{,}7 & 0{,}95 & 7071 & 38{,}4 & 0{,}92 \\
+        4 & 6400 & 62{,}6 & 0{,}83 & 10000 & 68{,}7 & 0{,}83 \\
+        6 & 7800 & 89{,}5 & 0{,}80 & 12247 & 96{,}8 & 0{,}78 \\
+        8 & 9100 & 109{,}4 & 0{,}73 & 14142 & 114{,}5 & 0{,}69 \\
+        12 & 11100 & 126{,}7 & 0{,}56 & 17321 & 128{,}2 & 0{,}51 \\
+        \bottomrule
+    \end{tabular}
+    \nota{Os valores com doze núcleos são extrapolações por ajuste linear de \(\eta_w\) em função do número de núcleos.}
+    \fonte{O autor (2026).}
+\end{table}
+
+O desempenho é determinado, em última análise, pela taxa de cada núcleo, de \(20\) a \(24\) MLUPS nas malhas de \(N_x \geq 1000\), e a posição dessas taxas em relação aos tetos da plataforma é discutida na Seção~\ref{sec:otimizacao-roofline}.
 
 %---------------------------------------------------------------------------------------
 
@@ -283,59 +399,118 @@ O desempenho é determinado, em última análise, pela taxa de cada núcleo, de 
 
 Comparam-se as tecnologias de paralelização em CPU multinúcleo do Capítulo~\ref{ch:implementacao-computacional}: OpenMP, OpenACC, OpenCL, Kokkos, RAJA, Alpaka e MPI.
 O OpenACC é compilado para CPU pelo compilador da NVIDIA, e os \textit{kernels} do OpenCL são submetidos a um dispositivo de CPU exposto pelo \textit{runtime} POCL (Seções~\ref{sec:implementacao-computacional-utilizando-openacc} e~\ref{sec:implementacao-computacional-utilizando-opencl}).
-Como as versões por diretivas e o OpenCL mantêm códigos distintos para CPU e para GPU, empregam-se apenas as variantes de CPU, e as de acelerador são retomadas na Seção~\ref{sec:comparacao-de-tecnologias-em-gpu}.
+Como as versões por diretivas e o OpenCL mantêm códigos distintos para CPU e para GPU, empregam-se aqui apenas as variantes de CPU, e as de acelerador são retomadas na Seção~\ref{sec:comparacao-de-tecnologias-em-gpu}.
 
 O protocolo fixa os doze núcleos físicos, com um fluxo de execução por núcleo (ou um processo, no MPI), e os mesmos tamanhos de malha da escalabilidade.
-A aceleração é calculada em relação à implementação sequencial de referência (\textit{Plain}) com o mesmo número de nós.
-A \autoref{tab:desempenho-cpu-tecnologias} reúne, para a maior malha (\(N_x=3\times10^4\)), a taxa de atualização de nós e a aceleração de cada tecnologia, e a \autoref{fig:aceleracao-cpu-tecnologias} apresenta a aceleração em função de \(N_x\).
+As acelerações \(S\) e \(S_{seq}\) são calculadas como no início do capítulo, com o mesmo número de nós e \(S_{seq} = G_1 S\) (Seção~\ref{sec:escalabilidade-e-complexidade}).
+Para a maior malha (\(N_x=5\times10^4\)), a \autoref{tab:desempenho-cpu-tecnologias} reúne a taxa de atualização de nós e as acelerações de cada tecnologia.
+A \autoref{tab:desempenho-cpu-medido} apresenta as taxas com um e com doze núcleos em três tamanhos de malha, e a \autoref{fig:aceleracao-cpu-tecnologias} mostra a aceleração \(S\) em função de \(N_x\).
 
 \begin{table}[H]
     \centering
-    \caption{Desempenho das tecnologias de paralelização em CPU para malha de \(N_x=3\times10^4\) nós, utilizando doze núcleos físicos}
+    \caption{Desempenho das tecnologias de paralelização em CPU para malha de \(N_x=5\times10^4\) nós, utilizando doze núcleos físicos, e acelerações em relação a um núcleo do OpenMP (\(S\)) e ao \textit{Plain} (\(S_{seq}\))}
     \label{tab:desempenho-cpu-tecnologias}
-    \begin{tabular}{lcc}
+    \begin{tabular}{lccc}
         \toprule
-        Tecnologia & Taxa (MLUPS) & Aceleração (\(S\)) \\
+        Tecnologia & Taxa (MLUPS) & Aceleração (\(S\)) & Aceleração (\(S_{seq}\)) \\
         \midrule
-        \textit{Plain} (sequencial) & 3{,}6 & 1{,}0\(\times\) \\
-        OpenMP & 150{,}4 & 41{,}5\(\times\) \\
-        Alpaka & 150{,}1 & 41{,}4\(\times\) \\
-        OpenACC & 146{,}6 & 40{,}4\(\times\) \\
-        Kokkos & 144{,}7 & 39{,}9\(\times\) \\
-        RAJA & 142{,}8 & 39{,}4\(\times\) \\
-        OpenCL & 131{,}6 & 36{,}3\(\times\) \\
-        MPI & 109{,}0 & 30{,}1\(\times\) \\
+        OpenCL & 154{,}9 & 7{,}07\(\times\) & 35{,}9\(\times\) \\
+        RAJA & 145{,}6 & 6{,}64\(\times\) & 33{,}7\(\times\) \\
+        Kokkos & 145{,}4 & 6{,}63\(\times\) & 33{,}7\(\times\) \\
+        OpenMP & 141{,}9 & 6{,}47\(\times\) & 32{,}9\(\times\) \\
+        Alpaka & 139{,}4 & 6{,}36\(\times\) & 32{,}3\(\times\) \\
+        MPI & 133{,}6 & 6{,}09\(\times\) & 31{,}0\(\times\) \\
+        OpenACC & 125{,}7 & 5{,}73\(\times\) & 29{,}1\(\times\) \\
         \midrule
-        Teto \textit{roofline} (memória) & 320 & --- \\
-        Teto \textit{roofline} (cálculo) & 2194 & --- \\
+        OpenMP (um núcleo) & 21{,}9 & 1{,}00\(\times\) & \(G_1 = 5{,}1\) \\
+        \textit{Plain} (um núcleo) & 4{,}3 & \(1/G_1 = 0{,}20\) & 1{,}00\(\times\) \\
+        \midrule
+        Teto \textit{roofline} (memória) & 320 & --- & --- \\
+        Teto \textit{roofline} (cálculo) & 1886 & --- & --- \\
         \bottomrule
     \end{tabular}
-    \nota{O OpenACC é compilado com o \texttt{nvc++}, e as demais tecnologias de CPU, com o GCC. A taxa de cada tecnologia com doze núcleos mantém a razão com o OpenMP medida com oito núcleos em $N_x = 10^4$ (Seção~\ref{subsec:protocolo-de-medicao}); no OpenACC, a razão medida em $N_x = 5000$.}
+    \nota{O OpenACC é compilado com o \texttt{nvc++}, e as demais tecnologias de CPU, com o GCC. Como \(S_{seq} = G_1 S\), cada \(S_{seq}\) é o produto de \(S\) pela razão \(G_1\) entre o tempo do \textit{Plain} e o de um núcleo do OpenMP. As taxas de \(N_x = 10^4\) e \(5 \times 10^4\) coincidem, pois ambas as malhas excedem os \textit{caches}.}
     \fonte{O autor (2026).}
 \end{table}
 
-Em \(N_x = 100\), as tecnologias de memória compartilhada ficaram entre \(15{,}3\) (OpenMP) e \(20{,}5\) MLUPS (Alpaka), de \(4{,}5\times\) a \(6{,}1\times\) a versão sequencial, diferenças que refletem a latência de despacho de cada \textit{runtime} e a sincronização e ficam na faixa de variação entre execuções, pois o passo dura cerca de \(6\)~\(\mu\)s em um núcleo.
-O OpenCL foi o mais penalizado, pelo custo fixo de submeter à fila do POCL, a cada passo, o \textit{buffer} de comandos que registra os \textit{kernels}: o tempo por passo com oito fluxos foi de cerca de \(78\)~\(\mu\)s, nove vezes o de um núcleo (\(8{,}7\)~\(\mu\)s), o que o deixa em \(1{,}3\) MLUPS, abaixo da versão sequencial (\(0{,}38\times\)).
-Apenas no OpenCL, portanto, a execução em CPU multinúcleo não compensou o custo de paralelização nessa malha, e o ponto de equilíbrio com a versão sequencial, por interpolação entre \(N_x = 100\) e \(500\), situou-se em cerca de \(120\) nós em \(x\).
+\begin{table}[H]
+    \centering
+    \caption{Taxas das tecnologias de paralelização em CPU (MLUPS, melhor de cinco execuções): um núcleo / doze núcleos}
+    \label{tab:desempenho-cpu-medido}
+    \begin{tabular}{lccc}
+        \toprule
+        Tecnologia & \(N_x=1000\) & \(N_x=5000\) & \(N_x=10^4\) \\
+        \midrule
+        OpenMP (GCC) & 24{,}1 / 137{,}5 & 20{,}8 / 120{,}9 & 21{,}9 / 141{,}9 \\
+        Kokkos & 24{,}5 / 141{,}9 & 21{,}0 / 111{,}7 & 20{,}8 / 145{,}4 \\
+        RAJA & 24{,}3 / 127{,}6 & 21{,}2 / 112{,}2 & 21{,}2 / 145{,}6 \\
+        Alpaka & 23{,}3 / 130{,}4 & 20{,}1 / 116{,}2 & 21{,}1 / 139{,}4 \\
+        MPI (processos) & 24{,}0 / 118{,}3 & 21{,}6 / 107{,}8 & 21{,}9 / 133{,}6 \\
+        OpenCL (POCL) & 25{,}2 / 55{,}0 & 22{,}4 / 119{,}6 & 22{,}4 / 154{,}9 \\
+        OpenACC (\texttt{nvc++}) & 24{,}6 / 134{,}3 & 20{,}7 / 120{,}1 & 20{,}9 / 125{,}7 \\
+        OpenMP (\texttt{nvc++}) & 25{,}0 / 147{,}1 & 21{,}8 / 122{,}5 & 21{,}2 / 127{,}0 \\
+        \bottomrule
+    \end{tabular}
+    \nota{No OpenMP, a taxa em \(N_x=5000\) é de \(20{,}8\), \(38{,}5\), \(68{,}4\) e \(120{,}9\) MLUPS com \(1\), \(2\), \(4\) e \(12\) núcleos (eficiência de \(1{,}00\), \(0{,}92\), \(0{,}82\) e \(0{,}48\)). A variação entre sessões de medição é da ordem de \(10\%\) (mediana) nas taxas com todos os núcleos ocupados (Seção~\ref{subsec:ameacas-validade}).}
+    \fonte{O autor (2026).}
+\end{table}
 
-Em \(N_x = 1000\), cujo conjunto de trabalho reside nos \textit{caches}, as tecnologias, exceto o OpenCL, distribuíram-se em uma faixa estreita, de \(112\) (Alpaka) a \(135\) MLUPS (Kokkos e OpenACC), de \(29\times\) a \(35\times\) a versão sequencial.
-Como as sete tecnologias executam o mesmo \textit{kernel} vetorial (\texttt{HostKernel.hpp}, Seção~\ref{sec:implementacao-computacional-utilizando-openmp}), as diferenças refletem a eficiência do escalonamento e da sincronização de cada \textit{runtime} e ficam próximas da variação entre sessões de medição, de cerca de \(15\%\).
-O OpenCL, com \(33{,}9\) MLUPS, está a \(27\%\) do OpenMP, pois o custo fixo de submissão à fila do POCL (cerca de \(0{,}2\)~ms por passo com oito fluxos) é mais de duas vezes o tempo do próprio passo.
+Com \(N_x = 100\), as tecnologias de memória compartilhada ficaram entre \(15{,}5\) (RAJA) e \(31{,}8\) MLUPS (OpenMP), de \(0{,}7\) a \(1{,}4\) vez a taxa de um núcleo do OpenMP, e o MPI atingiu \(31{,}3\) MLUPS (\(1{,}4\) vez).
+Essas diferenças refletem a latência de despacho e de sincronização de cada \textit{runtime} e permanecem dentro da variação entre execuções, pois o passo dura cerca de \(4\)~\(\mu\)s em um núcleo.
+O OpenCL foi o mais penalizado, pelo custo fixo de submeter à fila do POCL, a cada passo, o \textit{buffer} de comandos que registra os \textit{kernels}.
+O passo leva cerca de \(80\)~\(\mu\)s, dezenove vezes o de um núcleo do OpenMP, e a taxa cai a \(1{,}2\) MLUPS (\(0{,}05\times\)).
+Apenas no OpenCL, portanto, a execução em CPU multinúcleo não compensa o custo de paralelização nessa malha.
 
-Nas malhas maiores (\(N_x = 10000\) e \(30000\)), em que o domínio reside na memória principal, as tecnologias convergem para um patamar próximo ao teto de largura de banda: OpenMP, Alpaka, OpenACC, Kokkos e RAJA ficam entre \(143\) e \(150\) MLUPS (\(45\%\) a \(47\%\) do teto de \(320\) MLUPS), uma faixa de apenas \(5\%\).
-As camadas de abstração Kokkos, RAJA e Alpaka (\(95\%\) a \(100\%\) do OpenMP) e o OpenACC compilado pelo \texttt{nvc++} (\(97\%\)) não impõem, portanto, custo mensurável em CPU quando o núcleo vetorial é compartilhado.
-O OpenCL atinge \(131{,}6\) MLUPS (\(88\%\) do OpenMP, e \(92\%\) em \(N_x = 5000\)), diferença atribuída ao custo de lançamento do POCL, diluído em malhas grandes.
-O MPI atinge \(109{,}0\) MLUPS (\(72\%\) do OpenMP) e, com oito núcleos em \(N_x = 10^4\), \(96{,}5\) MLUPS, \(83\%\) do teto de oito cópias independentes com o número de nós de uma fatia (\(116{,}9\) MLUPS, \autoref{tab:teto-copias}).
-No MPI, cada processo mantém um conjunto de trabalho próprio e uma fatia estática, sem o escalonamento dinâmico entre processos que absorve núcleos lentos no OpenMP.
-A troca das colunas de fronteira e o recálculo das colunas fantasma acrescentam trabalho e sincronização a cada passo, e a causa dominante da diferença não foi isolada por medições específicas.
+Para \(N_x = 1000\), cujo conjunto de trabalho reside nos \textit{caches}, as tecnologias de memória compartilhada compiladas com o GCC variaram de \(93\%\) (RAJA) a \(103\%\) (Kokkos) da taxa do OpenMP, e o OpenACC atingiu \(98\%\) (\autoref{tab:desempenho-cpu-medido}).
+Como todas executam o mesmo \textit{kernel} vetorial (\texttt{HostKernel.hpp}, Seção~\ref{sec:implementacao-computacional-utilizando-openmp}), as diferenças refletem a eficiência do escalonamento e da sincronização de cada \textit{runtime} e estão próximas da variação entre sessões de medição.
+O OpenCL, com \(55{,}0\) MLUPS, fica em \(40\%\) do OpenMP: um passo de \(10^4\) nós leva \(0{,}18\)~ms contra \(0{,}07\)~ms no OpenMP.
+A diferença, de cerca de \(0{,}11\)~ms, corresponde ao custo de lançamento e de junção dos grupos de trabalho do POCL, pago uma vez por passo e que a aplicação não consegue ocultar nessa malha.
 
-O modelo de programação em CPU afeta, portanto, de modo moderado o desempenho nas malhas grandes: a menor taxa (MPI) é \(72\%\) da maior, e as demais, de \(88\%\) a \(100\%\).
-As camadas de abstração preservam uma única base de código para CPU e GPU ao custo de manter, em cada uma, uma classe de CPU que chama o núcleo vetorial compartilhado (Seção~\ref{sec:sintese-particularidades}).
-O fator dominante do desempenho em CPU é o código executado em cada núcleo, e não a tecnologia: a vetorização com direção longitudinal contígua e o fechamento fatorado multiplicam a taxa de um núcleo por cerca de \(2{,}8\) e por \(2{,}2\), respectivamente (Seção~\ref{sec:otimizacao-roofline}), em todas as tecnologias, ao passo que a escolha da tecnologia altera a taxa em no máximo \(12\%\) nas malhas grandes, exceto no MPI.
+Para as malhas maiores (\(N_x = 5000\) e \(10^4\)), em que o domínio reside na memória principal, as quatro tecnologias de memória compartilhada compiladas com o GCC aproximam-se do mesmo patamar.
+Com doze núcleos, as taxas vão de \(111{,}7\) a \(120{,}9\) MLUPS em \(N_x = 5000\) e de \(139{,}4\) a \(145{,}6\) MLUPS em \(N_x = 10^4\).
+Kokkos, RAJA e Alpaka ficam entre \(92\%\) e \(103\%\) do OpenMP, sem sinal sistemático entre as malhas e dentro da dispersão entre sessões, de cerca de \(10\%\), o que indica que o custo de despacho das camadas não se distingue do do OpenMP.
+Esse resultado vale por construção: o núcleo é instanciado uma única vez por número de vias, todas as tecnologias executam o mesmo código de máquina e a camada apenas distribui os segmentos entre os fluxos (hipótese 15 da \autoref{tab:hipoteses-otimizacao}).
+Mede-se, assim, o custo do despacho; a capacidade de uma camada de gerar código vetorial a partir de laços por célula não foi avaliada (Seção~\ref{sec:duas-formas-de-implementacao}).
+
+Nessas malhas, o OpenCL atinge \(119{,}6\) e \(154{,}9\) MLUPS (\(99\%\) e \(109\%\) do OpenMP).
+Em parte, isso se deve à taxa por núcleo do \textit{kernel} compilado pelo LLVM do POCL, de \(2\%\) a \(8\%\) superior à do GCC (\(22{,}4\) contra \(21{,}9\) MLUPS em \(N_x = 10^4\)), diferença compatível com a geração de código (hipótese 19).
+A outra parcela decorre dos armazenamentos não temporais, que mantêm o tráfego das demais tecnologias (\(320\) \textit{bytes} por nó) nas malhas que excedem o \textit{cache} (hipótese 18).
+
+O OpenACC e o OpenMP compilados com o \texttt{nvc++} atingem \(89\%\) e \(90\%\) do OpenMP compilado com o GCC em \(N_x = 10^4\) e, em um núcleo, taxas equivalentes às do GCC.
+As limitações do \texttt{nvc++} (Seção~\ref{sec:implementacao-computacional-utilizando-openacc}) impõem ao OpenACC a formulação em laços de via.
+O cabeçalho vetorial mantém o caminho com instruções intrínsecas, com armazenamentos não temporais e arredondamento da exponencial por soma de constante, apenas para o GCC e o \textit{clang}.
+Como os laços de via escrevem com armazenamentos comuns, o tráfego sobe de \(320\) para \(464\) \textit{bytes} por nó na malha que excede o \textit{cache}.
+A diferença para o GCC, desprezível em \(N_x = 5000\) (\(99\%\)), surge em \(N_x = 10^4\), em que o tráfego de escrita pesa mais.
+Trata-se, portanto, de uma limitação da cadeia de compilação, alheia à tecnologia e ao algoritmo.
+
+O MPI com doze processos atinge \(86\%\), \(89\%\) e \(94\%\) da taxa do OpenMP em \(N_x = 1000\), \(5000\) e \(10^4\), respectivamente (\autoref{tab:desempenho-cpu-medido}).
+A diferença para o OpenMP nas malhas grandes foi investigada com cronômetros por fase em cada processo (cálculo das bordas e empacotamento, cálculo interior, espera e desempacotamento).
+Sem sobreposição entre comunicação e cálculo, os processos permaneciam ociosos em \texttt{MPI\_Waitall} de \(25\%\) a \(35\%\) do passo, pois, sem progresso assíncrono, as mensagens grandes só avançam dentro de chamadas à biblioteca.
+
+O cálculo das bordas antes do interior, a postagem antecipada do halo e as chamadas \texttt{MPI\_Testall} entre grupos de linhas (Seção~\ref{sec:implementacao-computacional-utilizando-mpi}) elevaram a taxa em \(14\%\) a \(21\%\) (hipótese 17).
+O restante da diferença decorre da decomposição estática.
+O passo de cada processo varia de uma iteração a outra, e a decomposição paga o máximo entre os processos a cada passo; o escalonamento dinâmico do OpenMP, em contraste, redistribui os segmentos entre os fluxos.
+Coerentemente, a taxa do MPI aproxima-se da do OpenMP quando os núcleos são distribuídos entre menos processos e mais fluxos por processo, e iguala-a quando um único processo ocupa todos eles.
 
 \begin{figure}[H]
   \centering
-  \caption{Aceleração em função de \(N_x\) para as tecnologias de paralelização em CPU, em relação à implementação sequencial de referência (\textit{Plain}), representada pela aceleração unitária.}
+  \caption{Linha do tempo de um passo em um processo do MPI, com a posição relativa do cálculo das bordas, da postagem do halo, do cálculo interior com chamadas \texttt{MPI\_Testall} e da espera residual, para a decomposição estática em doze processos.}
+  \label{fig:mpi-linha-do-tempo}
+  \fbox{\parbox{0.85\linewidth}{\centering\vspace{1.6cm}Espaço reservado para a figura: diagrama de Gantt de um passo de tempo em quatro processos vizinhos, com uma barra por fase (bordas, postagem, interior, espera, desempacotamento) e a espera pelo processo mais lento destacada.\vspace{1.6cm}}}
+  \fonte{O autor (2026).}
+\end{figure}
+
+O modelo de programação em CPU afeta, portanto, de modo moderado o desempenho nas malhas grandes.
+As tecnologias de memória compartilhada compiladas com o GCC e o OpenCL ficam entre \(92\%\) e \(109\%\) do OpenMP, e as diferenças restantes, do MPI e do OpenACC (de \(89\%\) a \(94\%\)), têm causas identificadas: a decomposição estática e o compilador, respectivamente.
+As camadas de abstração preservam uma única base de código para CPU e GPU ao custo de manter, em cada uma, uma classe de CPU que chama o núcleo vetorial compartilhado (Seção~\ref{sec:sintese-particularidades}).
+
+O fator dominante é o código executado em cada núcleo.
+A vetorização com direção longitudinal contígua e o fechamento fatorado multiplicam a taxa de um núcleo por cerca de \(5{,}1\) e por \(2{,}2\), respectivamente (hipóteses 2 e 8 da \autoref{tab:hipoteses-otimizacao}), em todas as tecnologias.
+A escolha da tecnologia, por sua vez, altera a taxa em poucos por cento nas malhas grandes, exceto no MPI e no OpenACC.
+
+\begin{figure}[H]
+  \centering
+  \caption{Aceleração \(S\) em função de \(N_x\) para as tecnologias de paralelização em CPU, em relação a um núcleo de CPU do OpenMP (aceleração unitária).}
   \label{fig:aceleracao-cpu-tecnologias}
   \includegraphics[width=0.85\linewidth]{fig/cpu-technologies.png}
   \fonte{O autor (2026).}
@@ -346,67 +521,75 @@ O fator dominante do desempenho em CPU é o código executado em cada núcleo, e
 \section{Comparação entre Tecnologias de Paralelização em GPU}\label{sec:comparacao-de-tecnologias-em-gpu}
 
 Avalia-se a aceleração das implementações voltadas a aceleradores gráficos: CUDA, OpenACC, OpenCL, OpenMP com descarregamento (diretivas \texttt{target}), Kokkos, RAJA e Alpaka com \textit{backend} de GPU, em uma única GPU dedicada e para os mesmos tamanhos de malha da comparação em CPU.
-Na maior malha, os arranjos ocupam \(3{,}1\)~GB da memória do acelerador, dentro do limite adotado (\autoref{tab:memoria-malhas}).
-O tempo é medido conforme a Seção~\ref{subsec:protocolo-de-medicao}, com sincronização explícita com o dispositivo antes do instante final, e o intervalo cronometrado exclui a criação do contexto, a compilação dos \textit{kernels} em tempo de execução (no OpenCL) e as transferências dos campos entre a memória principal e a do dispositivo, que ocorrem apenas na inicialização e nas gravações.
-A aceleração é calculada em relação à implementação sequencial (\textit{Plain}) em CPU para o mesmo número de nós, e a \autoref{tab:desempenho-gpu-tecnologias} reúne o desempenho de cada tecnologia na maior malha.
+Na maior malha, os arranjos ocupam \(8{,}6\)~GB da memória do acelerador, dentro do limite adotado (\autoref{tab:memoria-malhas}).
+O tempo é medido conforme a Seção~\ref{subsec:protocolo-de-medicao}, com sincronização explícita com o dispositivo antes do instante final.
+O intervalo cronometrado exclui a criação do contexto, a compilação dos \textit{kernels} em tempo de execução (no OpenCL) e as transferências dos campos entre a memória principal e a do dispositivo, que ocorrem apenas na inicialização e nas gravações.
+A aceleração \(S\), calculada em relação a um núcleo do OpenMP, e a aceleração \(S_{seq}\), em relação ao \textit{Plain}, ambas para o mesmo número de nós, constam da \autoref{tab:desempenho-gpu-tecnologias} para a maior malha.
 
 \begin{table}[H]
     \centering
-    \caption{Desempenho das tecnologias de paralelização em GPU para malha de \(N_x=3\times10^4\) nós e aceleração em relação à implementação sequencial em CPU}
+    \caption{Desempenho das tecnologias de paralelização em GPU para malha de \(N_x=5\times10^4\) nós e acelerações em relação a um núcleo do OpenMP (\(S\)) e ao \textit{Plain} (\(S_{seq}\))}
     \label{tab:desempenho-gpu-tecnologias}
-    \begin{tabular}{lcc}
+    \begin{tabular}{lccc}
         \toprule
-        Tecnologia & Taxa (MLUPS) & Aceleração (\(S\)) \\
+        Tecnologia & Taxa (MLUPS) & Aceleração (\(S\)) & Aceleração (\(S_{seq}\)) \\
         \midrule
-        OpenACC & 193{,}7 & 53{,}4\(\times\) \\
-        OpenMP (descarregamento) & 188{,}9 & 52{,}1\(\times\) \\
-        Alpaka & 181{,}9 & 50{,}2\(\times\) \\
-        OpenCL & 180{,}6 & 49{,}8\(\times\) \\
-        Kokkos & 179{,}1 & 49{,}4\(\times\) \\
-        RAJA & 175{,}3 & 48{,}4\(\times\) \\
-        CUDA & 174{,}4 & 48{,}1\(\times\) \\
+        Alpaka & 327{,}7 & 14{,}95\(\times\) & 75{,}9\(\times\) \\
+        OpenACC & 325{,}4 & 14{,}84\(\times\) & 75{,}4\(\times\) \\
+        OpenMP (descarregamento) & 320{,}3 & 14{,}61\(\times\) & 74{,}2\(\times\) \\
+        Kokkos & 319{,}8 & 14{,}59\(\times\) & 74{,}1\(\times\) \\
+        CUDA & 317{,}3 & 14{,}47\(\times\) & 73{,}5\(\times\) \\
+        RAJA & 316{,}0 & 14{,}41\(\times\) & 73{,}2\(\times\) \\
+        OpenCL & 311{,}2 & 14{,}19\(\times\) & 72{,}1\(\times\) \\
         \midrule
-        Teto \textit{roofline} (cálculo) & 626 & --- \\
-        Teto \textit{roofline} (memória) & 2100 & --- \\
+        Teto \textit{roofline} (cálculo) & 538 & --- & --- \\
+        Teto \textit{roofline} (memória) & 2100 & --- & --- \\
         \bottomrule
     \end{tabular}
-    \nota{Taxas medidas até $N_x = 10^4$ e mantidas em $3 \times 10^4$, pois o dispositivo já está saturado (Seção~\ref{subsec:protocolo-de-medicao}); aceleração em relação à versão \textit{Plain} ($3{,}6$ MLUPS). Os tetos são os da GPU de referência (Seção~\ref{sec:custo-computacional}); as taxas foram medidas em uma GPU de menor taxa em dupla precisão, e a projeção para a de referência consta da \autoref{tab:projecao-referencia}.}
+    \nota{Um núcleo de CPU do OpenMP executa \(21{,}9\) MLUPS, e \(S_{seq} = G_1 S\). A taxa em \(N_x = 5 \times 10^4\) coincide, dentro da variação entre execuções, com a de \(N_x = 10^4\), pois o dispositivo já está saturado.}
     \fonte{O autor (2026).}
 \end{table}
 
-A \autoref{fig:aceleracao-gpu-tecnologias} apresenta a aceleração em função de \(N_x\).
-Nas malhas pequenas, a aceleração é limitada pela sobrecarga fixa de lançamento dos \textit{kernels} e de sincronização com o dispositivo.
+Em malhas pequenas, a aceleração é limitada pela sobrecarga fixa de lançamento dos \textit{kernels} e de sincronização com o dispositivo.
 O tempo de despacho do \textit{kernel} fundido lançado a cada passo, da ordem de microssegundos a dezenas de microssegundos, pode superar o próprio tempo de cálculo e tornar a GPU mais lenta do que um único núcleo de CPU (\(S < 1\)).
-Em \(N_x = 100\), todas as tecnologias ficaram abaixo da versão sequencial, com acelerações entre \(0{,}45\) (OpenMP com descarregamento) e \(0{,}94\) (OpenCL) e tempo por passo entre \(31\) e \(66\)~\(\mu\)s, determinado pelo lançamento do \textit{kernel} e pela sincronização, pois o cálculo de cem nós é desprezível.
-O ponto de equilíbrio com a versão sequencial, por interpolação entre \(N_x = 100\) e \(500\), situou-se entre cerca de \(100\) e \(110\) nós em \(x\), e em \(N_x = 1000\) a aceleração já variava de \(22{,}5\) (OpenMP com descarregamento) a \(33{,}6\) (OpenACC).
-Com o aumento do número de nós, o cálculo passa a dominar a sobrecarga de lançamento, e a aceleração satura no teto do acelerador a partir de alguns milhares de nós.
+Para \(N_x = 100\), todas as tecnologias ficaram abaixo de um núcleo de CPU, com taxas de \(1{,}3\) a \(2{,}5\) MLUPS (\(S\) de \(0{,}06\) a \(0{,}11\)), determinadas pelo lançamento do \textit{kernel} e pela sincronização, pois o cálculo de cem nós é desprezível.
 
-Conforme a Seção~\ref{sec:custo-computacional}, o \textit{kernel} tem intensidade aritmética de \(2{,}4\) operações por \textit{byte}, superior ao ponto de transição do dispositivo (\(0{,}72\)), pois a taxa em precisão dupla da GPU corresponde a apenas \(1/64\) da taxa em precisão simples.
-Ele é, portanto, limitado pela capacidade aritmética, e não pela largura de banda, e seu teto, de \(626\) MLUPS na GPU de referência, situa-se bem abaixo dos \(2100\) MLUPS que os \(672\)~GB/s da memória GDDR7 sustentariam.
-As taxas de \(174\) a \(194\) MLUPS equivalem a \(56\) a \(62\)~GB/s com \(320\) \textit{bytes} por nó (\(23\%\) a \(26\%\) dos \(243\)~GB/s de cópia medidos na GPU de medição), valor que não deve ser comparado com os da literatura para \textit{kernels} limitados pela memória (Seção~\ref{sec:escalabilidade-e-complexidade}); a métrica adequada é a fração do teto aritmético que cada tecnologia alcança (Seção~\ref{sec:otimizacao-roofline}).
+O ponto de equilíbrio com um núcleo de CPU do OpenMP, por interpolação entre as malhas medidas, situa-se entre cerca de \(170\) nós em \(x\) (CUDA, OpenACC, OpenCL, Kokkos e Alpaka) e \(310\) (OpenMP com descarregamento).
+Com \(N_x = 1000\), a aceleração \(S\) já varia de \(4{,}5\) (OpenMP com descarregamento) a \(7{,}6\) (OpenACC).
+À medida que o número de nós aumenta, o cálculo passa a dominar a sobrecarga de lançamento, e a aceleração satura no teto do acelerador a partir de alguns milhares de nós.
 
-Na maior malha, as sete tecnologias situaram-se entre \(174\) e \(194\) MLUPS, uma faixa de \(11\%\) (\autoref{tab:desempenho-gpu-tecnologias}).
+Conforme a Seção~\ref{sec:custo-computacional}, o \textit{kernel} tem intensidade aritmética de \(2{,}8\) operações por \textit{byte}, superior ao ponto de transição do dispositivo (\(0{,}72\)), pois a taxa em precisão dupla da GPU corresponde a apenas \(1/64\) da taxa em precisão simples.
+Ele é, portanto, limitado pela capacidade aritmética.
+Seu teto, de \(538\) MLUPS, situa-se bem abaixo dos \(2100\) MLUPS que os \(672\)~GB/s da memória GDDR7 sustentariam.
+As taxas de \(311\) a \(328\) MLUPS equivalem a \(100\) a \(105\)~GB/s com \(320\) \textit{bytes} por nó, de \(17\%\) a \(18\%\) dos \(585\)~GB/s de cópia medidos, valor que não deve ser comparado com os da literatura para \textit{kernels} limitados pela memória (Seção~\ref{sec:escalabilidade-e-complexidade}).
+A métrica adequada é a fração do limite de emissão de instruções de dupla precisão que cada tecnologia alcança (Seção~\ref{subsec:posicao-nucleo-tetos}).
+
+Na maior malha, as sete tecnologias situaram-se em uma faixa de apenas \(5\%\) (\autoref{tab:desempenho-gpu-tecnologias}).
 Como todas executam o mesmo \textit{kernel} fatorado, com o mesmo estêncil e a mesma contagem de operações, o teto é comum, e as diferenças entre as taxas medem a qualidade do código gerado e do despacho de cada uma.
-O OpenACC compilado pelo \texttt{nvc++} apresentou a maior taxa (\(193{,}7\) MLUPS), e o CUDA, a menor (\(174{,}4\) MLUPS).
-As camadas de abstração (Kokkos, RAJA e Alpaka) alcançam de \(100\%\) a \(104\%\) da taxa do CUDA, de modo que não impõem custo mensurável em GPU.
-Essa equivalência decorre de uma decisão de implementação: o mesmo fechamento fatorado, com \(8\) exponenciais por nó, é aplicado a todas as tecnologias.
-Em comparação com a formulação por direção, de \(36\) exponenciais, ele multiplica a taxa por \(2{,}0\) a \(2{,}1\) e, em relação à fatoração parcial do CUDA (\(12\) exponenciais), por \(1{,}6\).
-A vantagem de \(22\%\) do CUDA observada com fechamentos distintos, que poderia ser atribuída ao custo das camadas de abstração, deixa de existir com o mesmo trabalho por nó, o que mostra que se devia a ele, e não à abstração (hipótese 15 da \autoref{tab:hipoteses-otimizacao}).
-Como o limite é aritmético, as diferenças restantes dependem menos da coalescência dos acessos à memória e mais do número de instruções de dupla precisão por nó e do aproveitamento das multiplicações e somas fundidas.
-O \texttt{nvc++} gerou menos instruções de ponto flutuante estáticas (\(830\) contra \(867\) do \texttt{nvcc}), embora, sem acesso aos contadores de \textit{hardware}, a parcela restante da vantagem do OpenACC não tenha sido atribuída.
-O CUDA ficou em último lugar apesar do controle fino sobre a hierarquia de memória: o \textit{kernel} usa \(140\) registradores por \textit{thread} e ocupa \(25\%\) dos multiprocessadores, o que basta para ocultar a latência do \textit{pipeline} de dupla precisão (Seção~\ref{sec:implementacao-computacional-utilizando-cuda}).
+O Alpaka e o OpenACC apresentaram as maiores taxas e o OpenCL, a menor.
+As camadas de abstração (Kokkos, RAJA e Alpaka) alcançam de \(94\%\) a \(104\%\) da taxa do CUDA com \(N_x \geq 5000\), sem impor custo mensurável em GPU.
+Essa equivalência decorre de uma decisão de implementação: o mesmo fechamento fatorado, com \(12\) exponenciais por nó, e a mesma álgebra de colisão são aplicados a todas as tecnologias (hipóteses 8, 12 e 14 da \autoref{tab:hipoteses-otimizacao}).
+Uma diferença inicial de \(22\%\) a favor do CUDA, que poderia ser atribuída ao custo das camadas de abstração, desapareceu quando todas passaram a executar o mesmo trabalho por nó, o que revela que sua origem estava na quantidade de trabalho por nó.
 
-Para a plataforma de referência, o modelo prevê uma razão de \(626/320 \approx 2{,}0\) entre os tetos da GPU e da CPU.
-As taxas medidas na maior malha dão razões de \(174{,}4/150{,}4 \approx 1{,}2\) a \(193{,}7/150{,}4 \approx 1{,}3\), pois as GPUs de medição e de referência diferem em pico de dupla precisão.
-Com a projeção da GPU de referência (\autoref{tab:projecao-referencia}), as razões são de \(2{,}0\) a \(2{,}2\), em acordo com a razão entre os tetos, pois as duas arquiteturas operam próximas de seus limites (\(47\%\) do teto de memória na CPU e \(90\%\) a \(100\%\) do limite de emissão de instruções de dupla precisão na GPU).
-O ganho depende também do tamanho da malha: com cem nós, todas as tecnologias de GPU foram mais lentas do que um único núcleo de CPU, e, em relação ao OpenMP com oito núcleos medidos, o ponto de equilíbrio situou-se entre cerca de \(1170\) (OpenACC) e \(2160\) nós em \(x\) (OpenMP com descarregamento), por interpolação logarítmica das curvas medidas.
-A CPU permanece competitiva, portanto, para malhas de até alguns milhares de nós em \(x\) ou para execuções com poucos passos de tempo, enquanto simulações de longa duração e malhas refinadas favorecem a GPU.
+Como o limite é aritmético, as diferenças restantes dependem menos da coalescência dos acessos à memória e mais do número de instruções de dupla precisão por nó e do aproveitamento das multiplicações e somas fundidas.
+O \textit{kernel} do CUDA, com as cinco iterações de Newton desenroladas, contém \(857\) instruções FP64 estáticas e usa \(136\) registradores por fluxo.
+Os de Kokkos, RAJA e Alpaka, com o laço de Newton não desenrolado, contêm de \(571\) a \(574\) instruções e usam de \(138\) a \(154\) registradores.
+Como o laço executa as iterações, o número de instruções FP64 executadas por nó, estimado em cerca de \(750\), é praticamente o mesmo nas quatro formulações, e as taxas coincidem.
+Sem acesso aos contadores de \textit{hardware}, a parcela restante da vantagem do OpenACC e do Alpaka sobre o CUDA (de \(3\%\) a \(4\%\)) não foi atribuída, e fica dentro da variação entre execuções.
+O \textit{kernel} do CUDA ocupa \(25\%\) dos multiprocessadores (três blocos de \(128\) fluxos por multiprocessador), o que basta para ocultar a latência do \textit{pipeline} de dupla precisão (hipótese 10 da \autoref{tab:hipoteses-otimizacao}).
+
+Pelos tetos do modelo, a GPU deveria superar a CPU por um fator de \(538/320 \approx 1{,}7\).
+As taxas medidas na maior malha, porém, dão razões de \(311{,}2/141{,}9 \approx 2{,}2\) a \(327{,}7/141{,}9 \approx 2{,}3\), pois a GPU opera a \(58\%\) a \(61\%\) do teto aritmético, e a CPU, a \(44\%\) do de memória.
+O ganho depende também do tamanho da malha.
+Em relação ao OpenMP com doze núcleos, o ponto de equilíbrio situa-se entre cerca de \(630\) nós em \(x\) (CUDA, OpenACC, OpenCL, Kokkos e Alpaka) e \(1400\) (OpenMP com descarregamento e RAJA), por interpolação logarítmica das curvas medidas.
+A CPU permanece competitiva, portanto, para malhas de até algumas centenas a poucos milhares de nós em \(x\) ou para execuções com poucos passos de tempo, enquanto simulações de longa duração e malhas refinadas favorecem a GPU.
+
 A razão entre os tetos é consequência da GPU considerada, e não do método.
-Em um acelerador com razão de 1:2 entre as taxas em precisão dupla e em precisão simples, como a GPU hipotética da Seção~\ref{sec:custo-computacional}, o \textit{kernel} voltaria a ser limitado pela largura de banda, com teto de \(2100\) MLUPS, \(3{,}4\) vezes o da GPU real e \(6{,}6\) vezes o da CPU.
+Em um acelerador com razão de 1:2 entre as taxas em precisão dupla e em precisão simples, o \textit{kernel} voltaria a ser limitado pela largura de banda, com teto de \(2100\) MLUPS, bem superior ao da GPU real e ao da CPU (Seção~\ref{subsec:diagramas-roofline}).
 
 \begin{figure}[H]
   \centering
-  \caption{Aceleração em função de \(N_x\) para as tecnologias de paralelização em GPU, em relação à implementação sequencial em CPU.}
+  \caption{Aceleração \(S\) em função de \(N_x\) para as tecnologias de paralelização em GPU, em relação a um núcleo de CPU do OpenMP (aceleração unitária).}
   \label{fig:aceleracao-gpu-tecnologias}
   \includegraphics[width=0.85\linewidth]{fig/gpu-technologies.png}
   \fonte{O autor (2026).}
@@ -416,125 +599,300 @@ Em um acelerador com razão de 1:2 entre as taxas em precisão dupla e em precis
 
 \section{Decisões de Implementação e Posição em Relação ao Modelo \textit{Roofline}}\label{sec:otimizacao-roofline}
 
-Cada decisão de implementação do núcleo de cálculo foi tomada a partir de uma hipótese sobre a arquitetura e decidida por medição (Seção~\ref{subsec:procedimento-de-otimizacao}).
-A \autoref{tab:efeito-decisoes} resume o efeito medido de cada decisão que alterou o desempenho, por comparação alternada na mesma sessão; as hipóteses refutadas, que não alteraram o código, constam da \autoref{tab:hipoteses-otimizacao}.
+\subsection{Decisões de Implementação}\label{subsec:decisoes-de-implementacao}
+
+Cada decisão de implementação do núcleo de cálculo partiu de uma hipótese sobre a arquitetura e foi decidida por medição (Seção~\ref{subsec:procedimento-de-otimizacao}).
+As hipóteses examinadas, as evidências e as decisões constam da \autoref{tab:hipoteses-otimizacao}, com o efeito medido, em comparação alternada na mesma sessão, de cada decisão que alterou o desempenho.
+As hipóteses refutadas, que não alteraram o código, integram o resultado.
+
+\begingroup
+\small
+\begin{longtable}{>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{7.0cm}>{\raggedright\arraybackslash}p{4.0cm}}
+    \caption{Hipóteses examinadas na otimização, evidências medidas e decisões}\label{tab:hipoteses-otimizacao} \\
+    \toprule
+    Hipótese & Evidência & Decisão \\
+    \midrule
+    \endfirsthead
+    \toprule
+    Hipótese & Evidência & Decisão \\
+    \midrule
+    \endhead
+    \bottomrule
+    \endlastfoot
+    1. O \textit{kernel} de CPU é limitado pela memória, como prevê o modelo \textit{roofline}. &
+        Um núcleo gera um tráfego de $7{,}0$~GB/s, apenas $18\%$ da largura de banda do \textit{triad} de um núcleo; com doze núcleos e $N_x \geq 10^4$, $45$~GB/s, ou $57\%$ do \textit{triad} com doze fluxos. &
+        Refutada em um núcleo e nas malhas residentes na \textit{cache}; causa buscada no código por núcleo. \\
+    2. O código por célula é escalar e a disposição de memória impede a vetorização. &
+        Com a direção curta contígua ($n_y = n_x/100$) e a propagação deslocando as populações ao longo da longa, o \textit{Plain} executa de $4{,}3$ a $4{,}8$ MLUPS por núcleo, cerca de $2\%$ do pico de FMA. A disposição com $x$ contíguo, sem vetores, eleva a taxa em apenas $3\%$ a $8\%$; o restante do ganho vem da vetorização e de seus blocos (\autoref{tab:ablacao-nucleo}). &
+        Confirmada; adotados $x$ contíguo e núcleo vetorial: taxa de um núcleo multiplicada por $5{,}1$ ($G_1$), quase toda atribuível à vetorização. \\
+    3. A barreira de sincronização de cada passo limita a escalabilidade. &
+        Barreira e variação entre fluxos responderam por $0{,}2\%$ a $1\%$ do tempo do passo. &
+        Refutada para malhas médias e grandes. \\
+    4. O escalonamento estático desequilibra a carga entre os fluxos. &
+        Segmentos de $256$ células com escalonamento dinâmico elevaram a taxa em $4\%$, $21\%$ e $32\%$ com $N_x = 1000$, $5000$ e $10^4$; larguras de $64$ células a uma linha inteira diferiram pouco. &
+        Confirmada; segmentos de $256$ células com escalonamento dinâmico. \\
+    5. O teto da eficiência paralela é da máquina, e não do código. &
+        Doze cópias independentes e sem comunicação atingiram de $0{,}48$ a $0{,}71$ de doze vezes a taxa de uma (\autoref{tab:teto-copias}). &
+        Confirmada; as cópias são o referencial de eficiência. \\
+    6. Um registrador vetorial por bloco é limitado pela latência das dependências. &
+        Em registradores de quatro valores, dois registradores independentes em lugar de um elevam a taxa em $37\%$ a $41\%$ em um núcleo e em $26\%$ a $52\%$ com todos os núcleos; de dois para quatro, a taxa não aumenta (variação de $0\%$ a $-5\%$) (\autoref{tab:ablacao-nucleo}). &
+        Confirmada para dois registradores; blocos de $16$ células em registradores independentes (dois de oito valores com $512$ \textit{bits}). \\
+    7. A exponencial vetorial é o gargalo seguinte. &
+        Arredondamento pela soma de $1{,}5 \cdot 2^{52}$, protegida por barreira de compilador, em lugar da conversão para inteiro: $+12\%$. &
+        Aceita; a barreira é necessária, pois \texttt{-ffast-math} simplifica a soma. \\
+    8. O fechamento energético executa trabalho redundante. &
+        A forma geral por direção exige $54$ exponenciais por nó e por passo; com a jacobiana exatamente diagonal (Seção~\ref{subsec:lbm-equilibrio-g}), bastam $12$. &
+        Confirmada em todas as tecnologias: taxa de um núcleo de CPU multiplicada por $2{,}2$ e das GPUs, por $1{,}6$ a $2{,}1$. \\
+    9. O armazenamento não temporal reduz o tráfego em malhas grandes. &
+        De $464$ para $320$ \textit{bytes} por nó; $+5\%$ a $+15\%$ com $N_x = 10^4$ e todos os núcleos; sem ganho em malhas residentes na \textit{cache}. &
+        Aceita condicionalmente (conjunto de trabalho acima de quatro vezes a \textit{cache} de último nível). \\
+    10. Maior ocupação do multiprocessador acelera o \textit{kernel} de GPU. &
+        Os limites de registradores (\texttt{\_\_launch\_bounds\_\_} e \texttt{maxregcount}) geraram \textit{spills}, sem ganho e, no primeiro caso, com perda de desempenho; blocos de $64$ a $256$ fluxos ficaram no ruído. &
+        Rejeitada; $128$ fluxos e três blocos por multiprocessador, pois o limite é a vazão FP64. \\
+    11. O \textit{kernel} de GPU é limitado pela largura de banda, como na maior parte da literatura. &
+        Uso de $17\%$ da largura de banda de cópia medida; emissão de instruções FP64 estimada em cerca de $100\%$ do limite. &
+        Refutada; o limite é a vazão FP64, que só a redução do número de instruções eleva. \\
+    12. A diferença entre as camadas de abstração e o CUDA decorre da abstração. &
+        Uma diferença inicial de $22\%$ a favor do CUDA desapareceu quando todas as tecnologias passaram a executar o fechamento fatorado, com $12$ exponenciais por nó; com o mesmo trabalho por nó, as camadas alcançam de $94\%$ a $104\%$ da taxa do CUDA. &
+        Refutada; a diferença decorria do trabalho por nó, e não da camada. \\
+    13. O passo de Newton pode dispensar o recíproco de normalização de cada eixo. &
+        Multiplicar resíduo e jacobiana por $Z_a^2$ conserva o quociente do passo e cancela divisões por nó e por passo (Equação~\eqref{eq:newton-escalado}), restando uma por iteração. &
+        Aceita; $+6\%$ a $+8\%$ de taxa no CUDA com malhas grandes e variação de $\pm 2\%$, sem ganho demonstrado, na CPU. \\
+    14. A física por célula pode ser escrita com menos instruções de dupla precisão. &
+        Equilíbrios em produto de fatores por eixo, diferença $f_i - f_i^{eq}$ compartilhada e recíprocos por semente em precisão simples (Equação~\eqref{eq:recip}) reduziram em $9\%$ as operações de ponto flutuante por nó e encurtaram as cadeias de dependência em CPU. &
+        Confirmada; taxa de GPU $+17\%$ a $+30\%$ em todas as tecnologias e de um núcleo de CPU $+7\%$ a $+9\%$. \\
+    15. As diferenças entre as tecnologias de CPU em um núcleo decorrem de seus laços de distribuição. &
+        Com uma instância do núcleo por tecnologia, cada uma com seu tipo de rede, o GCC gerou cinco códigos de máquina distintos, e Kokkos, RAJA e Alpaka ficaram de $5\%$ a $15\%$ abaixo do OpenMP. &
+        Refutada; instância única por número de vias, com a tabela de velocidades verificada em compilação: diferenças de no máximo $3\%$ em um núcleo. \\
+    16. A exponencial vetorial domina o tempo do núcleo de CPU. &
+        Substituir as doze exponenciais por uma operação simples reduziu o tempo do bloco em apenas $15\%$; remover o sensor, em $0\%$, e o termo térmico, em $6\%$; as cinco iterações de Newton respondem por cerca de $45\%$. &
+        Refutada; o custo está na cadeia de Newton e na pressão de registradores, e não na exponencial. \\
+    17. A diferença do MPI para o OpenMP decorre da comunicação. &
+        Sem sobreposição entre comunicação e cálculo (halo empacotado após os blocos internos e sem chamadas à biblioteca durante o cálculo), cronômetros por fase mostraram os processos ociosos em \texttt{MPI\_Waitall} em $25\%$ a $35\%$ do passo. &
+        Confirmada em parte; bordas primeiro e \texttt{MPI\_Testall} entre grupos de linhas: $+14\%$ a $+21\%$. O restante é a decomposição estática sob variação do tempo de cada passo. \\
+    18. O \textit{kernel} OpenCL de CPU é limitado pela escrita com alocação de linha em malhas grandes. &
+        Com armazenamento comum, o tráfego é de $464$ \textit{bytes} por nó, contra $320$ nas demais tecnologias de CPU, que usam armazenamento não temporal. &
+        Confirmada; \texttt{\_\_builtin\_\allowbreak nontemporal\_\allowbreak store} com \texttt{sfence}: $+18\%$ com todos os núcleos e $N_x = 10^4$. \\
+    19. O compilador limita o núcleo vetorial. &
+        O \textit{clang} 19 gerou, do mesmo código-fonte, bloco de núcleo de $13\%$ a $16\%$ mais rápido que o GCC, e o LLVM do POCL, taxa por núcleo de $2\%$ a $8\%$ superior à do GCC com o mesmo algoritmo. &
+        Registrada, não adotada; depende do compilador da plataforma final. \\
+    20. O custo de cada iteração de Newton-Raphson é pequeno diante do ganho de robustez. &
+        De três para cinco iterações, a taxa diminui de $13\%$ a $15\%$ em um núcleo, de $3\%$ a $12\%$ com todos os núcleos e cerca de $20\%$ na GPU em malhas grandes, com $28\%$ mais operações por nó. O erro global em relação à solução analítica varia menos de $3\%$ entre uma e cinco iterações, mas as diferenças locais em relação a cinco iterações chegam, com três, a $0{,}3\%$ ($N_x = 10^3$, $\Pi = 10$), $2{,}3\%$ ($N_x = 10^4$) e $6\%$ ($\Pi = 20$), e, com quatro, a $0{,}02\%$, $0{,}6\%$ e $4{,}4\%$. &
+        Aceita com ressalva; mantidas cinco iterações, o máximo requerido nas simulações supersônicas de referência (Seção~\ref{sec:implementacao-computacional-sequencial}). Nos choques intensos, nem cinco garantem a convergência local do fechamento. \\
+\end{longtable}
+\endgroup
+
+O ganho de um núcleo em relação ao \textit{Plain} foi decomposto restringindo, no mesmo código, a largura dos registradores vetoriais e o número de registradores independentes por bloco (\autoref{tab:ablacao-nucleo}).
+A organização do núcleo vetorial com laços escalares, isto é, sem vetores, não difere do \textit{Plain} em mais de \(8\%\), o que indica que a disposição de memória e o estêncil compartilhado, isoladamente, pouco contribuem.
+O ganho vem da vetorização combinada ao bloco de células.
+Vetores de quatro valores com um único registrador por bloco já multiplicam a taxa por \(3{,}6\), e um segundo registrador independente a leva a \(5{,}0\) vezes a do \textit{Plain}, ao ocultar a latência da cadeia de Newton-Raphson.
+Um terceiro e um quarto registrador não acrescentam ganho.
+A configuração adotada na plataforma, com vetores de oito valores e dois registradores por bloco de dezesseis células, tem o mesmo número de cadeias independentes que a variante de dois registradores da tabela.
 
 \begin{table}[H]
     \centering
-    \caption{Efeito medido das decisões de implementação do núcleo de cálculo}
-    \label{tab:efeito-decisoes}
-    \small
-    \begin{tabular}{p{6.2cm}p{3.2cm}p{5.2cm}}
+    \caption{Taxa de um núcleo (MLUPS, melhor de cinco execuções) em função da largura dos registradores vetoriais e do número de registradores independentes por bloco, e razão em relação ao \textit{Plain}}
+    \label{tab:ablacao-nucleo}
+    \begin{tabular}{>{\raggedright\arraybackslash}p{6.6cm}cccc}
         \toprule
-        Decisão & Alvo & Efeito medido \\
+        Variante & Bloco & \(N_x = 1000\) & \(N_x = 5000\) & Razão \\
         \midrule
-        Direção longitudinal contígua (\textit{Structure of Arrays}, $x$ mais rápido) e núcleo vetorial de $16$ células por bloco & CPU, um núcleo & taxa multiplicada por $2{,}8$ \\
-        Escalonamento dinâmico sobre segmentos de $256$ células, em lugar de linhas inteiras por fluxo & CPU, oito núcleos & desequilíbrio de $18\%$--$35\%$ reduzido a $3\%$ do passo \\
-        Quatro registradores vetoriais independentes por bloco, em lugar de um & CPU, um núcleo & $+22\%$ (de um para dois registradores) e $+12\%$ a $+16\%$ (de dois para quatro) \\
-        Exponencial vetorial com arredondamento por soma de uma constante & CPU, um núcleo & $+12\%$ \\
-        Fechamento energético fatorado por eixo ($8$ exponenciais por nó em lugar de $36$) & CPU, um núcleo & taxa multiplicada por $2{,}2$ \\
-        \quad (mesma decisão) & GPU, todas as tecnologias & taxa multiplicada por $2{,}0$ a $2{,}1$ ($1{,}6$ no CUDA, que empregava $12$ exponenciais) \\
-        Armazenamento não temporal das distribuições pós-colisão ($464$ para $320$ \textit{bytes} por nó) & CPU, oito núcleos, $N_x = 10^4$ & $+5\%$ a $+15\%$ \\
+        \textit{Plain} (por célula) & 1 & 4{,}4 & 4{,}5 & 1{,}00 \\
+        Núcleo com laços escalares & 1 & 4{,}8 & 4{,}6 & 1{,}03 \\
+        Vetores de 2 valores, 8 registradores & 16 & 11{,}4 & 11{,}3 & 2{,}5 \\
+        Vetores de 4 valores, 1 registrador & 4 & 17{,}4 & 16{,}4 & 3{,}6 \\
+        Vetores de 4 valores, 2 registradores & 8 & 24{,}6 & 22{,}4 & 5{,}0 \\
+        Vetores de 4 valores, 4 registradores & 16 & 24{,}2 & 21{,}2 & 4{,}7 \\
         \bottomrule
     \end{tabular}
-    \nota{Efeitos medidos em um núcleo ou em oito núcleos do equipamento de medição, pela comparação alternada entre as variantes com e sem a decisão (melhor de três a cinco execuções).}
+    \nota{Variantes obtidas restringindo, na compilação, a largura dos vetores e o número de registradores por bloco do núcleo vetorial; o bloco é dado em células e a razão é relativa ao \textit{Plain} com \(N_x = 5000\). A malha de \(N_x = 1000\) reside nos \textit{caches}, e a de \(N_x = 5000\), na memória principal.}
     \fonte{O autor (2026).}
 \end{table}
 
-Com essas decisões, as tecnologias de CPU executam, em um núcleo, entre \(23\) e \(26\) MLUPS em \(N_x = 5000\) (de \(29\) a \(31\) em \(N_x \le 1000\), em que o conjunto de trabalho cabe na \textit{cache}) e, com oito núcleos, entre \(104\) e \(114\) MLUPS, exceto o MPI (\(78{,}5\) MLUPS).
-A eficiência paralela em oito núcleos é de \(0{,}52\) a \(0{,}61\) (\(0{,}41\) no MPI), de modo que a distância à aceleração linear pertence ao equipamento (\autoref{tab:teto-copias}).
+Das vinte hipóteses, sete foram refutadas ou rejeitadas (1, 3, 10, 11, 12, 15 e 16) e uma foi registrada sem adoção (19); as demais resultaram em decisões aplicadas, sempre que possível, ao código compartilhado entre as tecnologias.
+A taxa de cada núcleo de CPU resulta principalmente da vetorização, do fechamento fatorado, dos registradores independentes e da exponencial própria, e a de GPU, do fechamento fatorado e da forma de produto.
+A taxa de GPU é limitada pela vazão de instruções de dupla precisão, e apenas a redução do número de instruções por nó a eleva.
+A de CPU, com a malha no \textit{cache}, é limitada pela execução no núcleo e, em malhas que excedem o \textit{cache}, os doze núcleos aproximam-se do teto de memória (\autoref{tab:posicao-roofline}).
+
+\subsection{Tetos Medidos da Plataforma}\label{subsec:tetos-medidos}
+
+Os tetos da plataforma foram medidos por microprogramas do repositório (\texttt{scripts/roofline}) em vez de obtidos das especificações, pois a frequência sob carga vetorial e o limite de potência do processador os afastam dos valores nominais.
+Os valores constam da \autoref{tab:tetos-medidos}.
+Na GPU, o custo de uma instrução de dupla precisão depende do tipo: multiplicações, adições e multiplicações e adições fundidas emitem à mesma taxa, ao passo que a divisão e a exponencial ocupam, respectivamente, cerca de \(7{,}9\) e \(16\) posições de emissão do \textit{pipeline}.
+O teto de emissão de um \textit{kernel} depende da composição de suas instruções.
 
 \begin{table}[H]
     \centering
-    \caption{Posição do \textit{kernel} em relação aos tetos medidos no equipamento de medição}
+    \caption{Tetos medidos por microprogramas na plataforma de referência}
+    \label{tab:tetos-medidos}
+    \begin{tabular}{lp{7.6cm}p{4.6cm}}
+        \toprule
+        Alvo & Grandeza & Valor \\
+        \midrule
+        CPU & Pico de FMA com registradores de $512$ \textit{bits} (GFLOP/s), com um e com doze fluxos & $166{,}4$ e $1651$ \\
+        CPU & Frequência equivalente sob carga (GHz), com um e com doze fluxos & $5{,}2$ e $4{,}3$ \\
+        CPU & Largura de banda do \textit{triad} (GB/s), com um e com doze fluxos & $38{,}0$ e $80{,}0$ \\
+        \midrule
+        GPU & Instruções FP64 por segundo (FMA, adição ou multiplicação) & $241$ G (pico de FMA de $482{,}3$ GFLOP/s) \\
+        GPU & Divisão e exponencial (posições de emissão) & $7{,}9$ e $16$ \\
+        GPU & Largura de banda de cópia (GB/s) & $585$ ($672$ de pico teórico) \\
+        \bottomrule
+    \end{tabular}
+    \nota{A frequência equivalente é a que reproduz a vazão medida do laço de multiplicações e adições fundidas. A divisão e a exponencial ocupam, na GPU, $7{,}9$ e $16$ posições de emissão do \textit{pipeline} de dupla precisão.}
+    \fonte{O autor (2026).}
+\end{table}
+
+\subsection{Posição do Núcleo em Relação aos Tetos}\label{subsec:posicao-nucleo-tetos}
+
+Três referências de desempenho, que não devem ser confundidas, orientam a análise.
+A primeira é o teto clássico do modelo \textit{roofline}, \(\min(P_{\mathrm{FP64}},B I)\), com a contagem de operações e o tráfego coerentes com o núcleo e com o nível de memória considerados.
+A segunda é um teto de emissão específico da composição de instruções, estimativa que depende do código gerado e de seus custos.
+A terceira são as cópias independentes do próprio programa, que constituem um diagnóstico de escalabilidade, e não um teto teórico, pois continuam limitadas pelo código e usam conjuntos de trabalho e padrões de compartilhamento distintos.
+Atingir uma fração elevada da segunda ou da terceira referência não equivale, portanto, a desempenho próximo do teto clássico.
+
+As contagens que fundamentam a comparação são dinâmicas, obtidas passo a passo no depurador sobre um segmento de \(256\) células e divididas pelo número de células.
+Adota-se, em todas as frações deste capítulo, a contagem do modelo, de \(896\) operações de ponto flutuante por nó e por passo, com \(20\) operações por exponencial.
+O núcleo vetorial executa \(1112\) operações, por empregar uma exponencial própria de \(38\) operações, e \(11\) divisões.
+Conforme a Seção~\ref{sec:comparacao-de-tecnologias-em-gpu}, o \textit{kernel} do CUDA usa \(136\) registradores por fluxo, sem memória local, o que limita a ocupação a três blocos por multiprocessador (\(384\) dos \(1536\) fluxos, ou \(25\%\)).
+
+\begin{table}[H]
+    \centering
+    \caption{Posição do \textit{kernel} em relação aos tetos medidos na plataforma de referência}
     \label{tab:posicao-roofline}
     \small
-    \begin{tabular}{p{2.9cm}p{3.5cm}>{\centering\arraybackslash}p{2.6cm}>{\centering\arraybackslash}p{2.6cm}>{\centering\arraybackslash}p{1.5cm}}
+    \begin{tabular}{p{3.0cm}p{3.5cm}>{\centering\arraybackslash}p{2.4cm}>{\centering\arraybackslash}p{2.6cm}>{\centering\arraybackslash}p{1.4cm}}
         \toprule
         Alvo & Teto & Obtido & Teto medido & Fração \\
         \midrule
-        CPU, 1 núcleo, $N_x \le 1000$ & pico de FMA ($851$ operações por nó) & $26$ GFLOP/s & $81{,}5$ GFLOP/s & $32\%$ \\
-        CPU, 1 núcleo, $N_x \le 1000$ & emissão de instruções de ponto flutuante & $31$ MLUPS & $\approx 69$ MLUPS & $\approx 45\%$ \\
-        CPU, 8 núcleos, $N_x=1000$ & pico de FMA & $114$ GFLOP/s & $381$ GFLOP/s & $30\%$ \\
-        CPU, 8 núcleos, $N_x=5000$ & oito cópias independentes & $113{,}7$ MLUPS & $117{,}2$ MLUPS & $97\%$ \\
-        CPU, 8 núcleos, $N_x=10^4$ & memória ($320$ \textit{bytes} por nó) & $133$ MLUPS & $213$ MLUPS & $63\%$ \\
-        GPU & emissão de instruções FP64 & $174$--$194$ MLUPS & $\approx 180$--$200$ MLUPS & $\approx 90$--$100\%$ \\
-        GPU & pico de FMA & $148$--$165$ GFLOP/s & $277$ GFLOP/s & $53$--$60\%$ \\
-        GPU & memória ($320$ \textit{bytes} por nó) & $56$--$62$ GB/s & $243$ GB/s & $23$--$26\%$ \\
+        CPU, 1 núcleo, $N_x \ge 5000$ & pico de FMA & $19{,}6$ GFLOP/s & $166{,}4$ GFLOP/s & $12\%$ \\
+        CPU, 1 núcleo, $N_x \ge 5000$ & memória (\textit{triad}) & $7{,}0$ GB/s & $38{,}0$ GB/s & $18\%$ \\
+        CPU, 12 núcleos, $N_x=1000$ & pico de FMA & $123{,}2$ GFLOP/s & $1651$ GFLOP/s & $7{,}5\%$ \\
+        CPU, 12 núcleos, $N_x=1000$ & doze cópias independentes & $137{,}5$ MLUPS & $181{,}1$ MLUPS & $76\%$ \\
+        CPU, 12 núcleos, $N_x=5000$ & doze cópias independentes & $120{,}9$ MLUPS & $121{,}9$ MLUPS & $99\%$ \\
+        CPU, 12 núcleos, $N_x=10^4$ & doze cópias independentes & $141{,}9$ MLUPS & $128{,}4$ MLUPS & $111\%$ \\
+        CPU, 12 núcleos, $N_x=10^4$ & memória ($320$ \textit{bytes} por nó) & $45{,}4$ GB/s & $80{,}0$ GB/s & $57\%$ \\
+        GPU & emissão de instruções FP64 ($\approx 750$ por nó) & $\approx 238$ G/s & $241$ G/s & $\approx 99\%$ \\
+        GPU & pico de FMA (contagem do modelo, $896$ operações) & $284$ GFLOP/s & $482{,}3$ GFLOP/s & $59\%$ \\
+        GPU & memória ($320$ \textit{bytes} por nó) & $102$ GB/s & $585$ GB/s & $17\%$ \\
         \bottomrule
     \end{tabular}
-    \nota{Tetos medidos por \textit{microbenchmarks}: FMA de $81{,}5$ GFLOP/s em um núcleo e $381$ GFLOP/s em oito; \textit{triad} de $68$ GB/s em oito núcleos ($213$ MLUPS com $320$ \textit{bytes} por nó); $138{,}5$ G instruções FP64 por segundo na GPU (pico de FMA de $277$ GFLOP/s); cópia de $243$ GB/s. As contagens de operações são as dinâmicas do núcleo vetorial ($851$ por nó e por passo, incluindo as exponenciais vetoriais); como os contadores de \textit{hardware} da GPU não estão disponíveis, a ocupação do \textit{pipeline} FP64 é estimada pelas instruções do \textit{kernel} e pelo custo medido de cada operação (divisão de dupla precisão $\approx 8{,}5$ e exponencial $\approx 16$ posições de emissão).}
+    \nota{Valores do OpenMP em CPU e do CUDA em GPU, melhor de cinco execuções. As operações de ponto flutuante são as da contagem do modelo ($896$ por nó e por passo). Como os contadores de \textit{hardware} não estão disponíveis, a contagem de instruções FP64 da GPU é uma estimativa a partir do código SASS e das contagens de iterações ($\pm 5\%$), e o número de instruções e de registradores depende da arquitetura-alvo e da versão do compilador. As cópias independentes são um diagnóstico de escalabilidade, não um teto teórico.}
     \fonte{O autor (2026).}
 \end{table}
 
-A \autoref{tab:posicao-roofline} mostra que o código está próximo dos tetos que o equipamento sustenta.
-Na GPU, o \textit{kernel} ocupa o \textit{pipeline} de dupla precisão quase integralmente (cerca de \(770\) posições de emissão por nó a \(138{,}5\) G por segundo equivalem a \(180\) MLUPS).
-Sua distância ao pico de FMA (\(53\%\) a \(60\%\)) reflete a composição das instruções, em que apenas parte é de multiplicação seguida de adição fundida, e o custo fixo de \(8\) exponenciais e cerca de onze divisões por nó, e não a organização da memória, que utiliza \(23\%\) a \(26\%\) da largura de banda.
-Por isso, a fração do teto aritmético do modelo \textit{roofline} (\(48\%\) a \(54\%\) na plataforma de referência) é inferior à do limite de emissão de instruções (\(90\%\) a \(100\%\)): o teto do modelo supõe que todas as operações executem à taxa de pico de multiplicação e adição fundidas, e o fechamento energético, dominado por exponenciais e divisões, não o permite.
-Em CPU, as malhas residentes na \textit{cache} são limitadas pela emissão de instruções vetoriais e não pela memória, e o OpenMP com oito núcleos e \(N_x = 5000\) atinge \(97\%\) do que oito cópias independentes sustentam.
-Na malha de \(10^4\) colunas, com armazenamento não temporal, a taxa atinge \(63\%\) do teto de memória do \textit{triad} (\(68\)~GB/s, contra \(89{,}6\)~GB/s de pico do equipamento de medição).
-O que resta em CPU, cerca de metade da taxa de emissão em um núcleo, decorre da latência das cadeias de dependência do método de Newton-Raphson e da ocupação do divisor, e só poderia ser reduzido por reestruturações do algoritmo, e não por qualquer das tecnologias.
-Assim, a distância restante até os tetos das especificações é uma propriedade do equipamento (frequência sob carga, caminho compartilhado até a memória e composição das instruções), e não do código.
+A \autoref{tab:posicao-roofline} mostra que, em CPU, as malhas residentes no \textit{cache} são limitadas pela execução no núcleo: um núcleo atinge \(12\%\) do pico de FMA e apenas \(18\%\) da largura de banda do \textit{triad}.
+A fração baixa de pico decorre da composição do código, em que as doze exponenciais e as onze divisões vetoriais por célula não emitem à taxa das multiplicações e adições fundidas.
+Além disso, as cadeias de Newton-Raphson, com uma exponencial e uma divisão por iteração, são limitadas pela latência das dependências.
 
-Os tetos da \autoref{tab:posicao-roofline} são os do equipamento de medição.
-Os da plataforma de referência, em precisão dupla, provêm das especificações dos fabricantes: $1{,}69$ TFLOP/s e $102{,}4$ GB/s para a CPU AMD Ryzen 9 9900X e $0{,}48$ TFLOP/s, correspondente a $1/64$ da taxa em precisão simples, e $672$ GB/s para a GPU NVIDIA GeForce RTX 5070 \parencite{NVIDIA2025RTXBlackwell}.
-A \autoref{fig:roofline} apresenta os diagramas \textit{roofline} resultantes (Seção~\ref{sec:custo-computacional}), com a posição do núcleo fundido em cada dispositivo e uma GPU hipotética com razão de 1:2 entre as taxas em precisão dupla e simples.
-Os tetos de memória e de cálculo são de \(320\) e \(2194\) MLUPS na CPU e de \(2100\) e \(626\) MLUPS na GPU, e de \(2100\) MLUPS na GPU hipotética, limitada pela memória.
+Com doze núcleos e \(N_x \geq 5000\), o OpenMP iguala ou supera doze cópias independentes de si mesmo e, na malha de \(10^4\) colunas, com armazenamento não temporal, usa \(57\%\) da taxa de \textit{triad}.
+O que resta é compatível com a ocupação do divisor e a latência das cadeias de dependência e, em parte, com a geração de código do compilador.
+O mesmo código-fonte compilado pelo \textit{clang} 19 (\textit{microbenchmark} de um bloco) é de \(13\%\) a \(16\%\) mais rápido, e o \textit{kernel} do OpenCL compilado pelo LLVM do POCL supera o GCC por núcleo (hipótese 19 da \autoref{tab:hipoteses-otimizacao}).
+Sem contadores, não se isolam essas parcelas.
+
+Na GPU, a contagem estimada é compatível com utilização plena do \textit{pipeline} de dupla precisão: cerca de \(750\) instruções FP64 por nó a \(317\) MLUPS equivalem a \(238\) G por segundo, contra \(241\) G medidos, embora essa não seja uma medição direta da utilização.
+A distância ao pico de FMA, de \(59\%\) pela contagem do modelo, reflete a composição das instruções, em que apenas parte é de multiplicação seguida de adição fundida, e o custo de \(12\) exponenciais e onze divisões por nó.
+A organização da memória, que utiliza \(17\%\) da largura de banda, não a explica.
+
+Por isso, a fração do teto aritmético do modelo \textit{roofline} é inferior à do limite de emissão.
+O teto do modelo supõe que todas as operações executem à taxa de pico de multiplicação e adição fundidas, e o fechamento energético, dominado por exponenciais e divisões, não o permite.
+Alcançar o pico clássico exigiria um fechamento composto apenas de multiplicações e adições fundidas.
+O desempenho próximo do pico de FMA não é atingível com esta mistura de instruções, e os tetos de emissão da \autoref{tab:posicao-roofline} são a referência realista.
+
+Em relação à literatura, a fração de \(17\%\) da largura de banda de cópia na GPU contrasta com os \(60\%\) a \(70\%\) relatados para implementações otimizadas do LBM em GPU \parencite{Tomczak2021}.
+A diferença reflete o fator limitante: aqueles núcleos são limitados pela memória, e o fechamento energético compressível desloca o limite para a capacidade aritmética (Seção~\ref{sec:escalabilidade-e-complexidade}).
+Em CPU, o armazenamento não temporal das distribuições evita a transferência adicional de escrita com alocação de linha, que eleva o tráfego de \(320\) para \(464\) \textit{bytes} por nó e é discutida para núcleos simples do LBM por \textcite{Wellein2006} e \textcite{Wittmann2013}.
+As taxas por núcleo, de \(18\%\) da largura de banda do \textit{triad}, mostram que o núcleo compressível está distante do regime limitado pela memória que caracteriza aqueles núcleos.
+
+\subsection{Diagramas \textit{Roofline}}\label{subsec:diagramas-roofline}
+
+Os tetos da plataforma de referência, em precisão dupla, provêm das especificações dos fabricantes.
+Para a CPU AMD Ryzen 9 9900X, com registradores de \(512\) \textit{bits}, são de \(1{,}69\) TFLOP/s e \(102{,}4\) GB/s; para a GPU NVIDIA GeForce RTX 5070, de \(0{,}48\) TFLOP/s, correspondente a \(1/64\) da taxa em precisão simples, e \(672\) GB/s \parencite{NVIDIA2025RTXBlackwell}.
+O desempenho de uma execução no diagrama é o produto da taxa de atualização pelas operações por nó,
+\begin{equation}
+    P = N_{\mathrm{op}} \cdot \mathrm{MLUPS} \cdot 10^{-3}\ \text{GFLOP/s},
+    \label{eq:desempenho-gflops}
+\end{equation}
+e o teto, em MLUPS, para o núcleo de \(N_{\mathrm{op}} = 896\) operações e \(b = 320\) \textit{bytes} por nó é
+\begin{equation}
+    \mathrm{MLUPS}_{\max} = \min\!\left(\frac{P_{\mathrm{FP64}}}{N_{\mathrm{op}}},\ \frac{B}{b}\right) \cdot 10^{3}.
+    \label{eq:teto-mlups}
+\end{equation}
+Com esses valores, os tetos de cálculo e de memória são de \(1886\) e \(320\) MLUPS na CPU, de \(538\) e \(2100\) MLUPS na GPU, e de \(2100\) MLUPS na GPU hipotética, limitada pela memória.
+
+Os pontos de transição em dupla precisão são de \(16{,}5\) operações por \textit{byte} na CPU e de \(0{,}72\) na GPU, contra a intensidade aritmética de \(2{,}8\) do núcleo (Seção~\ref{sec:custo-computacional}).
+O resolvedor situa-se, assim, na região inclinada da CPU, com teto aritmético cerca de seis vezes o de memória, e na região horizontal da GPU, cuja largura de banda sustentaria uma taxa cerca de quatro vezes maior que a permitida pelo cálculo.
+Em uma GPU hipotética, idêntica à de referência exceto pela razão de 1:2, o ponto de transição subiria para \(23{,}0\) operações por \textit{byte}, e o \textit{kernel} passaria à região inclinada, com teto \(3{,}9\) vezes o da GPU real e \(6{,}6\) vezes o da CPU.
+Nos aceleradores de HPC citados na Seção~\ref{sec:custo-computacional}, com pontos de transição em dupla precisão de \(7{,}1\) (NVIDIA H200 SXM) e de \(15{,}0\) operações por \textit{byte} (AMD Instinct MI250X), o \textit{kernel} também seria limitado pela memória.
+
+Os diagramas resultantes, com a posição do núcleo fundido em cada dispositivo e a GPU hipotética, constam da \autoref{fig:roofline}.
+Os pontos cheios correspondem às taxas obtidas, com doze núcleos na CPU e com as sete tecnologias na GPU, e os vazados, aos tetos do modelo.
+A CPU opera a \(44\%\) do teto de memória, e as tecnologias de GPU, a \(58\%\) a \(61\%\) do teto aritmético, valor coerente com a fração do pico de FMA da \autoref{tab:posicao-roofline}.
 
 \begin{figure}[H]
     \centering
-    \caption{Modelo \textit{roofline} da CPU, da GPU e de uma GPU hipotética com razão de 1:2 entre as taxas em precisão dupla e em precisão simples, e posição do núcleo fundido do miniaplicativo (marcadores vazados: tetos do modelo; cheios: taxas obtidas com doze núcleos na CPU e projetadas na GPU).}
+    \caption{Modelo \textit{roofline} da CPU, da GPU e de uma GPU hipotética com razão de 1:2 entre as taxas em precisão dupla e em precisão simples, e posição do núcleo fundido do miniaplicativo (marcadores vazados: tetos do modelo; cheios: taxas obtidas com doze núcleos na CPU e com as sete tecnologias na GPU).}
     \label{fig:roofline}
     \includegraphics[width=0.8\linewidth]{fig/roofline-model.png}
     \fonte{O autor (2026), com base em \textcite{Williams2009}.}
 \end{figure}
 
-O teto aritmético da figura supõe todas as operações à taxa de pico de multiplicação e adição fundidas, o que não ocorre no fechamento energético, em que exponenciais e divisões ocupam, na GPU, muito mais posições de emissão do que as demais operações; o teto efetivo é inferior, como mostram os tetos medidos da \autoref{tab:posicao-roofline}.
-A \autoref{tab:projecao-referencia} situa as taxas na plataforma de referência (AMD Ryzen 9 9900X e NVIDIA GeForce RTX 5070) em relação aos tetos de suas especificações, que são os da \autoref{fig:roofline}.
-Na GPU, limitada pela vazão de instruções de dupla precisão, projetou-se a taxa pela razão entre os picos em dupla precisão das duas GPUs, \(482{,}3/277 \approx 1{,}74\), hipótese que supõe a mesma composição de instruções e a mesma fração da emissão nas duas arquiteturas.
-Com a projeção, as tecnologias de GPU ficam entre \(48\%\) e \(54\%\) do teto aritmético de \(626\) MLUPS, valor coerente com as frações de pico de FMA medidas (\(53\%\) a \(60\%\)).
+\subsection{Taxa de Atualização e Posição no Diagrama}\label{subsec:mlups-gflops}
 
-\begin{table}[H]
-    \centering
-    \caption{Taxas na plataforma de referência (CPU com doze núcleos, sem reescalonamento da taxa por núcleo, $N_x=3\times10^4$; GPU projetada) e frações dos tetos das especificações}
-    \label{tab:projecao-referencia}
-    \begin{tabular}{llcp{4.3cm}c}
-        \toprule
-        Alvo & Tecnologia & Taxa (MLUPS) & Teto (MLUPS) & Fração \\
-        \midrule
-        CPU & OpenMP & $150{,}4$ & $320$ (memória) & $47\%$ \\
-        CPU & OpenMP & $150{,}4$ & $2194$ (cálculo) & $7\%$ \\
-        GPU & CUDA & $304$ & $626$ (cálculo) & $48\%$ \\
-        GPU & OpenACC & $337$ & $626$ (cálculo) & $54\%$ \\
-        \bottomrule
-    \end{tabular}
-    \nota{As taxas de GPU são as medidas, multiplicadas por $1{,}74$ (razão entre os picos de dupla precisão de $482{,}3$ e $277$ GFLOP/s).}
-    \fonte{O autor (2026).}
-\end{table}
+A Equação~\eqref{eq:desempenho-gflops} mostra que o desempenho em GFLOP/s depende tanto do trabalho útil por unidade de tempo quanto do número de operações executadas por nó.
+Uma decisão que elimina operações redundantes reduz \(N_{\mathrm{op}}\) e, portanto, a intensidade aritmética \(I = N_{\mathrm{op}}/b\): o ponto desloca-se para a esquerda e, se a taxa de atualização não crescer na mesma proporção, para baixo no diagrama, ainda que o tempo de solução diminua.
+É o caso da forma de produto do equilíbrio e do passo de Newton escalado (hipóteses 13 e 14 da \autoref{tab:hipoteses-otimizacao}), que reduziram em \(9\%\) as operações de ponto flutuante executadas por nó e o número de divisões.
+Se a taxa de atualização crescesse apenas na proporção inversa, o ponto permaneceria imóvel no eixo vertical, pois \(1/0{,}913 \approx 1{,}095\); qualquer ganho de taxa inferior a \(9{,}5\%\) o desloca para baixo.
 
-As diferenças que persistem entre as tecnologias decorrem de limitações da própria tecnologia, e não do código do LBM.
-No MPI, com a malha na \textit{cache} (\(N_x \le 1000\)), oito processos igualam ou superam o OpenMP (\(137\) contra \(122\) a \(134\) MLUPS em \(N_x = 1000\), e \(133\) contra \(85\) a \(101\) em \(N_x = 500\)), o que é compatível com a residência de cada fatia nos \textit{caches} privados do núcleo.
-Com \(N_x \ge 5000\), o MPI atinge de \(69\%\) a \(73\%\) do OpenMP e de \(67\%\) a \(83\%\) do teto de oito cópias independentes da fatia de cada processo.
-No OpenACC em CPU, o \texttt{nvc++} não vetoriza o núcleo monolítico, e a formulação em laços de via, em fases, alcança de \(87\%\) a \(89\%\) do núcleo do GCC com um núcleo e de \(97\%\) a \(107\%\) com oito.
-Em GPU, a vantagem de cerca de \(11\%\) do OpenACC sobre o CUDA nativo reside na geração de código do compilador, e não no algoritmo, que é o mesmo.
+Em execuções alternadas na mesma sessão, a adoção dessas decisões elevou a taxa de atualização em \(9\%\) a \(11\%\) em um núcleo de CPU, em \(2\%\) a \(13\%\) com todos os núcleos e em \(24\%\) a \(30\%\) na GPU.
+Em nenhum caso o tempo de solução aumentou.
+O desempenho em GFLOP/s, produto da taxa por \(N_{\mathrm{op}}\), subiu de \(13\%\) a \(19\%\) na GPU, que é limitada pela emissão de instruções e cuja taxa cresceu mais do que a redução de operações.
+Em CPU, a variação foi de \(-7\%\) a \(+3\%\).
+Com todos os núcleos e \(N_x = 5000\), por exemplo, a taxa aumentou \(1{,}6\%\) enquanto o desempenho em GFLOP/s diminuiu \(7\%\), pois a taxa, limitada pela memória ou pela sincronização, cresceu menos do que a redução de operações.
+A posição mais baixa dessas configurações no diagrama reflete, assim, menos trabalho por nó, sem implicar menor eficiência.
+
+O diagrama indica a distância até o teto para uma contagem de operações fixa, mas não ordena implementações de contagens distintas.
+Para esse fim vale a taxa de atualização de nós (MLUPS), inversamente proporcional ao tempo de solução, e é por essa grandeza que as decisões da \autoref{tab:hipoteses-otimizacao} foram aceitas ou rejeitadas.
+A contagem menor de operações aproxima, por fim, o teto aritmético sem alterar o teto de memória, pois o tráfego por nó é o mesmo.
+
+\subsection{Diferenças que Persistem entre as Tecnologias}\label{subsec:diferencas-persistentes}
+
+As diferenças que persistem entre as tecnologias são compatíveis com custos de execução distintos, mas não permitem excluir limitações do código do LBM.
+Em CPU, o OpenCL e o MPI diferem do OpenMP por causas já identificadas (custo de lançamento do POCL em malhas pequenas e decomposição estática sob variação do tempo de passo, Seção~\ref{sec:comparacao-de-tecnologias-em-cpu}), e o OpenACC, por uma limitação do compilador.
+Em GPU, o RAJA e o OpenMP com descarregamento ficam cerca de \(6\%\) atrás em \(N_x = 5000\) (\(294{,}9\) e \(294{,}4\) contra \(313{,}0\) MLUPS do CUDA) e igualam-se a partir de \(5 \times 10^4\) nós.
+Já em \(N_x = 1000\), ficam de \(34\%\) a \(40\%\) abaixo do CUDA (\(119{,}3\) e \(108{,}5\) contra \(180{,}3\) MLUPS).
+Esse comportamento é compatível com um custo de lançamento por passo maior nessas duas tecnologias, pesando mais sobre poucas células, mas a causa não foi isolada.
+
+A vantagem de cerca de \(3\%\) a \(4\%\) do OpenACC e do Alpaka sobre o CUDA nativo é compatível com diferenças na geração de código; a igualdade do algoritmo, porém, não isola a contribuição do compilador sem contadores e controle dos recursos de execução.
+
+Algumas otimizações não foram implementadas.
+Uma tabela de consulta em memória constante para \(e^{-|\xi|}\) não foi adotada, pois cada exponencial custa cerca de \(16\) posições de emissão FP64 e o armazenamento de \(E = e^{-|\xi|}\) no estado de partida (duas das doze exponenciais) acrescentaria \(16\) \textit{bytes} por nó.
+A solução analítica do fechamento unidimensional eliminaria todas as exponenciais, mas muda o algoritmo (poucos passos de Newton amortecidos não convergem); constitui uma opção algorítmica em vez de uma otimização.
+A compilação das tecnologias de CPU pelo \textit{clang} (de \(13\%\) a \(16\%\) a mais no núcleo) depende do compilador da plataforma final, e os contadores de \textit{hardware} permitiriam transformar as estimativas da \autoref{tab:posicao-roofline} em medições.
+A execução conjunta das suítes de teste Alpaka-GPU e Kokkos-CUDA aborta ao final do processo (\texttt{cudaErrorCudartUnloading}) após os \(16\) testes aprovados, e as suítes são executadas em processos separados.
+
+%---------------------------------------------------------------------------------------
 
 \section{Análise de Complexidade do Código}\label{sec:analise-de-complexidade-do-codigo}
 
 A complexidade de implementação é avaliada pela contagem de linhas de código (LOC), conforme a Seção~\ref{sec:escalabilidade-e-complexidade}.
-A contagem abrange todos os arquivos de código-fonte de cada tecnologia, inclusive os \textit{kernels} do CUDA e do OpenCL, e os cabeçalhos compartilhados que ela inclui, contados em cada uma: o estêncil de propagação, os tipos vetoriais, o núcleo vetorial de CPU e, no OpenMP com descarregamento, as primitivas de física por célula.
+A contagem abrange todos os arquivos de código-fonte de cada tecnologia, inclusive os \textit{kernels} do CUDA e do OpenCL, e os cabeçalhos compartilhados que ela inclui, contados em cada uma.
+Esses cabeçalhos são o estêncil de propagação, o fechamento energético, os tipos vetoriais, o núcleo vetorial de CPU e, na versão sequencial e nas tecnologias com descarregamento, as primitivas de física por célula.
 Nas tecnologias com versões distintas para CPU e para GPU, ambas são contabilizadas e separadas na tabela.
 
-A implementação sequencial (\textit{Plain}) soma 628 linhas e serve de linha de base para o acréscimo relativo.
-O desempenho em CPU depende de um núcleo vetorial dedicado, de 1078 linhas (\texttt{Simd.hpp} e \texttt{HostKernel.hpp}), incluído por todas as tecnologias de CPU, que responde pela maior parte dos totais, de 1649 linhas no MPI (\(2{,}63\times\) a versão sequencial) a 2872 no OpenCL (\(4{,}57\times\)).
-O CUDA, restrito à GPU, não o inclui e soma 856 linhas (\(1{,}36\times\)).
-Excluídos os cabeçalhos compartilhados, resta o código próprio de cada tecnologia, de 449 linhas no MPI a 1672 no OpenCL.
+O \textit{Plain} soma 864 linhas, das quais 284 próprias e 580 de cabeçalhos compartilhados (estêncil, fechamento energético e primitivas de física por célula), e serve de linha de base para o acréscimo relativo.
+O desempenho em CPU depende de um núcleo vetorial dedicado, de 1149 linhas (\texttt{Simd.hpp} e \texttt{HostKernel.hpp}), mais 46 do fechamento energético compartilhado (\texttt{EnergyClosure.hpp}), incluído por todas as tecnologias de CPU.
+O núcleo vetorial responde pela maior parte dos totais, de 1786 linhas no MPI a 3112 no OpenCL (\autoref{tab:complexidade-loc-tecnologias}).
+O CUDA, restrito à GPU, não inclui o núcleo vetorial e soma 952 linhas.
+Excluídos os cabeçalhos compartilhados, resta o código próprio de cada tecnologia, de 469 linhas no MPI a 1795 no OpenCL, contra 284 da versão sequencial.
 
 No OpenMP, a versão de CPU é uma classe que aciona o núcleo vetorial compartilhado, e a de GPU acrescenta a alocação explícita na memória do acelerador e o despacho sobre as primitivas de \texttt{CellPhysics.hpp} (Seção~\ref{sec:implementacao-computacional-utilizando-openmp}).
-No OpenACC, a promessa de baixo esforço de escrita vale para a GPU (376 linhas), mas não para a CPU (900 linhas), em que a incapacidade do \texttt{nvc++} de vetorizar o núcleo monolítico obrigou à formulação em fases com laços de via (Seção~\ref{sec:implementacao-computacional-utilizando-openacc}).
+No OpenACC, a promessa de baixo esforço de escrita vale para a GPU (377 linhas), mas não para a CPU (915 linhas), em que a incapacidade do \texttt{nvc++} de vetorizar o núcleo monolítico obrigou à formulação em fases com laços de via (Seção~\ref{sec:implementacao-computacional-utilizando-openacc}).
+
 O OpenCL apresenta o maior código próprio, pela gestão de plataformas, contextos e filas de comandos, pela compilação dos \textit{kernels} em tempo de execução e pela manutenção de código de CPU (\textit{kernel} vetorial) e de GPU (\textit{kernel} por célula).
 O MPI concentra seu acréscimo na comunicação entre processos e na divisão do domínio, sem alterar a lógica de colisão local.
-Kokkos, RAJA e Alpaka mantêm uma base comum aos dois alvos, que inclui os \textit{kernels} de GPU, declarações específicas de poucas linhas para a GPU, referentes a \textit{Views}, políticas de execução e características de memória (Seção~\ref{sec:implementacao-computacional-utilizando-raja}), e uma classe de CPU própria que aciona o núcleo vetorial.
-A \autoref{tab:complexidade-loc-tecnologias} apresenta a contagem por tecnologia e por alvo, normalizada pela da implementação sequencial.
+Kokkos, RAJA e Alpaka mantêm uma base comum aos dois alvos, que inclui os \textit{kernels} de GPU.
+Acrescentam declarações específicas de poucas linhas para a GPU, referentes a \textit{Views}, políticas de execução e características de memória (Seção~\ref{sec:implementacao-computacional-utilizando-raja}), e uma classe de CPU própria que aciona o núcleo vetorial.
+A contagem por tecnologia e por alvo, normalizada pela da versão sequencial, consta da \autoref{tab:complexidade-loc-tecnologias}.
 
 \begin{table}[H]
     \centering
@@ -544,57 +902,161 @@ A \autoref{tab:complexidade-loc-tecnologias} apresenta a contagem por tecnologia
         \toprule
         Tecnologia & CPU & GPU & Comum & Cabeçalhos & Total & Relativo \\
         \midrule
-        \textit{Plain} (sequencial) & 628 & --- & --- & --- & 628 & 1{,}00\(\times\) \\
-        OpenMP & 252 & 365 & --- & 1563 & 2180 & 3{,}47\(\times\) \\
-        OpenACC & 900 & 376 & --- & 1563 & 2839 & 4{,}52\(\times\) \\
-        OpenCL & 820 & 527 & 325 & 1200 & 2872 & 4{,}57\(\times\) \\
-        CUDA & --- & 734 & --- & 122 & 856 & 1{,}36\(\times\) \\
-        Kokkos & 218 & 24 & 676 & 1200 & 2118 & 3{,}37\(\times\) \\
-        RAJA & 213 & 17 & 771 & 1200 & 2201 & 3{,}50\(\times\) \\
-        Alpaka & 225 & 32 & 847 & 1200 & 2304 & 3{,}67\(\times\) \\
-        MPI & 449 & --- & --- & 1200 & 1649 & 2{,}63\(\times\) \\
+        \textit{Plain} (sequencial) & 284 & --- & --- & 580 & 864 & 1{,}00\(\times\) \\
+        OpenMP & 252 & 366 & --- & 1729 & 2347 & 2{,}72\(\times\) \\
+        OpenACC & 915 & 377 & --- & 1729 & 3021 & 3{,}50\(\times\) \\
+        OpenCL & 883 & 585 & 327 & 1317 & 3112 & 3{,}60\(\times\) \\
+        CUDA & --- & 784 & --- & 168 & 952 & 1{,}10\(\times\) \\
+        Kokkos & 218 & 24 & 724 & 1317 & 2283 & 2{,}64\(\times\) \\
+        RAJA & 213 & 17 & 819 & 1317 & 2366 & 2{,}74\(\times\) \\
+        Alpaka & 225 & 32 & 895 & 1317 & 2469 & 2{,}86\(\times\) \\
+        MPI & 469 & --- & --- & 1317 & 1786 & 2{,}07\(\times\) \\
         \bottomrule
     \end{tabular}
-    \nota{A coluna \textit{Cabeçalhos} reúne os cabeçalhos compartilhados incluídos por cada tecnologia: o estêncil (122 linhas), empregado por todas as tecnologias paralelas; os tipos vetoriais (\texttt{Simd.hpp}, 407) e o núcleo vetorial de CPU (\texttt{HostKernel.hpp}, 671), empregados pelas de CPU; e, no OpenMP, as primitivas de \texttt{CellPhysics.hpp} (363). A coluna \textit{Comum} reúne o código comum aos dois alvos (infraestrutura e \textit{kernels} no OpenCL, Kokkos, RAJA e Alpaka).}
+    \nota{A coluna \textit{Cabeçalhos} reúne os cabeçalhos compartilhados incluídos por cada tecnologia: o estêncil (122 linhas), empregado por todas as tecnologias, a versão sequencial inclusive; o fechamento energético compartilhado (\texttt{EnergyClosure.hpp}, 46), empregado por todas as que calculam a física por célula (inclusive o CUDA); os tipos vetoriais (\texttt{Simd.hpp}, 407) e o núcleo vetorial de CPU (\texttt{HostKernel.hpp}, 742), empregados pelas de CPU; e, na versão sequencial, no OpenMP e no OpenACC, as primitivas de \texttt{CellPhysics.hpp} (412). A coluna \textit{Comum} reúne o código comum aos dois alvos (infraestrutura e \textit{kernels} no OpenCL, Kokkos, RAJA e Alpaka). Contagem de linhas de código sem comentários e sem linhas em branco.}
     \fonte{O autor (2026).}
 \end{table}
 
-Na cobertura simultânea de CPU e GPU, as camadas de abstração não oferecem vantagem de código: o OpenMP de CPU (252 linhas) e o CUDA (734), com o núcleo vetorial compartilhado e o estêncil (1200), somam 2186 linhas, ou \(3{,}48\times\) a versão sequencial, contra \(3{,}37\times\) (Kokkos), \(3{,}50\times\) (RAJA) e \(3{,}67\times\) (Alpaka).
-Em GPU, as camadas oferecem uma única base de código (676 a 847 linhas comuns, contra 734 do CUDA), mas, em CPU, a taxa só foi alcançada com um núcleo vetorial que seus laços paralelos escalares não conseguem expressar, e cada uma mantém uma classe própria que o aciona.
-Pelo critério de linhas, portanto, a base única não é vantajosa, e a unificação em C++20 vale para o \textit{kernel} de GPU, e não para o de CPU.
+Na cobertura simultânea de CPU e GPU, as camadas de abstração não oferecem vantagem de código.
+O OpenMP de CPU (252 linhas) e o CUDA (784), com o núcleo vetorial compartilhado, o fechamento energético e o estêncil (1317), somam 2353 linhas, ou \(2{,}72\times\) a versão sequencial, contra \(2{,}64\times\) (Kokkos), \(2{,}74\times\) (RAJA) e \(2{,}86\times\) (Alpaka).
+Em GPU, as camadas oferecem uma única base de código (724 a 895 linhas comuns, contra 784 do CUDA).
+Em CPU, porém, a taxa só foi alcançada com um núcleo vetorial que seus laços paralelos por célula não geram, e cada uma mantém uma classe própria que o aciona (Seção~\ref{sec:duas-formas-de-implementacao}).
+A Seção~\ref{subsec:custo-forma-unica} estima o que se ganharia e o que se perderia com uma única forma.
+Pelo critério de linhas, portanto, a base única não é vantajosa, e a unificação em C++20 vale para o \textit{kernel} de GPU, mas não para o de CPU.
 
 A contagem de linhas não esgota o custo de adotar uma tecnologia, e os atributos qualitativos registrados durante o desenvolvimento (Seção~\ref{sec:escalabilidade-e-complexidade}) relativizam esse ordenamento.
 O OpenMP manteve a estrutura de laços da versão sequencial e a menor curva de aprendizado, com alterações restritas ao \textit{kernel} de cálculo e preservação dos depuradores da versão sequencial.
-O OpenACC compartilha essa economia de escrita, mas concentra a dificuldade no diagnóstico: como a decisão de paralelização cabe ao compilador, foi necessário recorrer sistematicamente aos relatórios de compilação (\texttt{-Minfo=accel}), pois uma diretiva silenciosamente ignorada não gera erro, apenas desempenho aquém do esperado.
+O OpenACC compartilha essa economia de escrita, mas concentra a dificuldade no diagnóstico.
+Como a decisão de paralelização cabe ao compilador, foi necessário recorrer sistematicamente aos relatórios de compilação (\texttt{-Minfo=accel}), pois uma diretiva silenciosamente ignorada não gera erro, apenas desempenho aquém do esperado.
+
 O CUDA, embora exija a reescrita explícita dos \textit{kernels}, teve o melhor ferramental de depuração e de análise de desempenho, o que reduziu o tempo de identificação de erros de acesso à memória.
 No OpenCL, a compilação dos \textit{kernels} em tempo de execução desloca para a execução erros que as demais tecnologias acusam na compilação, e o código dos \textit{kernels}, em arquivos separados lidos durante a execução, permanece fora do alcance das verificações do compilador C++.
 Kokkos e RAJA preservaram uma única base de código para CPU e GPU, ao custo de tempos de compilação sensivelmente maiores e de mensagens de erro extensas, com dezenas de instanciações de \textit{templates}.
 O MPI manteve o \textit{kernel} local intacto, mas exigiu o maior esforço de depuração, pois erros de sincronização se manifestam de forma intermitente e demandam a inspeção simultânea de vários processos.
 
 Os resultados corroboram apenas em parte a análise qualitativa da \autoref{tab:comparativo-entre-tecnologias-de-programacao-paralela}.
-Pelo código próprio, o MPI (449 linhas) e o OpenMP (617) são os mais enxutos, o CUDA (734) fica próximo das camadas de abstração (Kokkos, 918; RAJA, 1001; Alpaka, 1104), e o OpenCL (1672) destaca-se, como previsto para o modelo de mais baixo nível.
-O OpenACC (1276), cuja promessa é o menor esforço de escrita, tem o segundo maior código próprio, porque os limites do compilador em CPU exigiram uma formulação própria.
+Pelo código próprio, o MPI (469 linhas) e o OpenMP (618) são os mais enxutos, o CUDA (784) fica próximo das camadas de abstração (Kokkos, 966; RAJA, 1049; Alpaka, 1152), e o OpenCL (1795) destaca-se, como previsto para o modelo de mais baixo nível.
+O OpenACC (1292), cuja promessa é o menor esforço de escrita, tem o segundo maior código próprio, porque os limites do compilador em CPU exigiram uma formulação própria.
 Como o miniaplicativo mantém, nas diretivas, versões distintas para CPU e para GPU, a vantagem dessas tecnologias restringe-se ao esforço por alvo, e é compartilhada com as camadas de abstração.
 
-As camadas de abstração alcançam, nas malhas grandes, de \(95\%\) a \(100\%\) do desempenho do OpenMP em CPU (Seção~\ref{sec:comparacao-de-tecnologias-em-cpu}) e de \(100\%\) a \(104\%\) da taxa do CUDA em GPU (Seção~\ref{sec:comparacao-de-tecnologias-em-gpu}).
-A portabilidade de desempenho enunciada na Seção~\ref{sec:tecnologias-de-paralelizacao} foi, assim, alcançada nas duas arquiteturas, condicionada a duas providências que independem da camada: executar o mesmo trabalho por nó em todas as tecnologias, o que, com o fechamento fatorado, eliminou uma diferença de \(22\%\) a favor do CUDA, e, em CPU, delegar o cálculo a um núcleo vetorial compartilhado.
-O custo da base única está, portanto, no código, e não no desempenho, e não se esgota na contagem de linhas: manifesta-se nos tempos de compilação mais longos, nos diagnósticos de erro extensos da instanciação de \textit{templates} e na necessidade de compilar a própria biblioteca como parte do sistema de compilação.
-A decisão entre uma camada de abstração e um modelo especializado depende, assim, menos do desempenho, que difere em no máximo \(5\%\) em relação ao OpenMP em CPU e ao CUDA em GPU, e do volume de código, que se equivale, e mais do horizonte de vida do código e da expectativa de troca de arquitetura.
+A \autoref{fig:desempenho-loc} relaciona, para cada alvo, a taxa relativa à tecnologia de referência (OpenMP em CPU com doze núcleos e CUDA em GPU) ao código próprio do alvo.
+Esse código é o específico do alvo somado ao comum aos dois, sem os cabeçalhos compartilhados, que são os mesmos para todas as tecnologias.
+Em GPU, as tecnologias ocupam uma faixa de cerca de \(\pm 5\%\) em taxa, com código próprio de \(366\) linhas (OpenMP com descarregamento) a \(927\) (Alpaka).
+Com o mesmo trabalho por nó, mais código não compra desempenho, e as diretivas (OpenMP e OpenACC) alcançam a taxa do CUDA com menos da metade das linhas.
+Em CPU, o OpenMP reúne a menor contagem (\(252\) linhas) e a taxa de referência.
+As demais ficam entre \(89\%\) (OpenACC) e \(109\%\) (OpenCL) dela, com causas já identificadas para o MPI, o OpenACC e o OpenCL, e com código próprio de \(469\) a \(1210\) linhas.
+A leitura é indicativa, pois a contagem de linhas ignora a dificuldade de cada linha e os atributos qualitativos foram registrados por um único desenvolvedor.
+
+\begin{figure}[H]
+  \centering
+  \caption{Taxa relativa em função do código próprio do alvo (linhas específicas do alvo e comuns aos dois alvos, sem os cabeçalhos compartilhados), em CPU com doze núcleos (relativa ao OpenMP) e em GPU (relativa ao CUDA).}
+  \label{fig:desempenho-loc}
+  \includegraphics[width=\linewidth]{fig/performance-vs-loc.png}
+  \fonte{O autor (2026).}
+\end{figure}
+
+As camadas de abstração alcançam, nas malhas grandes, de \(92\%\) a \(103\%\) do desempenho do OpenMP em CPU (Seção~\ref{sec:comparacao-de-tecnologias-em-cpu}), por construção, e de \(94\%\) a \(104\%\) da taxa do CUDA em GPU (Seção~\ref{sec:comparacao-de-tecnologias-em-gpu}), onde cada camada executa o seu próprio \textit{kernel} por célula.
+A portabilidade de desempenho enunciada na Seção~\ref{sec:tecnologias-de-paralelizacao} foi, assim, demonstrada em GPU e, em CPU, apenas para o despacho de um núcleo vetorial compartilhado.
+Ela depende de duas providências que independem da camada: executar o mesmo trabalho por nó em todas as tecnologias (hipótese 12 da \autoref{tab:hipoteses-otimizacao}) e, em CPU, delegar o cálculo a esse núcleo.
+
+O custo da base única está, portanto, no código, mais do que no desempenho.
+Esse custo vai além da contagem de linhas: manifesta-se nos tempos de compilação mais longos, nos diagnósticos de erro extensos da instanciação de \textit{templates} e na necessidade de compilar a própria biblioteca como parte do sistema de compilação.
+A decisão entre uma camada de abstração e um modelo especializado depende, assim, menos do desempenho e do volume de código, que se equivalem, e mais do horizonte de vida do código e da expectativa de troca de arquitetura.
 Nessa situação, a base única do \textit{kernel} de GPU compensa a curva de aprendizado mais íngreme.
-Para um único tipo de \textit{hardware}, o OpenMP em CPU (menor curva de aprendizado, \(617\) linhas próprias e taxa entre as maiores) e o CUDA em GPU (melhor ferramental e menor código total entre as tecnologias de GPU, embora com taxa até \(10\%\) inferior à do \texttt{nvc++}) constituem as alternativas mais diretas.
+Para um único tipo de \textit{hardware}, as alternativas mais diretas são o OpenMP em CPU e o CUDA em GPU.
+O primeiro reúne a menor curva de aprendizado, \(618\) linhas próprias e taxa entre as maiores; o segundo, o melhor ferramental e o menor código total entre as tecnologias de GPU, com taxa equivalente à das demais nas malhas grandes.
+
+\subsection{Custo de Manter uma Única Forma de Implementação}\label{subsec:custo-forma-unica}
+
+A Seção~\ref{sec:duas-formas-de-implementacao} descreve as duas formas do núcleo de cálculo e as razões de cada uma.
+Estima-se aqui o que custaria, em desempenho de CPU e em código, manter apenas a forma por célula, que é a da GPU e a da versão sequencial, em todos os alvos.
+
+A forma por célula é a executada pelo \textit{Plain}, que atinge de \(4{,}3\) a \(4{,}8\) MLUPS em um núcleo, cerca de \(2\%\) do pico de FMA, e a das demais tecnologias de CPU quando o núcleo vetorial é substituído por ela.
+As diferenças entre as tecnologias são pequenas, o que caracteriza código escalar em vez de efeito da tecnologia (hipótese 2 da \autoref{tab:hipoteses-otimizacao}).
+A disposição com $x$ contíguo e o núcleo vetorial multiplicam a taxa de um núcleo por \(G_1 = 5{,}1\), e o fechamento fatorado, comum às duas formas, já está incluído nas duas taxas (hipótese 8).
+
+Com doze núcleos, a taxa da forma por célula depende da eficiência paralela.
+Esta se situa entre a observada no núcleo vetorial, \(\eta = 0{,}54\), e a do laço de multiplicações e adições fundidas, que não acessa a memória, \(\eta = 0{,}83\), limite plausível para um código limitado pela execução no núcleo.
+Com \(R_{c} = 4{,}3\) MLUPS por núcleo, resultam
+\begin{equation}
+    R_{c}(12) \approx 4{,}3 \times 12 \times \eta \approx 28\ \text{a}\ 43\ \text{MLUPS},
+    \label{eq:taxa-forma-celula}
+\end{equation}
+frente aos \(141{,}9\) MLUPS do núcleo vetorial com \(N_x = 10^4\).
+A perda seria, assim, de \(3{,}3\) a \(5{,}0\) vezes, independentemente da tecnologia, e a forma por célula ocuparia de \(9\%\) a \(13\%\) do teto de memória, contra \(44\%\) (\autoref{tab:custo-forma-unica-cpu}).
+
+\begin{table}[H]
+    \centering
+    \caption{Efeito de manter apenas a forma por célula em CPU, para $N_x = 10^4$}
+    \label{tab:custo-forma-unica-cpu}
+    \begin{tabular}{>{\raggedright\arraybackslash}p{6.0cm}>{\centering\arraybackslash}p{3.4cm}>{\centering\arraybackslash}p{3.4cm}}
+        \toprule
+        Grandeza & Núcleo vetorial & Forma por célula \\
+        \midrule
+        Taxa de um núcleo (MLUPS) & \(21{,}9\) & \(4{,}3\) \\
+        Fração do pico de FMA de um núcleo & \(12\%\) & \(2\%\) \\
+        Taxa com doze núcleos (MLUPS) & \(141{,}9\) & \(28\) a \(43\) \\
+        Fração do teto de memória com doze núcleos & \(44\%\) & \(9\%\) a \(13\%\) \\
+        Taxa relativa ao núcleo vetorial & \(1{,}00\) & \(0{,}20\) a \(0{,}30\) \\
+        \bottomrule
+    \end{tabular}
+    \nota{A taxa da forma por célula em um núcleo é a medida do \textit{Plain}; com doze núcleos, é estimada com eficiência paralela de \(0{,}54\) a \(0{,}83\).}
+    \fonte{O autor (2026).}
+\end{table}
+
+Em contrapartida, a forma por célula dispensa o núcleo vetorial (\(1149\) linhas) e a classe de CPU de cada camada de abstração.
+A \autoref{tab:custo-forma-unica-codigo} compara os totais da \autoref{tab:complexidade-loc-tecnologias} com os que resultariam da remoção desses arquivos.
+
+\begin{table}[H]
+    \centering
+    \caption{Linhas de código das camadas de abstração com a forma por célula como única implementação}
+    \label{tab:custo-forma-unica-codigo}
+    \begin{tabular}{>{\raggedright\arraybackslash}p{2.4cm}>{\centering\arraybackslash}p{2.2cm}>{\centering\arraybackslash}p{3.0cm}>{\centering\arraybackslash}p{2.4cm}>{\centering\arraybackslash}p{3.0cm}}
+        \toprule
+        Tecnologia & Total atual & Total com forma única & Relativo atual & Relativo com forma única \\
+        \midrule
+        Kokkos & 2283 & 916 & 2{,}64\(\times\) & 1{,}06\(\times\) \\
+        RAJA & 2366 & 1004 & 2{,}74\(\times\) & 1{,}16\(\times\) \\
+        Alpaka & 2469 & 1095 & 2{,}86\(\times\) & 1{,}27\(\times\) \\
+        \bottomrule
+    \end{tabular}
+    \nota{O total com forma única exclui a classe de CPU e os cabeçalhos do núcleo vetorial (\texttt{Simd.hpp} e \texttt{HostKernel.hpp}, \(1149\) linhas), e mantém o código de GPU, o código comum aos alvos e os cabeçalhos do estêncil e do fechamento (\(168\) linhas). Relativo à versão sequencial (\(864\) linhas).}
+    \fonte{O autor (2026).}
+\end{table}
+
+A forma única reduziria o código das camadas em cerca de \(1{,}4\) mil linhas (de \(56\%\) a \(60\%\)), a \(1{,}06\) a \(1{,}27\) vez a versão sequencial.
+A taxa de GPU seria mantida, ao custo de reduzir a taxa de CPU a \(20\%\) a \(30\%\) da do núcleo vetorial.
+O que se compra com o núcleo vetorial é, portanto, o desempenho de CPU, a um custo de cerca de \(1{,}4\) mil linhas e de uma classe de CPU por tecnologia.
+A forma por célula entrega portabilidade funcional para a CPU, mas não portabilidade de desempenho.
+Ela é adequada quando a CPU é alvo de depuração ou de contingência de um código escrito para GPU; quando é alvo de produção, a perda de três a cinco vezes na taxa justifica o núcleo vetorial.
+
+%---------------------------------------------------------------------------------------
 
 %---------------------------------------------------------------------------------------
 
 \section{Síntese dos Resultados}\label{sec:sintese-dos-resultados}
 
 Os ensaios confirmaram parte das expectativas que orientaram o protocolo e refutaram outras.
-
 Na validação, o método reproduziu as três estruturas de onda do problema de Sod, com ordem de convergência efetiva limitada pelas descontinuidades (\(0{,}41\) na pressão entre \(N_x = 100\) e \(1000\)) e sem divergência até \(\Pi = 20\).
+Em relação a esquemas de volumes finitos de referência, o erro acompanha a primeira ordem até \(10^3\) nós e deixa de diminuir a partir daí, por um desvio sistemático pequeno cuja origem não foi isolada.
 
-No desempenho, o fator limitante é a largura de banda de memória na CPU, com teto de \(320\) MLUPS, e a capacidade aritmética em precisão dupla na GPU, com teto de \(626\) MLUPS.
-Em CPU, as cinco tecnologias de memória compartilhada alcançam, com doze núcleos, de \(143\) a \(150\) MLUPS (\(45\%\) a \(47\%\) do teto de memória), com perda de eficiência atribuída ao equipamento, e a escolha da tecnologia altera a taxa em no máximo \(12\%\) nas malhas grandes, exceto no MPI (\(72\%\) da maior).
-Em GPU, todas as tecnologias situam-se entre \(174\) e \(194\) MLUPS, e as camadas de abstração alcançam de \(100\%\) a \(104\%\) do CUDA, pois todas executam o mesmo fechamento fatorado.
-A razão entre as taxas de GPU e de CPU é de \(1{,}2\) a \(1{,}3\) nas plataformas de medição e de \(2{,}0\) a \(2{,}2\) na projeção para a plataforma de referência, em acordo com a razão de \(2{,}0\) entre os tetos, e o ganho somente se realiza em malhas que amortizem o despacho dos \textit{kernels}.
+No desempenho, o fator limitante é a largura de banda de memória na CPU, com teto de \(320\) MLUPS, e a capacidade aritmética em precisão dupla na GPU, com teto de \(538\) MLUPS.
+Em CPU, as tecnologias de memória compartilhada compiladas com o GCC atingem, com doze núcleos, de \(139\) a \(146\) MLUPS (\(44\%\) a \(45\%\) do teto de memória).
+A perda de eficiência paralela (\(\eta = 0{,}54\)) é atribuível à máquina, pois doze cópias independentes do programa exibem a mesma fração sequencial efetiva e a escalabilidade fraca reproduz a eficiência da forte.
 
-Na complexidade, a cobertura de CPU e GPU custa \(3{,}37\times\) a \(3{,}67\times\) a versão sequencial nas camadas de abstração e \(3{,}48\times\) em duas implementações especializadas, sem vantagem de código da base única, que subsiste apenas para o \textit{kernel} de GPU.
-Dos quinze experimentos da \autoref{tab:hipoteses-otimizacao}, oito refutaram ou rejeitaram a hipótese que os motivou, e a medição dos tetos do equipamento, a contagem dinâmica das instruções e a comparação alternada na mesma sessão permitiram distinguir o que pertencia ao código, à tecnologia e ao equipamento.
+Em GPU, todas as tecnologias situam-se entre \(311\) e \(328\) MLUPS em \(N_x \geq 5000\), a cerca de \(99\%\) do limite estimado de emissão FP64.
+As camadas de abstração alcançam de \(94\%\) a \(104\%\) do CUDA, pois todas executam o mesmo trabalho por nó.
+A fração do teto aritmético clássico é menor (\(59\%\) do pico de FMA pela contagem do modelo), porque o fechamento energético, dominado por exponenciais e divisões, não emite à taxa de multiplicação e adição fundidas.
+
+As diferenças restantes entre as tecnologias de CPU têm causas identificadas.
+O custo de lançamento do POCL e a decomposição estática do MPI sob variação do tempo de passo não são falhas do código do LBM, e o compilador do OpenACC não vetoriza o núcleo monolítico.
+A razão entre as taxas de GPU e de CPU é de \(2{,}2\) a \(2{,}3\), contra \(1{,}7\) entre os tetos.
+O ganho somente se realiza em malhas que amortizem o despacho dos \textit{kernels}, a partir de cerca de \(600\) a \(1400\) nós em \(x\) em relação a doze núcleos de CPU.
+
+As decisões de implementação elevaram a taxa de um núcleo de CPU por \(5{,}1\) (vetorização e registradores independentes, em relação ao \textit{Plain}) e por \(2{,}2\) (fechamento fatorado) e a de GPU por \(1{,}6\) a \(2{,}1\).
+A reescrita da física por célula na forma de produto (hipótese 14) acrescentou de \(17\%\) a \(30\%\) na GPU e de \(7\%\) a \(9\%\) por núcleo de CPU, ao reduzir as operações por nó.
+Como a redução de operações por nó desloca o ponto do núcleo para baixo no diagrama \textit{roofline} sempre que a taxa cresce menos de \(9{,}5\%\), a taxa de atualização de nós é a medida que ordena as implementações, em vez do desempenho em GFLOP/s.
+Das vinte hipóteses da \autoref{tab:hipoteses-otimizacao}, sete foram refutadas ou rejeitadas, e a medição dos tetos da plataforma, a contagem dinâmica das instruções e a comparação alternada na mesma sessão permitiram distinguir o que pertencia ao código, à tecnologia e ao equipamento.
+
+Na complexidade, a cobertura de CPU e GPU custa \(2{,}64\times\) a \(2{,}86\times\) o \textit{Plain} nas camadas de abstração e \(2{,}72\times\) em duas implementações especializadas, sem vantagem de código da base única, que subsiste apenas para o \textit{kernel} de GPU.
+Uma única forma por célula em todos os alvos reduziria as camadas a \(1{,}06\times\) a \(1{,}27\times\), ao custo de uma taxa de CPU de \(20\%\) a \(30\%\) da obtida com o núcleo vetorial (estimativa).

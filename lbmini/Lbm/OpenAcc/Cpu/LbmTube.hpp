@@ -46,7 +46,7 @@ namespace lbmini::openacc::cpu {
  *    takes fewer segments, where the static gang distribution of the compiler left
  *    25-35 % of every step idle on a hybrid CPU.
  *  - Each block is processed by a chain of `acc routine vector` phases over a
- *    gang-private `Block` (pull, macroscopics and equilibria, three Newton
+ *    gang-private `Block` (pull, macroscopics and equilibria, the Newton
  *    iterations, energy equilibrium, collision; see `LaneKernel.hpp` for why the code
  *    is written as lane loops: `nvc++` vectorises those and nothing bigger).
  *  - `Init()` runs the same phases over the Sod state with a static gang loop, so each

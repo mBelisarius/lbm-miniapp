@@ -24,7 +24,13 @@
  *                  segments in all (`chunk * ny` of them);
  *  - `LBM_INTERIOR_LO`, `LBM_INTERIOR_HI`  first/last block start whose gather window
  *                  stays inside the tube, `LBM_ANY_NEAREST` 1 if a direction needs the
- *                  nearest-node fallback (then every block takes the lane-by-lane path).
+ *                  nearest-node fallback (then every block takes the lane-by-lane path);
+ *  - `LBM_STREAM`  1 to write the post-collision populations with non-temporal stores
+ *                  (`host::UseStreamingStores`: a working set much larger than the last-level
+ *                  cache, where an ordinary store first reads the line: 464 instead of 320 B per
+ *                  cell and step). The host enables it only when the buffers are aligned to
+ *                  one vector (`CL_DEVICE_MEM_BASE_ADDR_ALIGN`), which `cell`, `LBM_PLANE`
+ *                  and `LBM_PITCH` preserve.
  *
  * The kernels are launched with one work-group of one work-item per worker thread
  * of the device, and the work-items deal the row segments out to themselves
@@ -52,11 +58,17 @@ typedef LBM_CAT(long, LBM_VW) mask;
 #define AS_REAL LBM_CAT(as_double, LBM_VW)
 #define AS_MASK LBM_CAT(as_long, LBM_VW)
 
+/// Store of a population block: non-temporal when `LBM_STREAM` (the pointer is aligned to a vector).
+#if LBM_STREAM
+#define STORE_POP(v, ptr) __builtin_nontemporal_store((v), (__global real*)(ptr))
+#else
+#define STORE_POP(v, ptr) VSTORE((v), 0, (ptr))
+#endif
+
 #define LBM_INLINE inline __attribute__((always_inline))
 
 #define LBM_TINY 1.0e-12
 #define LBM_MAX_EXP 700.0
-#define LBM_MAX_ITER 3
 #define LBM_OMEGA_MAX (2.0 - 1.0e-7)
 
 __constant int kCx[LBM_Q] = LBM_CX;
@@ -128,23 +140,28 @@ LBM_INLINE void Weights(const real temc, real w[LBM_Q]) {
     w[q] = (kCx[q] != 0 ? wn : wZero) * (kCy[q] != 0 ? wn : wZero);
 }
 
-LBM_INLINE void Feq(const real rhoc, const real ux, const real uy, const real temc, real feq[LBM_Q]) {
+/// The factors of the product form of the density equilibrium: `feq(q) = a[c_x + 1] * b[c_y + 1]`,
+/// `a = rho * px`, `b = py` (`c = -1, 0, +1`).
+LBM_INLINE void FeqFactors(const real rhoc, const real ux, const real uy, const real temc, real a[3], real b[3]) {
   const real uax = ux - LBM_USHIFT_X;
   const real uay = uy - LBM_USHIFT_Y;
   const real tx = uax * uax + temc;
   const real ty = uay * uay + temc;
-  const real pxm = 0.5 * ((-uax) + tx);
-  const real px0 = 1.0 - tx;
-  const real pxp = 0.5 * (uax + tx);
-  const real pym = 0.5 * ((-uay) + ty);
-  const real py0 = 1.0 - ty;
-  const real pyp = 0.5 * (uay + ty);
+  a[0] = rhoc * (0.5 * ((-uax) + tx));
+  a[1] = rhoc * (1.0 - tx);
+  a[2] = rhoc * (0.5 * (uax + tx));
+  b[0] = 0.5 * ((-uay) + ty);
+  b[1] = 1.0 - ty;
+  b[2] = 0.5 * (uay + ty);
+}
+
+LBM_INLINE void Feq(const real rhoc, const real ux, const real uy, const real temc, real feq[LBM_Q]) {
+  real a[3];
+  real b[3];
+  FeqFactors(rhoc, ux, uy, temc, a, b);
 #pragma unroll
-  for (int q = 0; q < LBM_Q; ++q) {
-    const real pfx = kCx[q] == 0 ? px0 : (kCx[q] == 1 ? pxp : pxm);
-    const real pfy = kCy[q] == 0 ? py0 : (kCy[q] == 1 ? pyp : pym);
-    feq[q] = (rhoc * pfx) * pfy;
-  }
+  for (int q = 0; q < LBM_Q; ++q)
+    feq[q] = a[kCx[q] + 1] * b[kCy[q] + 1];
 }
 
 LBM_INLINE void Macroscopic(
@@ -208,34 +225,32 @@ LBM_INLINE void AxisExp(const real xi, const real wn, const real wz, real p[3]) 
   p[2] = wn * Sel(pos, R(1.0), e2);
 }
 
-/// Equilibrium energy populations from the Newton solution `xi`.
-LBM_INLINE void GeqFromXi(const real xi[2], const real wn, const real wz, const real targetE, real geq[LBM_Q]) {
+/// Energy equilibrium from the Newton solution `xi` as the factors of the product form:
+/// `geq(q) = sx[c_x + 1] * gy[c_y + 1]`.
+LBM_INLINE void GeqFactors(const real xi[2], const real wn, const real wz, const real targetE, real sx[3], real gy[3]) {
   real px[3];
-  real py[3];
   AxisExp(xi[0], wn, wz, px);
-  AxisExp(xi[1], wn, wz, py);
-  const real scale = targetE / ((px[0] + px[1] + px[2]) * (py[0] + py[1] + py[2]));
-  real sx[3];
+  AxisExp(xi[1], wn, wz, gy);
+  const real scale = targetE / ((px[0] + px[1] + px[2]) * (gy[0] + gy[1] + gy[2]));
 #pragma unroll
   for (int k = 0; k < 3; ++k)
     sx[k] = scale * px[k];
-#pragma unroll
-  for (int q = 0; q < LBM_Q; ++q)
-    geq[q] = sx[kCx[q] + 1] * py[kCy[q] + 1];
 }
 
-/// Normalised-weight energy populations (the reference's fallback).
-LBM_INLINE void GeqFallback(const real w[LBM_Q], const real targetE, real geq[LBM_Q]) {
-  real sumW = R(0.0);
-#pragma unroll
-  for (int q = 0; q < LBM_Q; ++q)
-    sumW += w[q];
+/// The reference's fallback (normalised weights, uniform when they vanish) in the same factored form:
+/// `W_q = wf(c_x) wf(c_y)`, `wf = wn` for a moving and `wz` for a rest component, summing to `(2 wn + wz)^2`.
+LBM_INLINE void GeqFallbackFactors(const real wn, const real wz, const real targetE, real sx[3], real gy[3]) {
+  const real wf[3] = { wn, wz, wn };
+  const real sumAxis = wn + wz + wn;
+  const real sumW = sumAxis * sumAxis;
   const real uni = targetE / R((double)LBM_Q);
   const real sc = targetE / sumW;
   const mask degenerate = (sumW <= LBM_TINY);
 #pragma unroll
-  for (int q = 0; q < LBM_Q; ++q)
-    geq[q] = Sel(degenerate, uni, w[q] * sc);
+  for (int k = 0; k < 3; ++k) {
+    sx[k] = Sel(degenerate, uni, wf[k] * sc);
+    gy[k] = Sel(degenerate, R(1.0), wf[k]);
+  }
 }
 
 /**
@@ -257,14 +272,15 @@ LBM_INLINE void Collide(
   real xi[2]
 ) {
   const real u2 = ux * ux + uy * uy;
-  real w[LBM_Q];
-  Weights(temc, w);
-  // The per-axis factors of `w` (`W_q = Wx(c_x) Wy(c_y)`), see `AxisExp`.
+  // The per-axis factors of the weights (`W_q = Wx(c_x) Wy(c_y)`), see `AxisExp`.
   const real wz = 1.0 - temc;
   const real wn = wz + (0.5 * temc - wz);
 
-  real feq[LBM_Q];
-  Feq(rhoc, ux, uy, temc, feq);
+  // The density equilibrium in product form, `feq(q) = a[c_x + 1] * b[c_y + 1]`: only six vectors
+  // are kept and the products are formed where they are used.
+  real a[3];
+  real b[3];
+  FeqFactors(rhoc, ux, uy, temc, a, b);
 
   // Geq via Newton-Raphson on the normalised energy flux.
   //
@@ -294,45 +310,46 @@ LBM_INLINE void Collide(
     const real zy = py[0] + py[1] + py[2];
     const real zxy = zx * zy;
     ok = ok & (zxy > LBM_TINY);
-    // One division gives both `1 / zx` and `1 / zy`.
-    const real rz = 1.0 / zxy;
-    const real invZx = zy * rz;
-    const real invZy = zx * rz;
-
-    // First and second moments of the unshifted velocity; `c_a + U_a` shifts the mean only.
-    const real m1x = (px[2] - px[0]) * invZx;
-    const real m1y = (py[2] - py[0]) * invZy;
-    const real jxx = ((px[2] + px[0]) * invZx - m1x * m1x) + LBM_TINY;
-    const real jyy = ((py[2] + py[0]) * invZy - m1y * m1y) + LBM_TINY;
+    // Scale residual and regularised variance by Z^2, cancelling 1/Z.
+    const real dx = px[2] - px[0];
+    const real dy = py[2] - py[0];
+    const real jxx = (px[2] + px[0]) * zx - dx * dx + LBM_TINY * (zx * zx);
+    const real jyy = (py[2] + py[0]) * zy - dy * dy + LBM_TINY * (zy * zy);
     const real jxy = jxx * jyy;
-    ok = ok & (fabs(jxy) > LBM_TINY);
+    ok = ok & (fabs(jxy) > LBM_TINY * (zxy * zxy));
 
-    // `r / j` for both axes from one division: `r0 / jxx = r0 jyy / (jxx jyy)`.
     const real rj = alpha * (1.0 / jxy);
-    const real r0 = (m1x + LBM_USHIFT_X) - targetMx;
-    const real r1 = (m1y + LBM_USHIFT_Y) - targetMy;
+    const real r0 = (dx + (LBM_USHIFT_X - targetMx) * zx) * zx;
+    const real r1 = (dy + (LBM_USHIFT_Y - targetMy) * zy) * zy;
     xi[0] -= r0 * jyy * rj;
     xi[1] -= r1 * jxx * rj;
     alpha *= 0.5;
   }
 
+  // Energy equilibrium `geq(q) = sx[c_x + 1] * gy[c_y + 1]`.
   // All lanes ok: only the exponential closure runs; none: only the fallback; mixed: both, selected per lane.
-  real geq[LBM_Q];
+  real sx[3];
+  real gy[3];
   if (any(ok)) {
-    GeqFromXi(xi, wn, wz, targetE, geq);
+    GeqFactors(xi, wn, wz, targetE, sx, gy);
   } else {
 #pragma unroll
-    for (int q = 0; q < LBM_Q; ++q)
-      geq[q] = R(0.0);
+    for (int k = 0; k < 3; ++k) {
+      sx[k] = R(0.0);
+      gy[k] = R(0.0);
+    }
   }
   if (!all(ok)) {
-    real geqFb[LBM_Q];
-    GeqFallback(w, targetE, geqFb);
+    real sxFb[3];
+    real gyFb[3];
+    GeqFallbackFactors(wn, wz, targetE, sxFb, gyFb);
     xi[0] = Sel(ok, xi[0], R(0.0));
     xi[1] = Sel(ok, xi[1], R(0.0));
 #pragma unroll
-    for (int q = 0; q < LBM_Q; ++q)
-      geq[q] = Sel(ok, geq[q], geqFb[q]);
+    for (int k = 0; k < 3; ++k) {
+      sx[k] = Sel(ok, sx[k], sxFb[k]);
+      gy[k] = Sel(ok, gy[k], gyFb[k]);
+    }
   }
 
   // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
@@ -346,14 +363,44 @@ LBM_INLINE void Collide(
   const real omega = tauT * rTau;
   real omegaT = tau * rTau;
 
-  real eps = R(0.0);
+  // Non-equilibrium part `d = f - feq`: the sensor, the thermal correction and the BGK update all use it.
+  real d[LBM_Q];
 #pragma unroll
-  for (int q = 0; q < LBM_Q; ++q) {
-    const real diff = f[q] - feq[q];
-    const real den = Sel(feq[q] > LBM_TINY, feq[q], R(LBM_TINY));
-    eps += fabs(diff) / den;
+  for (int q = 0; q < LBM_Q; ++q)
+    d[q] = f[q] - a[kCx[q] + 1] * b[kCy[q] + 1];
+
+  // Knudsen sensor `eps = mean_q |d_q| / max(feq_q, tiny)`.
+  //
+  // While every factor of the product form is well above the clamp (the whole physical range;
+  // `a_min * b_min > tiny` is then guaranteed) no `max` is active and
+  // `|d_q| / feq_q = |d_q| (1 / a_i)(1 / b_j)`: the six reciprocals come from a single division
+  // (Montgomery's trick) and the sum factorises by rows, instead of nine divisions.
+  // Otherwise (negative or vanishing populations) the per-direction form of the reference is used.
+  const real floorFactor = R(1.0e-5);
+  const real aMin = fmin(fmin(a[0], a[1]), a[2]);
+  const real bMin = fmin(fmin(b[0], b[1]), b[2]);
+  real epsSum = R(0.0);
+  if (all((aMin > floorFactor) & (bMin > floorFactor))) {
+    const real pa = (a[0] * a[1]) * a[2];
+    const real pb = (b[0] * b[1]) * b[2];
+    const real rab = 1.0 / (pa * pb);
+    const real rpa = pb * rab; // 1 / pa
+    const real rpb = pa * rab; // 1 / pb
+    const real ra[3] = { (a[1] * a[2]) * rpa, (a[0] * a[2]) * rpa, (a[0] * a[1]) * rpa };
+    const real rb[3] = { (b[1] * b[2]) * rpb, (b[0] * b[2]) * rpb, (b[0] * b[1]) * rpb };
+    real row[3] = { R(0.0), R(0.0), R(0.0) };
+#pragma unroll
+    for (int q = 0; q < LBM_Q; ++q)
+      row[kCy[q] + 1] += ra[kCx[q] + 1] * fabs(d[q]);
+    epsSum = (rb[0] * row[0] + rb[1] * row[1]) + rb[2] * row[2];
+  } else {
+#pragma unroll
+    for (int q = 0; q < LBM_Q; ++q) {
+      const real feq = a[kCx[q] + 1] * b[kCy[q] + 1];
+      epsSum += fabs(d[q]) / Sel(feq > LBM_TINY, feq, R(LBM_TINY));
+    }
   }
-  eps *= 1.0 / (double)LBM_Q;
+  const real eps = epsSum * (1.0 / (double)LBM_Q);
   // `omega / sigma` with `sigma` in {omega, 1.35, 1.05, 1}, without a division.
   real omegaL = Sel(
     eps >= 1.0,
@@ -366,28 +413,44 @@ LBM_INLINE void Collide(
   omegaT = Sel(omegaT > 1.0, omegaT, R(1.0));
   omegaT = Sel(omegaT < LBM_OMEGA_MAX, omegaT, R(LBM_OMEGA_MAX));
 
-  // L[a] = sum_i 2 * (u . c_i) * c_i_a * (f - feq)   (c_i unshifted)
-  real Lx = R(0.0);
-  real Ly = R(0.0);
+  // L[a] = sum_i 2 (u . c_i) c_i_a d_i with the unshifted c_i, i.e. from the second moments of d:
+  // Lx = 2 (ux Mxx + uy Mxy), Ly = 2 (ux Mxy + uy Myy).
+  real mxx = R(0.0);
+  real myy = R(0.0);
+  real mxy = R(0.0);
 #pragma unroll
   for (int q = 0; q < LBM_Q; ++q) {
-    const double cix0 = (double)kCx[q];
-    const double ciy0 = (double)kCy[q];
-    const real uvi = ux * cix0 + uy * ciy0;
-    const real aux = 2.0 * uvi * (f[q] - feq[q]);
-    Lx += aux * cix0;
-    Ly += aux * ciy0;
+    if (kCx[q] != 0)
+      mxx += d[q];
+    if (kCy[q] != 0)
+      myy += d[q];
+    if (kCx[q] * kCy[q] > 0)
+      mxy += d[q];
+    else if (kCx[q] * kCy[q] < 0)
+      mxy -= d[q];
   }
-
   const real dOmega = omegaL - omegaT;
+  // The thermal correction `dOmega w_q (L . (c_q + U)) / T`, with `dOmega / T` folded into L.
+  const real scaleL = 2.0 * (dOmega * invT);
+  const real lx = scaleL * (ux * mxx + uy * mxy);
+  const real ly = scaleL * (ux * mxy + uy * myy);
+  real tx[3];
+  real ty[3];
+#pragma unroll
+  for (int k = 0; k < 3; ++k) {
+    tx[k] = lx * ((double)(k - 1) + LBM_USHIFT_X);
+    ty[k] = ly * ((double)(k - 1) + LBM_USHIFT_Y);
+  }
+  // Weights: `W_q = wf(c_x) wf(c_y)`, `wf = wn` for a moving and `wz` for a rest component.
+  const real wf[3] = { wn, wz, wn };
+
 #pragma unroll
   for (int q = 0; q < LBM_Q; ++q) {
-    const real fOld = f[q];
-    f[q] = fOld + omegaL * (feq[q] - fOld);
-    const real cidotL = Lx * CSX(q) + Ly * CSY(q);
-    const real gDiff = w[q] * cidotL * invT;
+    const int ix = kCx[q] + 1;
+    const int iy = kCy[q] + 1;
+    f[q] -= omegaL * d[q];
     const real gOld = g[q];
-    g[q] = gOld + omegaL * (geq[q] - gOld) + dOmega * gDiff;
+    g[q] = gOld + omegaL * (sx[ix] * gy[iy] - gOld) + (wf[ix] * wf[iy]) * (tx[ix] + ty[iy]);
   }
 }
 
@@ -606,8 +669,8 @@ LBM_INLINE void StepBlock(
 
 #pragma unroll
   for (int q = 0; q < LBM_Q; ++q) {
-    VSTORE(f[q], 0, fOut + (long)q * LBM_PLANE + cell);
-    VSTORE(g[q], 0, gOut + (long)q * LBM_PLANE + cell);
+    STORE_POP(f[q], fOut + (long)q * LBM_PLANE + cell);
+    STORE_POP(g[q], gOut + (long)q * LBM_PLANE + cell);
   }
   VSTORE(xi[0], 0, xiIo + cell);
   VSTORE(xi[1], 0, xiIo + LBM_PLANE + cell);
@@ -694,4 +757,13 @@ __kernel void stepKernel(
     for (long b = b0; b < b1; ++b)
       StepBlock(fIn, gIn, fOut, gOut, xiIo, rhoOut, pOut, temOut, uOut, j, b * LBM_VW, store);
   }
+#if LBM_STREAM
+  // Non-temporal stores are weakly ordered: make them visible before the work-item ends (the next
+  // launch reads them).
+#if defined(__x86_64__)
+  __builtin_ia32_sfence();
+#else
+  mem_fence(CLK_GLOBAL_MEM_FENCE);
+#endif
+#endif
 }

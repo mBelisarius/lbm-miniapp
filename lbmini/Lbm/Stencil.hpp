@@ -20,7 +20,7 @@ namespace lbmini {
  * this `Q`-entry structure, and the streaming kernel only has to clamp the
  * source column to the tube and wrap the source row periodically.
  *
- * Corner order matches the reference tables: `(x0, y0)`, `(x1, y0)`,
+ * Corner order matches the reference tables of `test/ReferenceTube.hpp`: `(x0, y0)`, `(x1, y0)`,
  * `(x0, y1)`, `(x1, y1)` with `x1 = x0 + 1`, `y1 = y0 + 1`.
  *
  * Plain old data made of fixed-size `int32` / `Scalar` arrays only (no `bool`,
@@ -42,7 +42,7 @@ struct DirectionStencil {
  * @brief Evaluates the per-direction gather with the reference table formulas.
  *
  * Same arithmetic as the per-cell `buildStreamingTables()` of the reference
- * solver, evaluated once at `(0, 0)`: corner distances `d_k`, snap to the
+ * solver of the test suite (`test/ReferenceTube.hpp`), evaluated once at `(0, 0)`: corner distances `d_k`, snap to the
  * first corner closer than `tiny`, otherwise the normalised weights
  * `d_k^-idw`, otherwise (non-finite or vanishing sum) the nearest node. The
  * weights agree with the per-cell table bit for bit whenever the shift is a

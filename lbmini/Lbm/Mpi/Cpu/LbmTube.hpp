@@ -57,12 +57,23 @@ namespace lbmini::mpi::cpu {
  *
  * ### Communication
  *
- * Every step packs the `G` outermost owned columns of every population plane
- * (per plane and row, contiguous), posts `MPI_Irecv` / `MPI_Isend` with the two
- * neighbours and, while the messages are in flight, computes the *inner* blocks,
- * those whose gather window contains no ghost column. After `MPI_Waitall` the
- * ghosts are unpacked and the left and right edge blocks are computed. The split
- * is by whole blocks, so no block straddles two ranges.
+ * The boundary columns (the `G` outermost owned columns of every population plane, per plane
+ * and row, contiguous) are what the neighbours read in the next step. A step therefore
+ *
+ *  1. completes the exchange of the current state (`MPI_Waitall`, unpack into the ghost columns),
+ *  2. computes the *edge* blocks first, those whose gather window reaches a ghost column or that
+ *     contain a boundary column,
+ *  3. packs the new boundary columns and posts `MPI_Irecv` / `MPI_Isend` for the next step, and
+ *  4. computes the *inner* blocks while the messages are in flight, testing the requests between
+ *     chunks of rows so that the messages advance without asynchronous progress of the library.
+ *
+ * A neighbour's data is thus ready (about) one whole inner phase before it is needed, so a rank
+ * may lag behind its neighbours by that much without stalling them: static slabs are otherwise
+ * exposed to the jitter of the slowest rank at every step (packing the halo only after the inner
+ * blocks, and without progress calls, left the ranks idle for 25 - 35 % of a step on this
+ * machine). The first step of a `Run()` posts the exchange of the state it starts from, and the
+ * last step posts none, so no request outlives a `Run()`. The split is by whole blocks, so no
+ * block straddles two ranges.
  *
  * A rank with fewer columns than `G` (`nx / ranks < G`) cannot supply a
  * neighbour's halo. Such tiny domains keep full-width arrays instead and
@@ -156,15 +167,19 @@ private:
 
   [[nodiscard]] BlockRange makeRange(host::Index first, host::Index count) const;
 
-  /// One time step of this rank (halo exchange and compute).
+  /// One time step of this rank (halo exchange and compute). `exchangeCurrent`: post the exchange of
+  /// the state the step starts from (the first step of a `Run()`); `exchangeNext`: post the exchange of
+  /// the state the step produces (every step but the last).
   template<bool kStoreMacro>
-  void advance();
+  void advance(bool exchangeCurrent, bool exchangeNext);
 
   /// The row segments of the ranges `a` and `b`, shared by the threads of this rank.
+  /// With `progress` the segments run in a few chunks and the halo requests are tested between them,
+  /// so that the messages advance while the rank computes (see "Communication").
   template<bool kStoreMacro>
-  void compute(const Fields& fields, const BlockRange& a, const BlockRange& b);
+  void compute(const Fields& fields, const BlockRange& a, const BlockRange& b, bool progress = false);
 
-  void startHaloExchange();
+  void startHaloExchange(const Scalar* f, const Scalar* g);
 
   void finishHaloExchange();
 
@@ -283,14 +298,18 @@ LbmTube<Scalar, LatticeType>::LbmTube(
   ValidateMeshExtents(columns, ny_, kQ_, "MPI local mesh with halos");
   geo_ = host::MakeGeometry(nxActive_, ny_, columns);
 
-  // Blocks whose gather window leaves the owned columns need the ghosts; the others
-  // are computed while the halo is in flight.
+  // Edge blocks: those whose gather window leaves the owned columns (they read the ghosts) and
+  // those holding a boundary column (the neighbours read it in the next step). They are computed
+  // first, the others while the halo is in flight.
   host::Index leftEnd = 0;
   host::Index rightStart = nb_;
   if (!fullWidth_ && numRanks_ > 1) {
     leftEnd = std::min<host::Index>(nb_, (std::max<host::Index>(0, -params_.minOx) + kLanes - 1) / kLanes);
+    leftEnd = std::max<host::Index>(leftEnd, std::min<host::Index>(nb_, (ghosts_ + kLanes - 1) / kLanes));
     const host::Index reach = nxActive_ - kLanes + 1 - params_.maxOx1;
-    rightStart = std::clamp<host::Index>(reach > 0 ? (reach + kLanes - 1) / kLanes : 0, leftEnd, nb_);
+    rightStart = reach > 0 ? (reach + kLanes - 1) / kLanes : 0;
+    rightStart = std::min<host::Index>(rightStart, (nxActive_ - ghosts_) / kLanes);
+    rightStart = std::clamp<host::Index>(rightStart, leftEnd, nb_);
   }
   left_ = makeRange(0, leftEnd);
   inner_ = makeRange(leftEnd, rightStart - leftEnd);
@@ -411,10 +430,12 @@ void LbmTube<Scalar, LatticeType>::Step(const bool save) {
 template<typename Scalar, typename LatticeType>
 void LbmTube<Scalar, LatticeType>::Run(const Index steps, bool /*save*/) {
   for (Index t = 0; t < steps; ++t) {
-    if (t + 1 < steps)
-      advance<false>();
+    const bool first = t == 0;
+    const bool last = t + 1 == steps;
+    if (last)
+      advance<true>(first, false);
     else
-      advance<true>();
+      advance<false>(first, true);
     std::swap(fCur_, fNext_);
     std::swap(gCur_, gNext_);
   }
@@ -422,7 +443,7 @@ void LbmTube<Scalar, LatticeType>::Run(const Index steps, bool /*save*/) {
 
 template<typename Scalar, typename LatticeType>
 template<bool kStoreMacro>
-void LbmTube<Scalar, LatticeType>::advance() {
+void LbmTube<Scalar, LatticeType>::advance(const bool exchangeCurrent, const bool exchangeNext) {
   Fields fields;
   fields.fIn = fCur_;
   fields.gIn = gCur_;
@@ -438,12 +459,15 @@ void LbmTube<Scalar, LatticeType>::advance() {
     exchangeColumns();
     compute<kStoreMacro>(fields, inner_, BlockRange{});
   } else if (numRanks_ > 1) {
-    // The step reads the current buffer only, so the inner blocks can be computed
-    // while the receives fill its ghost columns.
-    startHaloExchange();
-    compute<kStoreMacro>(fields, inner_, BlockRange{});
+    // The step reads the current buffer only. Its ghost columns come from the exchange posted by the
+    // previous step (or, at the start of a `Run()`, from the one posted here).
+    if (exchangeCurrent)
+      startHaloExchange(fCur_, gCur_);
     finishHaloExchange();
     compute<kStoreMacro>(fields, left_, right_);
+    if (exchangeNext)
+      startHaloExchange(fNext_, gNext_);
+    compute<kStoreMacro>(fields, inner_, BlockRange{}, exchangeNext);
   } else {
     compute<kStoreMacro>(fields, inner_, BlockRange{});
   }
@@ -451,25 +475,42 @@ void LbmTube<Scalar, LatticeType>::advance() {
 
 template<typename Scalar, typename LatticeType>
 template<bool kStoreMacro>
-void LbmTube<Scalar, LatticeType>::compute(const Fields& fields, const BlockRange& a, const BlockRange& b) {
+void LbmTube<Scalar, LatticeType>::compute(
+  const Fields& fields, const BlockRange& a, const BlockRange& b, const bool progress
+) {
   const host::Index segmentsA = a.part.Segments();
   const host::Index segments = segmentsA + b.part.Segments();
 
-  #pragma omp parallel for schedule(runtime)
-  for (host::Index s = 0; s < segments; ++s) {
-    const BlockRange& range = s < segmentsA ? a : b;
-    const host::Index k = s < segmentsA ? s : s - segmentsA;
-    const host::Index i0 = firstCol_ + (range.first + range.part.FirstBlock(k)) * kLanes;
-    Kernel::template StepRow<kStoreMacro>(
-      params_, geo_, fields, xLo_, xHi_, range.part.Row(k), i0, range.part.BlockCount(k)
-    );
+  // Without asynchronous progress an MPI library moves the fragments of a message only while a
+  // rank is inside one of its calls: the messages (larger than the eager limit of the shared-memory
+  // transport) would then be exchanged only once every rank has finished its inner blocks, which
+  // serialises the ranks (and exposes them to each other's jitter) instead of overlapping.
+  constexpr host::Index kProgressChunks = 8;
+  const host::Index chunks = progress ? std::min<host::Index>(kProgressChunks, std::max<host::Index>(segments, 1)) : 1;
+  for (host::Index c = 0; c < chunks; ++c) {
+    const host::Index lo = segments * c / chunks;
+    const host::Index hi = segments * (c + 1) / chunks;
+
+    #pragma omp parallel for schedule(runtime)
+    for (host::Index s = lo; s < hi; ++s) {
+      const BlockRange& range = s < segmentsA ? a : b;
+      const host::Index k = s < segmentsA ? s : s - segmentsA;
+      const host::Index i0 = firstCol_ + (range.first + range.part.FirstBlock(k)) * kLanes;
+      Kernel::template StepRow<kStoreMacro>(
+        params_, geo_, fields, xLo_, xHi_, range.part.Row(k), i0, range.part.BlockCount(k)
+      );
+    }
+    if (progress && c + 1 < chunks) {
+      int done = 0;
+      MPI_Testall(4, reqs_, &done, MPI_STATUSES_IGNORE);
+    }
   }
 }
 
 template<typename Scalar, typename LatticeType>
-void LbmTube<Scalar, LatticeType>::startHaloExchange() {
+void LbmTube<Scalar, LatticeType>::startHaloExchange(const Scalar* const f, const Scalar* const g) {
   // Per plane and row, the `G` outermost owned columns, contiguous: f planes first, then g.
-  const Scalar* const dist[2] = { fCur_, gCur_ };
+  const Scalar* const dist[2] = { f, g };
   const std::size_t width = static_cast<std::size_t>(ghosts_) * sizeof(Scalar);
   const host::Index rightCol = firstCol_ + nxActive_ - ghosts_;
   Scalar* left = sendLeft_.data();
