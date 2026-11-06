@@ -56,7 +56,8 @@ int main(int argc, char** argv) {
   int rank = 0;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   bool ok = true;
-  for (const auto [nx, ny] : { std::pair{ 64, 4 }, std::pair{ 33, 7 }, std::pair{ 6, 5 } }) {
+  // 200 columns: with two to four ranks every slab has inner blocks besides its edge blocks.
+  for (const auto [nx, ny] : { std::pair{ 64, 4 }, std::pair{ 33, 7 }, std::pair{ 6, 5 }, std::pair{ 200, 3 } }) {
     for (const auto [ux, uy] : { std::pair{ 0.25, 0.0 }, std::pair{ 0.1, 0.0 },
                                 std::pair{ 0.3, 0.15 }, std::pair{ 0.0, 0.0 } }) {
       lbmini::FluidData<Scalar> fluid{};

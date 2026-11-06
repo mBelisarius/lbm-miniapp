@@ -1140,9 +1140,11 @@ set(TestSources
         # Memory-safety suite: mandatory (and meant to run under sanitizers)
         # before any benchmarking campaign. See docs/memory-safety.md.
         test/MemorySafetyHarness.hpp
+        test/ReferenceTube.hpp
         test/memory_safety_test.cpp
         test/streaming_table_test.cpp
         test/backend_equivalence_test.cpp
+        test/energy_closure_test.cpp
         test/host_kernel_test.cpp
 )
 

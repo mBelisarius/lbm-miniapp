@@ -1,8 +1,10 @@
-"""Gera a figura dos conjuntos de velocidades discretas D2Q9 e D3Q19 (FIGURA 7).
+"""Gera a figura dos conjuntos de velocidades discretas D2Q9, D3Q19 e D3Q27 (FIGURA 7).
 
 Reconstrução em alta resolução, com rótulos e numeração das direções, baseada nas
 figuras equivalentes de Krüger et al. (2017). A geometria é definida em pixels das
-figuras de referência (lbm-velocities-d2q9.png e lbm-velocities-d3q19.png).
+figuras de referência (lbm-velocities-d2q9.png e lbm-velocities-d3q19.png). O painel
+do D3Q27 reutiliza a projeção do D3Q19 e acrescenta as oito direções diagonais dos
+vértices do cubo, com os rótulos posicionados além da ponta de cada seta.
 """
 from pathlib import Path
 
@@ -18,7 +20,9 @@ AXIAL = '#111111'
 DIAG = '#6e6e6e'
 FONT = 18
 TIP = 0.98
-W, H = 1010, 460
+SHIFT_B = 470
+SHIFT_C = 1010
+W, H = 1010 + 510, 460
 
 D2_ORIGIN = (162, 250)
 D2_HALF = 125.5
@@ -51,14 +55,21 @@ D3_RECTANGLES = (
     (17, 11, 18, 12),
 )
 
+D3Q27 = dict(D3Q19)
+D3Q27.update({
+    19: (1, 1, 1), 20: (-1, -1, -1), 21: (1, 1, -1), 22: (-1, -1, 1),
+    23: (1, -1, 1), 24: (-1, 1, -1), 25: (-1, 1, 1), 26: (1, -1, -1),
+})
+
 
 def arrow(ax, start, end, color, lw=1.7, scale=20):
     ax.add_patch(FancyArrowPatch(start, end, arrowstyle='-|>', mutation_scale=scale, lw=lw, color=color,
                                  shrinkA=0, shrinkB=0, zorder=3))
 
 
-def label(ax, xy, text, color='black', fontsize=FONT):
-    ax.text(*xy, text, ha='center', va='center', fontsize=fontsize, color=color, zorder=4)
+def label(ax, xy, text, color='black', fontsize=FONT, halo=False):
+    bbox = dict(boxstyle='round,pad=0.08', fc='white', ec='none', alpha=0.9) if halo else None
+    ax.text(*xy, text, ha='center', va='center', fontsize=fontsize, color=color, zorder=4, bbox=bbox)
 
 
 def triad(ax, origin, length, depth=None):
@@ -114,9 +125,45 @@ def d3q19(ax):
         tx, ty = project(TIP * dx, TIP * dy, TIP * dz)
         arrow(ax, (ox, oy), (tx, ty), AXIAL if axial else DIAG)
         lx, ly = D3Q19_LABELS[i]
-        label(ax, (470 + lx, ly), str(i), AXIAL if axial else DIAG)
-    label(ax, (470 + 168, 438), '(b) D3Q19')
-    triad(ax, (470 + 437, 212), 55, depth=(-14, 22))
+        label(ax, (SHIFT_B + lx, ly), str(i), AXIAL if axial else DIAG)
+    label(ax, (SHIFT_B + 168, 438), '(b) D3Q19')
+    triad(ax, (SHIFT_B + 437, 212), 55, depth=(-14, 22))
+
+
+def d3q27(ax):
+    """Painel (c): as 26 direções não nulas do D3Q27 (as 18 do D3Q19 e as 8 dos vértices do cubo)."""
+    ox, oy = SHIFT_C + 199, D3_ORIGIN[1]
+    h = 100.0
+    zx, zy = -44.0, 64.0
+
+    def project(x, y, z):
+        return ox + h * x + zx * z, oy - h * y + zy * z
+
+    corners = {(x, y, z): project(x, y, z) for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)}
+    for z in (-1, 1):
+        ring = [corners[(-1, -1, z)], corners[(1, -1, z)], corners[(1, 1, z)], corners[(-1, 1, z)]]
+        ax.add_patch(plt.Polygon(ring, closed=True, fill=False, ec='black', lw=1.8, zorder=2, joinstyle='miter'))
+    for x in (-1, 1):
+        for y in (-1, 1):
+            a, b = corners[(x, y, 1)], corners[(x, y, -1)]
+            ax.plot([a[0], b[0]], [a[1], b[1]], color='black', lw=1.8, zorder=2, solid_capstyle='butt')
+
+    for rect in D3_RECTANGLES:
+        pts = [project(*D3Q27[i]) for i in rect] + [project(*D3Q27[rect[0]])]
+        ax.plot(*zip(*pts), color='black', lw=1.3, ls=(0, (1, 3)), zorder=1, dash_capstyle='round')
+
+    for i, (dx, dy, dz) in D3Q27.items():
+        norm = abs(dx) + abs(dy) + abs(dz)
+        color = AXIAL if norm == 1 else DIAG
+        tx, ty = project(TIP * dx, TIP * dy, TIP * dz)
+        arrow(ax, (ox, oy), (tx, ty), color)
+        # rótulo além da ponta da seta, afastado do centro na direção projetada
+        px, py = project(dx, dy, dz)
+        vx, vy = px - ox, py - oy
+        length = (vx * vx + vy * vy) ** 0.5
+        offset = 34 if norm == 2 else 28
+        label(ax, (px + offset * vx / length, py + offset * vy / length), str(i), color, fontsize=FONT - 3, halo=True)
+    label(ax, (SHIFT_C + 168, 438), '(c) D3Q27')
 
 
 def main():
@@ -127,6 +174,7 @@ def main():
     ax.axis('off')
     d2q9(ax)
     d3q19(ax)
+    d3q27(ax)
     fig.savefig(OUT, dpi=300, facecolor='white')
     print(f'Figure saved to {OUT}')
 

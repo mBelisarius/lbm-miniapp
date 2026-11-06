@@ -61,17 +61,40 @@
 
 #include "Data.hpp"
 #include "Lbm/DeviceBuffer.hpp"
+#include "Lbm/EnergyClosure.hpp"
 #include "Lbm/Simd.hpp"
 #include "Lbm/Stencil.hpp"
 
 #define LBMINI_HOST_INLINE LBMINI_SIMD_INLINE
+
+/// One out-of-line copy of the row driver, shared by every backend that instantiates it.
+#if defined(__GNUC__) || defined(__clang__)
+#define LBMINI_HOST_NOINLINE __attribute__((noinline))
+#else
+#define LBMINI_HOST_NOINLINE
+#endif
 
 namespace lbmini::host {
 using Index = std::int64_t;
 
 inline constexpr int kQ = 9;                ///< D2Q9 speeds
 inline constexpr int kD = 2;                ///< spatial dimensions
-inline constexpr Index kPadColumns = 16;    ///< rows are padded to a multiple of the widest supported block (16 lanes)
+
+/// The D2Q9 velocities `[direction][axis]` in the order every backend's `LatticeD2Q9` uses.
+inline constexpr int kVelocity[kQ][kD] = {
+  { 0, 0 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { -1, -1 }, { 1, -1 }, { -1, 1 },
+};
+
+/// Whether `LatticeType::Velocity` is the table above.
+template<typename LatticeType>
+constexpr bool HasD2Q9Velocities() {
+  for (int q = 0; q < kQ; ++q)
+    for (int d = 0; d < kD; ++d)
+      if (static_cast<int>(LatticeType::Velocity(q, d)) != kVelocity[q][d])
+        return false;
+  return true;
+}
+inline constexpr Index kPadColumns = 16; ///< rows are padded to a multiple of the widest supported block (16 lanes)
 inline constexpr Index kStaggerDoubles = 320; ///< 2560 B: plane `k` starts at `k * 2560 (mod 4096)`
 
 /// Rounds `n` up to a multiple of `m`.
@@ -269,11 +292,16 @@ inline Partition MakePartition(const Index columns, const Index rows, const Inde
  * `Collide` and `Macroscopic` are the operation-for-operation image of the
  * scalar solver: branches become lane selects, and the branch the reference
  * takes on `solverOk` is taken per lane (`Select`) unless every lane agrees.
+ *
+ * The kernel depends on the lattice only through its D2Q9 velocity table, so it is
+ * instantiated once per lane count (`Kernel` below checks the table of the backend's
+ * lattice): every host backend then runs the same machine code, and differences between
+ * the CPU backends are the drivers' own (threading, scheduling, launch overhead), not
+ * code-generation luck of five copies of a 100 KB function.
  */
-template<typename Scalar, typename LatticeType, int W>
-struct Kernel {
+template<typename Scalar, int W>
+struct KernelCore {
   static_assert(std::is_same_v<Scalar, double>, "the host SIMD kernel is double precision");
-  static_assert(LatticeType::Speeds() == kQ && LatticeType::Dim() == kD, "D2Q9 only");
   static_assert(kPadColumns % W == 0, "rows are padded to a whole number of blocks");
 
   using S = simd::Ops<Scalar, W>;
@@ -285,11 +313,11 @@ struct Kernel {
   static constexpr int kLanes = W;
   static constexpr Scalar kTiny = Scalar{ 1.0e-12 };
   static constexpr Scalar kMaxExp = Scalar{ 700.0 };
-  static constexpr int kMaxIter = 3;
+  static constexpr int kMaxIter = energy::kNewtonIterations;
 
-  static constexpr int Cx(const int q) { return static_cast<int>(LatticeType::Velocity(q, 0)); }
+  static constexpr int Cx(const int q) { return kVelocity[q][0]; }
 
-  static constexpr int Cy(const int q) { return static_cast<int>(LatticeType::Velocity(q, 1)); }
+  static constexpr int Cy(const int q) { return kVelocity[q][1]; }
 
   /// Splatted constants of one segment.
   struct Consts {
@@ -334,16 +362,36 @@ struct Kernel {
       w[q] = (Cx(q) != 0 ? wn : wZero) * (Cy(q) != 0 ? wn : wZero);
   }
 
-  LBMINI_HOST_INLINE static void Feq(const Consts& c, const V rhoc, const V ux, const V uy, const V temc, V (&feq)[kQ]) {
+  /// The factors of the product form of the density equilibrium: `feq(q) = a[c_x + 1] * b[c_y + 1]`
+  /// with `a = rho * px` and `b = py` (`c = -1, 0, +1`).
+  LBMINI_HOST_INLINE static void FeqFactors(
+    const Consts& c,
+    const V rhoc,
+    const V ux,
+    const V uy,
+    const V temc,
+    V (&a)[3],
+    V (&b)[3]
+  ) {
     const V uax = ux - c.ushiftX;
     const V uay = uy - c.ushiftY;
     const V tx = uax * uax + temc;
     const V ty = uay * uay + temc;
-    const V px[3] = { c.half * ((-uax) + tx), c.one - tx, c.half * (uax + tx) }; // c = -1, 0, +1
-    const V py[3] = { c.half * ((-uay) + ty), c.one - ty, c.half * (uay + ty) };
+    a[0] = rhoc * (c.half * ((-uax) + tx));
+    a[1] = rhoc * (c.one - tx);
+    a[2] = rhoc * (c.half * (uax + tx));
+    b[0] = c.half * ((-uay) + ty);
+    b[1] = c.one - ty;
+    b[2] = c.half * (uay + ty);
+  }
+
+  LBMINI_HOST_INLINE static void Feq(const Consts& c, const V rhoc, const V ux, const V uy, const V temc, V (&feq)[kQ]) {
+    V a[3];
+    V b[3];
+    FeqFactors(c, rhoc, ux, uy, temc, a, b);
     LBMINI_UNROLL(9)
     for (int q = 0; q < kQ; ++q)
-      feq[q] = (rhoc * px[Cx(q) + 1]) * py[Cy(q) + 1];
+      feq[q] = a[Cx(q) + 1] * b[Cy(q) + 1];
   }
 
   LBMINI_HOST_INLINE static void Macroscopic(
@@ -403,42 +451,56 @@ struct Kernel {
     p[2] = wn * S::Select(pos, c.one, e2);
   }
 
-  /// Equilibrium energy populations from the Newton solution `xi`.
-  LBMINI_HOST_INLINE static void GeqFromXi(
+  /**
+   * @brief Energy equilibrium from the Newton solution `xi`, as the factors of the product form.
+   *
+   * `geq(q) = sx[c_x + 1] * gy[c_y + 1]`: nine products are formed where they are used
+   * (`Collide`), so no array of nine vectors has to survive the rest of the kernel.
+   */
+  LBMINI_HOST_INLINE static void GeqFactors(
     const Consts& c,
     const V (&xi)[kD],
     const V wn,
     const V wZero,
     const V targetE,
-    V (&geq)[kQ]
+    V (&sx)[3],
+    V (&gy)[3]
   ) {
     V px[3];
-    V py[3];
     AxisExp(c, xi[0], wn, wZero, px);
-    AxisExp(c, xi[1], wn, wZero, py);
-    const V Z = (px[0] + px[1] + px[2]) * (py[0] + py[1] + py[2]);
+    AxisExp(c, xi[1], wn, wZero, gy);
+    const V Z = (px[0] + px[1] + px[2]) * (gy[0] + gy[1] + gy[2]);
     const V scale = targetE / Z;
-    V sx[3];
     LBMINI_UNROLL(3)
     for (int k = 0; k < 3; ++k)
       sx[k] = scale * px[k];
-    LBMINI_UNROLL(9)
-    for (int q = 0; q < kQ; ++q)
-      geq[q] = sx[Cx(q) + 1] * py[Cy(q) + 1];
   }
 
-  /// Normalised-weight energy populations (the reference's fallback).
-  LBMINI_HOST_INLINE static void GeqFallback(const Consts& c, const V (&w)[kQ], const V targetE, V (&geq)[kQ]) {
-    V sumW = c.one - c.one;
-    LBMINI_UNROLL(9)
-    for (int q = 0; q < kQ; ++q)
-      sumW += w[q];
+  /**
+   * @brief The reference's fallback (normalised weights, uniform when they vanish) in the same factored form.
+   *
+   * `W_q = wf(c_x) wf(c_y)` with `wf = wn` for a moving and `wZero` for a rest component, so the weights
+   * sum to `(2 wn + wZero)^2`.
+   */
+  LBMINI_HOST_INLINE static void GeqFallbackFactors(
+    const Consts& c,
+    const V wn,
+    const V wZero,
+    const V targetE,
+    V (&sx)[3],
+    V (&gy)[3]
+  ) {
+    const V wf[3] = { wn, wZero, wn };
+    const V sumAxis = wn + wZero + wn;
+    const V sumW = sumAxis * sumAxis;
     const V uni = targetE / S::Splat(static_cast<Scalar>(kQ));
     const V sc = targetE / sumW;
     const M degenerate = (sumW <= c.tiny);
-    LBMINI_UNROLL(9)
-    for (int q = 0; q < kQ; ++q)
-      geq[q] = S::Select(degenerate, uni, w[q] * sc);
+    LBMINI_UNROLL(3)
+    for (int k = 0; k < 3; ++k) {
+      sx[k] = S::Select(degenerate, uni, wf[k] * sc);
+      gy[k] = S::Select(degenerate, c.one, wf[k]);
+    }
   }
 
   /**
@@ -446,8 +508,8 @@ struct Kernel {
    *
    * `f`/`g` enter pre-collision and leave post-collision; `xi` is the Newton warm
    * start (read and updated). The Newton loop runs a fixed number of iterations
-   * with clamped reciprocals and a sticky per-lane `ok` predicate, exactly as the
-   * reference; lanes that are not `ok` restart from `xi = 0` with the fallback
+   * with a sticky per-lane `ok` predicate and the reference's regularisation
+   * and determinant threshold; lanes that are not `ok` restart from `xi = 0` with the fallback
    * energy equilibrium.
    */
   LBMINI_HOST_INLINE static void Collide(
@@ -462,14 +524,15 @@ struct Kernel {
     V (&xi)[kD]
   ) {
     const V u2 = ux * ux + uy * uy;
-    V w[kQ];
-    Weights(c, temc, w);
-    // The per-axis factors of `w` (`W_q = Wx(c_x) Wy(c_y)`), see `AxisExp`.
+    // The per-axis factors of the weights (`W_q = Wx(c_x) Wy(c_y)`), see `AxisExp`.
     const V wZero = c.one - temc;
     const V wn = wZero + (c.half * temc - wZero);
 
-    V feq[kQ];
-    Feq(c, rhoc, ux, uy, temc, feq);
+    // The density equilibrium in product form, `feq(q) = a[c_x + 1] * b[c_y + 1]`. Only these six
+    // vectors are kept; the products are formed where they are used.
+    V a[3];
+    V b[3];
+    FeqFactors(c, rhoc, ux, uy, temc, a, b);
 
     // Geq via Newton-Raphson on the normalised energy flux.
     //
@@ -489,57 +552,50 @@ struct Kernel {
 
     V alpha = c.one;
     M ok = S::True();
-    LBMINI_UNROLL(3)
+    LBMINI_UNROLL(LBMINI_NEWTON_ITERATIONS)
     for (int iter = 0; iter < kMaxIter; ++iter) {
       V px[3];
       V py[3];
       AxisExp(c, xi[0], wn, wZero, px);
       AxisExp(c, xi[1], wn, wZero, py);
-      const V zx = px[0] + px[1] + px[2];
-      const V zy = py[0] + py[1] + py[2];
-      const V zxy = zx * zy;
+      const auto x = energy::ScaledAxis(px[0], px[1], px[2], c.ushiftX - targetMx, c.tiny);
+      const auto y = energy::ScaledAxis(py[0], py[1], py[2], c.ushiftY - targetMy, c.tiny);
+      const V zxy = x.z * y.z;
       ok = S::And(ok, (zxy > c.tiny));
-      // One division gives both `1 / zx` and `1 / zy`.
-      const V rz = c.one / zxy;
-      const V invZx = zy * rz;
-      const V invZy = zx * rz;
+      const V jxy = x.jacobian * y.jacobian;
+      ok = S::And(ok, (S::Abs(jxy) > c.tiny * (zxy * zxy)));
 
-      // First and second moments of the unshifted velocity; `c_a + U_a` shifts the mean only.
-      const V m1x = (px[2] - px[0]) * invZx;
-      const V m1y = (py[2] - py[0]) * invZy;
-      const V jxx = ((px[2] + px[0]) * invZx - m1x * m1x) + c.tiny;
-      const V jyy = ((py[2] + py[0]) * invZy - m1y * m1y) + c.tiny;
-      const V jxy = jxx * jyy;
-      ok = S::And(ok, (S::Abs(jxy) > c.tiny));
-
-      // `r / j` for both axes from one division: `r0 / jxx = r0 jyy / (jxx jyy)`.
       const V rj = alpha * (c.one / jxy);
-      const V r0 = (m1x + c.ushiftX) - targetMx;
-      const V r1 = (m1y + c.ushiftY) - targetMy;
-      xi[0] -= r0 * jyy * rj;
-      xi[1] -= r1 * jxx * rj;
+      xi[0] -= x.residual * y.jacobian * rj;
+      xi[1] -= y.residual * x.jacobian * rj;
       alpha *= c.half;
     }
 
-    V geq[kQ];
+    // Energy equilibrium `geq(q) = sx[c_x + 1] * gy[c_y + 1]`.
+    V sx[3];
+    V gy[3];
     if (S::All(ok)) {
-      GeqFromXi(c, xi, wn, wZero, targetE, geq);
+      GeqFactors(c, xi, wn, wZero, targetE, sx, gy);
     } else if (!S::Any(ok)) {
       const V zero = c.one - c.one;
       xi[0] = zero;
       xi[1] = zero;
-      GeqFallback(c, w, targetE, geq);
+      GeqFallbackFactors(c, wn, wZero, targetE, sx, gy);
     } else {
-      V geqOk[kQ];
-      V geqFb[kQ];
-      GeqFromXi(c, xi, wn, wZero, targetE, geqOk);
-      GeqFallback(c, w, targetE, geqFb);
+      V sxOk[3];
+      V gyOk[3];
+      V sxFb[3];
+      V gyFb[3];
+      GeqFactors(c, xi, wn, wZero, targetE, sxOk, gyOk);
+      GeqFallbackFactors(c, wn, wZero, targetE, sxFb, gyFb);
       const V zero = c.one - c.one;
       xi[0] = S::Select(ok, xi[0], zero);
       xi[1] = S::Select(ok, xi[1], zero);
-      LBMINI_UNROLL(9)
-      for (int q = 0; q < kQ; ++q)
-        geq[q] = S::Select(ok, geqOk[q], geqFb[q]);
+      LBMINI_UNROLL(3)
+      for (int k = 0; k < 3; ++k) {
+        sx[k] = S::Select(ok, sxOk[k], sxFb[k]);
+        gy[k] = S::Select(ok, gyOk[k], gyFb[k]);
+      }
     }
 
     // Collision (BGK + Knudsen sensor + thermal-relaxation correction).
@@ -553,14 +609,44 @@ struct Kernel {
     const V omega = tauT * rTau;
     V omegaT = tau * rTau;
 
-    V eps = c.one - c.one;
+    // Non-equilibrium part `d = f - feq`: the sensor, the thermal correction and the BGK update all use it.
+    V d[kQ];
     LBMINI_UNROLL(9)
-    for (int q = 0; q < kQ; ++q) {
-      const V diff = f[q] - feq[q];
-      const V den = S::Select(feq[q] > c.tiny, feq[q], c.tiny);
-      eps += S::Abs(diff) / den;
+    for (int q = 0; q < kQ; ++q)
+      d[q] = f[q] - a[Cx(q) + 1] * b[Cy(q) + 1];
+
+    // Knudsen sensor `eps = mean_q |d_q| / max(feq_q, tiny)`.
+    //
+    // While every factor of the product form is well above the clamp (the whole physical range;
+    // `a_min * b_min > tiny` is then guaranteed) no `max` is active and
+    // `|d_q| / feq_q = |d_q| (1 / a_i)(1 / b_j)`, so the nine divisions become one: the six reciprocals
+    // come from a single division (Montgomery's trick), and the sum factorises by rows.
+    // Otherwise (negative or vanishing populations) the per-direction form of the reference is used.
+    const V floorFactor = S::Splat(Scalar{ 1e-5 });
+    const V aMin = S::Min(S::Min(a[0], a[1]), a[2]);
+    const V bMin = S::Min(S::Min(b[0], b[1]), b[2]);
+    V epsSum = c.one - c.one;
+    if (S::All(S::And(aMin > floorFactor, bMin > floorFactor))) {
+      const V pa = (a[0] * a[1]) * a[2];
+      const V pb = (b[0] * b[1]) * b[2];
+      const V rab = c.one / (pa * pb);
+      const V rpa = pb * rab; // 1 / pa
+      const V rpb = pa * rab; // 1 / pb
+      const V ra[3] = { (a[1] * a[2]) * rpa, (a[0] * a[2]) * rpa, (a[0] * a[1]) * rpa };
+      const V rb[3] = { (b[1] * b[2]) * rpb, (b[0] * b[2]) * rpb, (b[0] * b[1]) * rpb };
+      V row[3] = { c.one - c.one, c.one - c.one, c.one - c.one };
+      LBMINI_UNROLL(9)
+      for (int q = 0; q < kQ; ++q)
+        row[Cy(q) + 1] += ra[Cx(q) + 1] * S::Abs(d[q]);
+      epsSum = (rb[0] * row[0] + rb[1] * row[1]) + rb[2] * row[2];
+    } else {
+      LBMINI_UNROLL(9)
+      for (int q = 0; q < kQ; ++q) {
+        const V feq = a[Cx(q) + 1] * b[Cy(q) + 1];
+        epsSum += S::Abs(d[q]) / S::Select(feq > c.tiny, feq, c.tiny);
+      }
     }
-    eps *= S::Splat(Scalar{ 1 } / static_cast<Scalar>(kQ));
+    const V eps = epsSum * S::Splat(Scalar{ 1 } / static_cast<Scalar>(kQ));
     // `omega / sigma` with `sigma` in {omega, 1.35, 1.05, 1}, without a division.
     V omegaL = S::Select(
       eps >= c.one,
@@ -578,28 +664,44 @@ struct Kernel {
     omegaT = S::Select(omegaT > c.one, omegaT, c.one);
     omegaT = S::Select(omegaT < omegaMax, omegaT, omegaMax);
 
-    // L[a] = sum_i 2 * (u . c_i) * c_i_a * (f - feq)   (c_i unshifted)
-    V Lx = c.one - c.one;
-    V Ly = Lx;
+    // L[a] = sum_i 2 (u . c_i) c_i_a d_i with the unshifted c_i, i.e. from the second moments of d:
+    // Lx = 2 (ux Mxx + uy Mxy), Ly = 2 (ux Mxy + uy Myy).
+    V mxx = c.one - c.one;
+    V myy = mxx;
+    V mxy = mxx;
     LBMINI_UNROLL(9)
     for (int q = 0; q < kQ; ++q) {
-      const Scalar cix0 = static_cast<Scalar>(Cx(q));
-      const Scalar ciy0 = static_cast<Scalar>(Cy(q));
-      const V uvi = ux * cix0 + uy * ciy0;
-      const V aux = c.two * uvi * (f[q] - feq[q]);
-      Lx += aux * cix0;
-      Ly += aux * ciy0;
+      if (Cx(q) != 0)
+        mxx += d[q];
+      if (Cy(q) != 0)
+        myy += d[q];
+      if (Cx(q) * Cy(q) > 0)
+        mxy += d[q];
+      else if (Cx(q) * Cy(q) < 0)
+        mxy -= d[q];
     }
-
     const V dOmega = omegaL - omegaT;
+    // The thermal correction `dOmega * w_q * (L . (c_q + U)) / T`, with `dOmega / T` folded into L.
+    const V scaleL = c.two * (dOmega * invT);
+    const V lx = scaleL * (ux * mxx + uy * mxy);
+    const V ly = scaleL * (ux * mxy + uy * myy);
+    V px[3];
+    V py[3];
+    LBMINI_UNROLL(3)
+    for (int k = 0; k < 3; ++k) {
+      px[k] = lx * c.csx[k];
+      py[k] = ly * c.csy[k];
+    }
+    // Weights: `W_q = wf(c_x) wf(c_y)`, `wf = wn` for a moving and `wZero` for a rest component.
+    const V wf[3] = { wn, wZero, wn };
+
     LBMINI_UNROLL(9)
     for (int q = 0; q < kQ; ++q) {
-      const V fOld = f[q];
-      f[q] = fOld + omegaL * (feq[q] - fOld);
-      const V cidotL = Lx * c.csx[Cx(q) + 1] + Ly * c.csy[Cy(q) + 1];
-      const V gDiff = w[q] * cidotL * invT;
+      const int ix = Cx(q) + 1;
+      const int iy = Cy(q) + 1;
+      f[q] -= omegaL * d[q];
       const V gOld = g[q];
-      g[q] = gOld + omegaL * (geq[q] - gOld) + dOmega * gDiff;
+      g[q] = gOld + omegaL * (sx[ix] * gy[iy] - gOld) + (wf[ix] * wf[iy]) * (px[ix] + py[iy]);
     }
   }
 
@@ -776,7 +878,7 @@ struct Kernel {
    * stores (when the buffers are aligned for them), see `UseStreamingStores`.
    */
   template<bool kStore>
-  static void StepRow(
+  LBMINI_HOST_NOINLINE static void StepRow(
     const P& p,
     const Geometry& geo,
     const F& fl,
@@ -870,6 +972,13 @@ struct Kernel {
       S::Store(fl.xi + geo.plane + cell, xi[1]);
     }
   }
+};
+
+/// The host kernel of a backend's lattice: `KernelCore`, after checking the lattice is the D2Q9 one.
+template<typename Scalar, typename LatticeType, int W>
+struct Kernel : KernelCore<Scalar, W> {
+  static_assert(LatticeType::Speeds() == kQ && LatticeType::Dim() == kD, "D2Q9 only");
+  static_assert(HasD2Q9Velocities<LatticeType>(), "the lattice must use the D2Q9 velocity order of host::kVelocity");
 };
 
 /// Copies one plane of the padded x-fastest layout into a row-major `(nx, ny)` field.

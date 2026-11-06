@@ -119,18 +119,17 @@ Trabalho de Conclusão de Curso apresentado ao Curso de Graduação em Engenhari
 % ----------------------------------------------------------
 
 \newcommand{\ResumoTexto}{
-Simulações de escoamentos compressíveis de alta velocidade, como as da aerodinâmica aeroespacial e da combustão em motores, exigem formulações capazes de lidar com fortes gradientes termodinâmicos e o uso eficiente de arquiteturas modernas de processamento.
-O método de Lattice Boltzmann (LBM), menos tradicional que os baseados nas equações de Navier-Stokes, modela o escoamento na escala mesoscópica por funções de distribuição de partículas em uma malha regular, atualizadas por colisão local e por propagação aos nós vizinhos.
-Como a colisão depende apenas dos dados de cada nó e a propagação envolve somente os nós vizinhos, o método favorece a execução paralela em sistemas de computação de alto desempenho (HPC).
-Em regime compressível, entretanto, a formulação clássica torna-se instável e exige extensões de maior custo, como a dupla função de distribuição em redes deslocadas e o equilíbrio entrópico.
-Este trabalho investiga a escalabilidade e o esforço de implementação de um resolvedor LBM compressível bidimensional (D2Q9) aplicado ao tubo de choque de Sod, por meio de um miniaplicativo em C++20 com oito tecnologias de paralelização (OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA, Alpaka e MPI), comparadas pela taxa de atualização de nós (MLUPS), pela aceleração, pela eficiência paralela e pelas linhas de código (LOC).
-O modelo \textit{roofline} indica que, em precisão dupla, o resolvedor é limitado pela largura de banda de memória na CPU e pela capacidade aritmética na GPU utilizada, de consumo, o que restringe o ganho esperado sobre a CPU multinúcleo a um fator de cerca de 2,0.
-Em uma GPU hipotética com razão de 1:2 entre as taxas em precisão dupla e simples, como a dos aceleradores de HPC, esse fator chegaria a 6,6.
-Nos ensaios no tubo de choque de Sod, o método reproduziu as três estruturas de onda, com ordem de convergência efetiva inferior a 0,5, limitada pelas descontinuidades.
-O ganho medido da GPU sobre a CPU foi de 1,2 a 1,3 vez nas plataformas de medição e de 2,0 a 2,2 na projeção para a plataforma de referência, em acordo com os tetos do modelo, pois ambos os dispositivos operam próximos de seus limites, resultado de decisões de implementação avaliadas por medição, como a vetorização e o fechamento energético fatorado por eixo.
-Em CPU, com doze núcleos, as tecnologias de memória compartilhada alcançaram de 45\% a 47\% do teto de memória, com Kokkos, RAJA e Alpaka em 95\% a 100\% do OpenMP.
-Quanto ao esforço de programação, a base única de Kokkos, RAJA e Alpaka não oferece vantagem de código (3,37 a 3,67 vezes a versão sequencial, contra 3,48 vezes de OpenMP somado a CUDA), pois o desempenho em CPU exigiu um núcleo vetorial que as camadas não expressam.
-Oferecem-se, assim, critérios para a escolha de tecnologias de programação paralela em simulações de escoamentos compressíveis, considerando custo de desenvolvimento, portabilidade e desempenho.
+Simulações de escoamentos compressíveis de alta velocidade exigem formulações capazes de lidar com fortes gradientes termodinâmicos e o uso eficiente de arquiteturas modernas.
+O método de Lattice Boltzmann (LBM) modela o escoamento na escala mesoscópica por funções de distribuição em malha regular, atualizadas por colisão local e propagação aos nós vizinhos, o que favorece a execução paralela em sistemas de computação de alto desempenho (HPC).
+Em regime compressível, a formulação clássica torna-se instável e exige extensões de maior custo, como a dupla função de distribuição em redes deslocadas e o equilíbrio entrópico.
+Este trabalho investiga a escalabilidade e o esforço de implementação de um resolvedor LBM compressível bidimensional (D2Q9) aplicado ao tubo de choque de Sod, por meio de um miniaplicativo em C++20 com oito tecnologias de paralelização (OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA, Alpaka e MPI), comparadas pela taxa de atualização de nós da malha, pela aceleração, pela eficiência paralela e pelas linhas de código (LOC).
+O modelo \textit{roofline} indica que, em precisão dupla, o resolvedor é limitado pela largura de banda de memória na unidade central de processamento (CPU) e pela capacidade aritmética na unidade de processamento gráfico (GPU) de consumo, e voltaria a ser limitado pela memória em aceleradores HPC com razão de 1:2 entre as taxas em precisão dupla e simples.
+O método reproduziu as três estruturas de onda, com ordem de convergência efetiva inferior a 0,5, limitada pelas descontinuidades, e erro comparável ao de um esquema de volumes finitos de primeira ordem, que deixa de diminuir além de cerca de mil nós longitudinais.
+Alterar a disposição dos dados, vetorizar o núcleo e ocultar a latência multiplicou por cerca de 5 a taxa de atualização de nós de um núcleo de CPU, e fatorar o fechamento energético por eixo a multiplicou ainda por 2,2 na CPU e por 1,6 a 2,1 nas GPUs.
+Com essas decisões, a GPU opera próxima do limite de emissão de instruções de dupla precisão, e a CPU utiliza mais da metade da largura de banda de memória sustentável, com eficiência paralela limitada pelos recursos compartilhados, e não por parcela sequencial do código.
+Com o mesmo trabalho por nó da malha, Kokkos, RAJA e Alpaka alcançaram de 94\% a 104\% da taxa de atualização de nós do CUDA em GPU e, em CPU, ficaram dentro da dispersão entre sessões (cerca de 10\%) em relação ao OpenMP.
+Quanto ao esforço de programação, a base única dessas camadas não reduziu o código (2,6 a 2,9 vezes a versão sequencial, contra 2,7 vezes de OpenMP somado a CUDA), pois o desempenho em CPU exigiu um núcleo vetorial com disposição de dados própria que os laços paralelos por célula das camadas de abstração não geram.
+Oferecem-se, assim, critérios para escolher tecnologias de programação paralela em simulações de escoamentos compressíveis, segundo custo de desenvolvimento, portabilidade e desempenho.
 }
 
 \newcommand{\PalavraschaveTexto}{
@@ -140,18 +139,17 @@ HPC; Método de Lattice Boltzmann; Escoamento compressível; Tubo de choque.
 % ----------------------------------------------------------
 
 \newcommand{\AbstractTexto}{
-Simulations of high-speed compressible flows, such as those in aerospace aerodynamics and engine combustion, require formulations able to handle steep thermodynamic gradients and an efficient use of modern processor architectures.
-The Lattice Boltzmann Method (LBM), less traditional than those based on the Navier-Stokes equations, models the flow at the mesoscopic scale through particle distribution functions on a regular mesh, updated by local collision and by streaming to neighbouring nodes.
-Since the collision depends only on the data of each node and streaming involves only neighbouring nodes, the method favours parallel execution on high performance computing (HPC) systems.
-In the compressible regime, however, the standard formulation becomes unstable and requires more costly extensions, such as double distribution functions on shifted lattices and entropic equilibria.
-This work investigates the scalability and implementation effort of a two-dimensional compressible LBM solver (D2Q9) applied to the Sod shock tube, by means of a C++20 mini-app with eight parallelization technologies (OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA, Alpaka and MPI), compared by lattice update rate (MLUPS), speedup, parallel efficiency and lines of code (LOC).
-The roofline model indicates that, in double precision, the solver is bound by memory bandwidth on the CPU and by arithmetic throughput on the GPU used, a consumer device, which limits the expected gain over the multicore CPU to a factor of about 2.0.
-On a hypothetical GPU with a 1:2 ratio between double and single precision rates, as in HPC accelerators, this factor would reach 6.6.
-In the Sod shock tube tests, the method reproduced the three wave structures, with an effective convergence order below 0.5, limited by the discontinuities.
-The measured gain of the GPU over the CPU was 1.2 to 1.3 times on the measurement platforms and 2.0 to 2.2 times when projected to the reference platform, in agreement with the model ceilings, since both devices operate close to their limits, as a result of implementation decisions evaluated by measurement, such as vectorization and the axis-factorized energy closure.
-On the CPU, with twelve cores, the shared-memory technologies reached 45\% to 47\% of the memory ceiling, with Kokkos, RAJA and Alpaka at 95\% to 100\% of OpenMP.
-As for programming effort, the single code base of Kokkos, RAJA and Alpaka offers no code advantage (3.37 to 3.67 times the sequential version, against 3.48 times for OpenMP plus CUDA), because CPU performance required a vector kernel that the layers cannot express.
-The aim is thus to offer criteria for choosing parallel programming technologies in compressible flow simulations, considering development cost, portability and performance.
+Simulations of high-speed compressible flows require formulations able to handle steep thermodynamic gradients and an efficient use of modern architectures.
+The Lattice Boltzmann Method (LBM) models the flow at the mesoscopic scale through distribution functions on a regular mesh, updated by local collision and streaming to neighbouring nodes, which favours parallel execution on high performance computing (HPC) systems.
+In the compressible regime, the standard formulation becomes unstable and requires more costly extensions, such as double distribution functions on shifted lattices and entropic equilibria.
+This work investigates the scalability and implementation effort of a two-dimensional compressible LBM solver (D2Q9) applied to the Sod shock tube, by means of a C++20 mini-app with eight parallelization technologies (OpenMP, OpenACC, CUDA, OpenCL, Kokkos, RAJA, Alpaka and MPI), compared by lattice update rate, speedup, parallel efficiency and lines of code (LOC).
+The roofline model indicates that, in double precision, the solver is bound by memory bandwidth on the central processing unit (CPU) and by arithmetic throughput on the consumer graphics processing unit (GPU), and that it would return to being memory bound on accelerators with a 1:2 ratio between double and single precision rates.
+The method reproduced the three wave structures, with an effective convergence order below 0.5, limited by the discontinuities, and an error comparable to that of a first-order finite volume scheme, which stops decreasing beyond about one thousand longitudinal nodes.
+Changing the data layout, vectorizing the kernel and hiding latency multiplied the single-core CPU lattice update rate by about 5, and factorizing the energy closure by axis multiplied it by a further 2.2 on the CPU and by 1.6 to 2.1 on the GPUs.
+With these decisions, the GPU operates close to its double precision instruction issue limit, and the CPU uses more than half of the sustainable memory bandwidth, with a parallel efficiency limited by shared resources rather than by a sequential fraction of the code.
+With the same work per lattice node, Kokkos, RAJA and Alpaka reached 94\% to 104\% of the CUDA lattice update rate on the GPU and, on the CPU, stayed within the session-to-session scatter (about 10\%) of OpenMP.
+As for programming effort, the single code base of these layers did not reduce the code (2.6 to 2.9 times the sequential version, against 2.7 times for OpenMP plus CUDA), because CPU performance required a vector kernel with its own data layout.
+The aim is thus to offer criteria for choosing parallel programming technologies in compressible flow simulations, according to development cost, portability and performance.
 }
 % ---
 \newcommand{\KeywordsTexto}{

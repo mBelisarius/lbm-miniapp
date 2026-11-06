@@ -20,9 +20,9 @@ corruption stops being latent.
 
 | Bug class | Where it lives in this code base |
 |---|---|
-| Out-of-bounds read | The streaming gather reads four source cells per direction with no bounds check: through the precomputed `streamIdx_` table in the `Plain` reference, and through the shared per-direction `lbmini::DirectionStencil` (`lbmini/Lbm/Stencil.hpp`, clamp in x, wrap in y) in every optimised backend |
+| Out-of-bounds read | The streaming gather reads four source cells per direction with no bounds check: through the precomputed `streamIdx_` table in the test oracle `test/ReferenceTube.hpp`, and through the shared per-direction `lbmini::DirectionStencil` (`lbmini/Lbm/Stencil.hpp`, clamp in x, wrap in y) in every solver of the program, `Plain` included |
 | Out-of-bounds write | Buffers sized from `nx * ny` while kernels index `i * ny + j`, `d * N + cell`, `idc * N + cell` (the GPU and `Plain` layouts) or `idc * plane + j * pitch + i` (the padded x-fastest layout of the vector CPU backends, `host::Geometry`, where the last vector block of a row may write up to `kLanes - 1` cells into pad columns that are sized for it); zero/negative extents and overflowing products break the assumptions, while one-cell and odd extents exercise boundary paths |
-| Integer overflow into a wild address | The reference streaming table and the device kernels' cell indices are `std::int32_t`; `nx * ny > 2^31` wraps to a negative index. `cellIndex()` casts extents to `int` in some backends |
+| Integer overflow into a wild address | The cell indices of the kernels (and the table of the test oracle) are `std::int32_t`; `nx * ny > 2^31` wraps to a negative index. `cellIndex()` casts extents to `int` in some backends |
 | Use-after-free | Global runtimes must outlive every solver allocation; cached `fCur_`/`fAlt_` pointers must never outlive their owning object |
 | Double free | Raw `cudaMalloc` / `omp_target_alloc` / command-buffer handles must have exclusive ownership and non-copyable owners |
 | Reading uninitialised / stale memory | Device buffers read back on the host without a fence / `deep_copy` / `enqueueReadBuffer` |
@@ -37,7 +37,8 @@ corruption stops being latent.
 |---|---|
 | `test/MemorySafetyHarness.hpp` | Shared fixtures and the mesh-shape sweep (canonical, odd, single-row, single-column, 1x1) |
 | `test/memory_safety_test.cpp` | Per-backend: in-bounds allocation/stepping/read-back for every shape, odd/even step counts, `Run(0)` as a no-op, getters returning owning copies, repeated construct/destruct, one solver surviving another's destruction, two live solvers not sharing state, destruction through the interface pointer, and the layout guard for the `Executor` type-erasure |
-| `test/streaming_table_test.cpp` | Every gather index of the host backends is inside `[0, nx * ny)`, table lengths are exact, weights are finite and convex, cell count fits `int32` |
+| `test/streaming_table_test.cpp` | Every gather index of the oracle's streaming table (`test/ReferenceTube.hpp`) is inside `[0, nx * ny)`, table lengths are exact, weights are finite and convex, cell count fits `int32`; and the shared `DirectionStencil` is the same gather, cell by cell |
+| `test/backend_equivalence_test.cpp` | `Plain` against the independent oracle (general closure, streaming tables), and every optimised backend against `Plain`, at relative 1e-9 |
 | `test/kokkos_lbm_test.cpp`, `test/raja_lbm_test.cpp` | Numerical agreement with the `Plain` reference (a corrupted run usually also diverges) |
 
 Adding a backend to the suite means adding one traits struct to the type list in

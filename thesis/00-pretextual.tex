@@ -159,7 +159,7 @@
 
 % inserir lista de abreviaturas e siglas 
 \ifthenelse{\equal{\terSiglasAbrev}{Sim}}{
-    \imprimirlistadesiglas
+    {\SingleSpacing\setlength{\parskip}{0pt}\imprimirlistadesiglas}
     \cleardoublepage
 }{}
 
@@ -167,7 +167,9 @@
 
 % inserir lista de símbolos
 \ifthenelse{\equal{\terSimbolos}{Sim}}{
-    \imprimirlistadesimbolos
+    \makeatletter
+    {\SingleSpacing\def\@listi{\leftmargin\leftmargini\topsep\z@\parsep\z@\itemsep\z@}\setlength{\parskip}{0pt}\imprimirlistadesimbolos}
+    \makeatother
     \cleardoublepage
 }{}
 

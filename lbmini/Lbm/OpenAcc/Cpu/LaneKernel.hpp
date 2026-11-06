@@ -25,7 +25,7 @@
  *    per lane loop), because `nvc++` reports a dependence between the nine stores
  *    to `plane`-strided addresses and refuses to vectorise them;
  *  - the phases are `acc routine vector` functions (pull, macroscopics + equilibria,
- *    the three Newton iterations, energy equilibrium, collision, stores), called in
+ *    the Newton iterations, energy equilibrium, collision, stores), called in
  *    order for every block from the gang loop of the solver;
  *  - the Newton and energy-equilibrium phases are chains of dependent operations (a
  *    polynomial and eleven squarings per exponential, divisions) that are much longer
@@ -451,18 +451,15 @@ inline void StoreMacro(
     const double zy_ = py0_ + py1_ + py2_;                                                                    \
     const double zxy_ = zx_ * zy_;                                                                            \
     ok_##c_ &= (zxy_ > kTiny) ? 1 : 0;                                                                        \
-    const double rz_ = 1.0 / zxy_;                                                                            \
-    const double invZx_ = zy_ * rz_;                                                                          \
-    const double invZy_ = zx_ * rz_;                                                                          \
-    const double m1x_ = (px2_ - px0_) * invZx_;                                                               \
-    const double m1y_ = (py2_ - py0_) * invZy_;                                                               \
-    const double jxx_ = ((px2_ + px0_) * invZx_ - m1x_ * m1x_) + kTiny;                                       \
-    const double jyy_ = ((py2_ + py0_) * invZy_ - m1y_ * m1y_) + kTiny;                                       \
+    const double dx_ = px2_ - px0_;                                                                          \
+    const double dy_ = py2_ - py0_;                                                                          \
+    const double jxx_ = (px2_ + px0_) * zx_ - dx_ * dx_ + kTiny * (zx_ * zx_);                                \
+    const double jyy_ = (py2_ + py0_) * zy_ - dy_ * dy_ + kTiny * (zy_ * zy_);                                \
     const double jxy_ = jxx_ * jyy_;                                                                          \
-    ok_##c_ &= (((jxy_ < 0.0) ? -jxy_ : jxy_) > kTiny) ? 1 : 0;                                               \
+    ok_##c_ &= (((jxy_ < 0.0) ? -jxy_ : jxy_) > kTiny * (zxy_ * zxy_)) ? 1 : 0;                              \
     const double rj_ = (alpha_) * (1.0 / jxy_);                                                               \
-    const double r0_ = (m1x_ + ushiftX) - tmx_##c_;                                                           \
-    const double r1_ = (m1y_ + ushiftY) - tmy_##c_;                                                           \
+    const double r0_ = (dx_ + (ushiftX - tmx_##c_) * zx_) * zx_;                                              \
+    const double r1_ = (dy_ + (ushiftY - tmy_##c_) * zy_) * zy_;                                              \
     xi0_##c_ -= r0_ * jyy_ * rj_;                                                                             \
     xi1_##c_ -= r1_ * jxx_ * rj_;                                                                             \
   }
@@ -479,6 +476,12 @@ inline void StoreMacro(
 #define LBMINI_ACC_NEWTON_1(c_) LBMINI_ACC_NEWTON(1.0, c_)
 #define LBMINI_ACC_NEWTON_2(c_) LBMINI_ACC_NEWTON(0.5, c_)
 #define LBMINI_ACC_NEWTON_3(c_) LBMINI_ACC_NEWTON(0.25, c_)
+#define LBMINI_ACC_NEWTON_4(c_) LBMINI_ACC_NEWTON(0.125, c_)
+#define LBMINI_ACC_NEWTON_5(c_) LBMINI_ACC_NEWTON(0.0625, c_)
+
+#if LBMINI_NEWTON_ITERATIONS < 1 || LBMINI_NEWTON_ITERATIONS > 5
+#error "the OpenACC lane kernel spells out the damped Newton iterations (alpha = 2^-k) for 1 to 5 iterations"
+#endif
 
 #define LBMINI_ACC_NEWTON_STORE(c_)                                                                           \
   B.xi[0][LBMINI_ACC_LANE(c_)] = xi0_##c_;                                                                    \
@@ -486,9 +489,9 @@ inline void StoreMacro(
   B.ok[LBMINI_ACC_LANE(c_)] = ok_##c_;
 
 /**
- * The three damped Newton iterations (`alpha = 1, 1/2, 1/4`) of every lane of the block, from the warm
- * start `B.xi`; clears `B.ok` where the solve failed. The copies of the lane loop body advance iteration
- * by iteration, so that the chains of their exponentials and divisions sit next to each other.
+ * The damped Newton iterations (`alpha = 2^-k`, `LBMINI_NEWTON_ITERATIONS` of them) of every lane of the block,
+ * from the warm start `B.xi`; clears `B.ok` where the solve failed. The copies of the lane loop body advance
+ * iteration by iteration, so that the chains of their exponentials and divisions sit next to each other.
  */
 #pragma acc routine vector
 inline void Newton(const Params& p, Block& B) {
@@ -498,12 +501,24 @@ inline void Newton(const Params& p, Block& B) {
   for (int l = 0; l < kStride; ++l) {
     LBMINI_ACC_JAM_COPIES(LBMINI_ACC_NEWTON_LOAD)
     LBMINI_ACC_JAM_COPIES(LBMINI_ACC_NEWTON_1)
+#if LBMINI_NEWTON_ITERATIONS >= 2
     LBMINI_ACC_JAM_COPIES(LBMINI_ACC_NEWTON_2)
+#endif
+#if LBMINI_NEWTON_ITERATIONS >= 3
     LBMINI_ACC_JAM_COPIES(LBMINI_ACC_NEWTON_3)
+#endif
+#if LBMINI_NEWTON_ITERATIONS >= 4
+    LBMINI_ACC_JAM_COPIES(LBMINI_ACC_NEWTON_4)
+#endif
+#if LBMINI_NEWTON_ITERATIONS >= 5
+    LBMINI_ACC_JAM_COPIES(LBMINI_ACC_NEWTON_5)
+#endif
     LBMINI_ACC_JAM_COPIES(LBMINI_ACC_NEWTON_STORE)
   }
 }
 #undef LBMINI_ACC_NEWTON_STORE
+#undef LBMINI_ACC_NEWTON_5
+#undef LBMINI_ACC_NEWTON_4
 #undef LBMINI_ACC_NEWTON_3
 #undef LBMINI_ACC_NEWTON_2
 #undef LBMINI_ACC_NEWTON_1

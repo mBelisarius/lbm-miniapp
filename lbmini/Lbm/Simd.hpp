@@ -106,8 +106,8 @@ inline constexpr int kNativeLanes = NativeBytes() / static_cast<int>(sizeof(doub
 
 /// Independent registers per block of the kernel (see the file comment): enough registers to
 /// make a block of 16 cells (the row padding of `host::Geometry`), whatever the register width.
-/// The fused step is a long chain of dependent operations (three Newton iterations, each an
-/// exponential followed by two divisions), so the more independent blocks are interleaved the
+/// The fused step is a long chain of dependent operations (the Newton iterations, each an
+/// exponential followed by a division), so the more independent blocks are interleaved the
 /// better the FMA ports are fed: measured on AVX2, 2 -> 4 registers is +12 % per core.
 #if defined(LBMINI_SIMD_UNROLL)
 inline constexpr int kUnroll = LBMINI_SIMD_UNROLL;

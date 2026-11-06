@@ -1,0 +1,18 @@
+{
+  "descricao": "Operacoes por no e por passo do nucleo vetorial de CPU com cinco iteracoes de Newton, contadas passo a passo no depurador (scripts/roofline/count_flops.sh) em dois segmentos de 256 celulas (1000 x 10 nos, um fluxo, GCC 13.4); a contagem e identica nos dois segmentos. Tetos da plataforma: especificacoes dos fabricantes (CPU AMD Ryzen 9 9900X, GPU NVIDIA GeForce RTX 5070).",
+  "newton_iterations": 5,
+  "flop_vector": 1112.0,
+  "instr": 471.6,
+  "fp_instr": 180.5,
+  "div_lanes": 11.0,
+  "exp_flop_per_lane": 38,
+  "exp_calls": 12,
+  "exp_model_flop": 20,
+  "flop_model": 896,
+  "bytes": 320,
+  "platform": {
+    "cpu": {"peak_gflops": 1689.6, "bw_gbs": 102.4},
+    "gpu": {"peak_gflops": 482.304, "bw_gbs": 672.0},
+    "gpu_1_2": {"peak_gflops": 15433.728, "bw_gbs": 672.0}
+  }
+}

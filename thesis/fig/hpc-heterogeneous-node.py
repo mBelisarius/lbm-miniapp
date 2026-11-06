@@ -78,6 +78,7 @@ def main():
     ax.text(61, 52.6, 'Modelos de programação', ha='center', va='center', fontsize=9, color='#444444')
     pill(ax, 49, 43.7, 8, 'Kokkos')
     pill(ax, 57.7, 43.7, 7, 'RAJA')
+    pill(ax, 65.7, 43.7, 8, 'Alpaka')
 
     # Interconnect between host and accelerator
     arrow(ax, (31.3, 33), (48.7, 33))
